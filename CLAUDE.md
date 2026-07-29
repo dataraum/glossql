@@ -26,7 +26,7 @@ discussion produces something worth keeping, it becomes a SPEC.md diff.
 
 - Settled: language before implementation · DataFusion as engine substrate ·
   log/lake split with state = f(log, lake) · four planes (declarations,
-  observations, policies, derived) · the concept/data split with GROUND as the only
+  observations, policies, derived) · the concept/data split with GLOSS as the only
   bridge · judgment in policy, never in results · authored prose is opaque.
 - Held open (do not decide in passing): persistence backend · DataFusion mapping ·
   governance.
