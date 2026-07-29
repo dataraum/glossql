@@ -11,18 +11,20 @@ Status by section — the iteration loop works the flagged items (§9.1):
 - **Under iteration** (statement forms hold; clause details do not):
   - §3.1 — `INTERPRET` ranges and per-step sanity ranges sit awkwardly against
     principle 3 (judgment belongs in policy, not declarations); concept
-    relations are open (§8.3); cycle vocabulary is open (§8.5); the `PARAMETER`
+    relations are open (§8.2); cycle vocabulary is open (§8.4); the `PARAMETER`
     clause shape (type, options, grain derivation) is a sketch.
   - §3.0 — the semantic admission checklist is unwritten; the log envelope is
     deliberately last (§1.1).
-  - §3.2 — typing/null/expectation teaches (§8.4) have no statement form yet;
+  - §3.2 — typing/null/expectation teaches (§8.3) have no statement form yet;
     the rest transcribes cleanly.
-  - §3.3 — aspect/claim-space model under review (§8.1, §8.2).
+  - §3.3 — the core aspect library and its label sets are open (§8.1); the
+    aspect model itself (declared spaces, function-shaped application) is
+    settled.
   - §3.4 — `WEIGHT` semantics, the contract policy, and the serving clause list
     are sketches.
-  - §3.5 — relation schemas for `CONTEXT()` / `READINESS`, the
-    `METRIC ... BY grain` syntax, and the `CONTEXT FOR` output shape are
-    unspecified.
+  - §3.5 — relation schemas for `CONTEXT()` / `READINESS` / `WHY()` /
+    `GLOSSES()`, the `METRIC()` grain argument, and the `CONTEXT FOR` output
+    shape are unspecified; `AT` syntax alignment with lake time travel is open.
 
 ---
 
@@ -83,6 +85,11 @@ at any historical point.
    enumerates domain specifics: claim spaces, concept vocabularies, and their
    groupings are declarations — importable, supersedable — never keywords. The
    same holds for detectors: the grammar knows the actor class, never a roster.
+7. **Ride SQL.** glossql adds statements only where SQL has no construct: the
+   authored context. Querying, data CRUD, and functions stay plain SQL against
+   the attached lake (the DuckLake posture: attach, then little syntax);
+   context reading is table functions and relations, not new grammar. The
+   writing plane is the language.
 
 ---
 
@@ -112,7 +119,7 @@ reserved (§6), or deliberately excluded (§7).
 | business cycles (LLM) | cycle assertion, stages, status column, completion semantics | `DECLARE CYCLE` |
 | surrogate key confirmation | composite-key intent confirmed/declined | `DECLARE KEY` |
 | groundings (snippet parts + provenance basis) | concept → relation, expression, filters | `GLOSS` |
-| teach payloads (all 8 types, today free JSON) | type patterns, null tokens, units, plus the families above | the same statements, `BY user` — type/null/expectation teaches pending §8.4 |
+| teach payloads (all 8 types, today free JSON) | type patterns, null tokens, units, plus the families above | the same statements, `BY user` — type/null/expectation teaches pending §8.3 |
 | sources / tables | where data lives | `DECLARE SOURCE`, `DECLARE TABLE` |
 
 ### 2.2 We MEASURE (computed against data; requests are authored, results are not)
@@ -152,12 +159,34 @@ Two shapes, and the distinction drives §4:
 | six-block answer-agent context (schema+meanings, entities, curated dimensions, relationship whitelist, drivers, grain caveats) + conventions + snippet vocabulary | `CONTEXT FOR`, shaped by `DECLARE SERVING` policy |
 | engine GraphAgent served context | same `CONTEXT FOR`, different serving policy — one mechanism, two policies |
 | readiness surfaces (bands, drivers, coverage) | `READINESS()` relation |
-| why-tools (adjudication audit) | `EXPLAIN <claim>` |
+| why-tools (adjudication audit) | `WHY(subject, aspect)` |
 | look-tools (values, profiles, metrics, validations) | context relations (§3.5) |
 | property-graph projections (`og_*`) | engine-internal; traversal served via context relations, no PGQ dependency |
 | validation verdicts (computed on demand) | derived: `deviation <= tolerance` at read, tolerance from the declaration |
 
-### 2.5 Derived (computed, never authored, never in the log)
+### 2.5 Who writes, who reads
+
+The grammar's primary author is not human. In steady state:
+
+| statements | produced by | at | consumed by |
+|---|---|---|---|
+| `DECLARE SOURCE` / `DECLARE TABLE` | onboarding code | connection time | materialization, everything downstream |
+| concept-space `DECLARE` (concept, aspect, convention, metric, validation, cycle family) | pack replay (`SEED`); inductor agents; users | import · post-catalog induction · teach | catalog steering, execution, serving |
+| `ANNOTATE`, `DECLARE RELATIONSHIP/HIERARCHY/DIMENSION/ENRICHMENT/KEY` | cataloguer/judge/slicer/enricher agents; users | pipeline phases · teach moments | serving, adjudication, enrichment rendering |
+| `GLOSS` | grapher agent; rarely users | lazily, at first metric execution needing (concept, relation) | metric composition, drill-down, serving |
+| `OBSERVE` | orchestration code | phase boundaries, re-runs | engine execution → lake |
+| `WITNESS` | detectors; external producers | measurement completion | pooling |
+| `DECLARE RELIABILITY` | calibration job | calibration release | pooling weights |
+| `DECLARE POLICY/SERVING`, `RETRACT` | users, ops | setup · correction | read-time judgment, rendering |
+
+Reading has two consumer kinds: answer agents (curated context, then plain SQL
+over data; they write nothing — their teach suggestions surface to users, who
+write) and audit/UI (why-traces, readiness, history). Humans author corrections
+and policy; mostly they *review* the log. The text form exists for diffability
+and audit, not authoring ergonomics — statements are written by agents and code,
+so shapes must be regular enough for constrained decoding.
+
+### 2.6 Derived (computed, never authored, never in the log)
 
 Pooled posteriors and conflict flags · readiness bands · validation verdicts ·
 additivity conclusions · graph projections · rendered enrichment SQL · rendered
@@ -178,9 +207,11 @@ not a lexer.
 
 ```
 statement   := writing | reading
-writing     := declaration | observation | witness | policy | lifecycle
+writing     := declaration | annotation | observation | witness | policy | lifecycle
 reading     := consumption
-declaration := DECLARE family subject clauses provenance ';'
+declaration := DECLARE class name clauses provenance ';'
+annotation  := ANNOTATE aspect '(' subject { ',' arg ':=' value } ')' provenance ';'
+witness     := WITNESS aspect '(' subject { ',' arg ':=' value } ')' provenance ';'
 provenance  := BY actor [ CONFIDENCE number ] [ EVIDENCE ref ]
 actor       := USER name | AGENT name | DETECTOR name | SEED name | CALIBRATION name
 subject     := table | table '.' column | pair | declared_name
@@ -190,12 +221,17 @@ pair        := table '.' column REFERENCES table '.' column
 
 - Only **writing** statements enter the log; **reading** statements (§3.5) are
   session-ephemeral — never logged, never part of replay.
+- **A declared name is a name.** `DECLARE <CLASS> <name>` follows SQL's
+  `CREATE <CLASS> <name>` convention: the token after the class is the name,
+  usable in any later statement. References resolve against the declaring
+  namespace at admission — never joined by naming convention, as today's
+  `standard_field` strings are.
 - Every authored statement carries `BY`. The actor classes generalize today's
   `source`/`confirmation_source`/`detection_source` vocabularies into one clause.
 - `CONFIDENCE` is logged provenance metadata in [0, 1] — never an adjudication
   input. The pooling plane ignores it; serving decides whether and how consumers
   see it (prompts govern what an LLM must do with it, as today).
-- **Supersession:** a declaration's natural key is *(subject, aspect)*. Re-declaring
+- **Supersession:** a declaration's natural key is *(subject, aspect[, argument])*. Re-declaring
   the same key supersedes; history remains in the log. `RETRACT` removes without
   replacement. No in-place mutation exists.
 - Prose payloads are single-quoted string literals, opaque to the engine.
@@ -236,7 +272,7 @@ DECLARE CONCEPT revenue
   UNIT FROM currency
   BY SEED finance;
 -- dimension concepts may declare ORDERING (ordered | nominal);
--- concept relations (part-of, reconciles-with, disjointness) are under design (§8.3)
+-- concept relations (part-of, reconciles-with, disjointness) are under design (§8.2)
 
 DECLARE CONVENTION accrual_basis
   STATEMENT 'amounts are recognized when earned, not when paid'
@@ -281,7 +317,7 @@ so the expressions stay portable. Metric composition is plain reference:
 Validations carry **no formal check expression** — principle 4 taken fully. The
 authored surface is the typed envelope (kind, cycle scope, tolerance, severity)
 plus opaque guidance prose; the executed SQL is derived at run time and auditable
-via `EXPLAIN`. `OVER` is the membership contract: every name it lists must
+via `WHY()`. `OVER` is the membership contract: every name it lists must
 resolve in the glossary, so a fabricated reference fails at declaration time.
 Validation *induction* is not a language mechanism — it is an agent authoring
 these statements (`BY AGENT inductor`), grounded in served context.
@@ -292,19 +328,19 @@ these statements (`BY AGENT inductor`), grounded in served context.
 DECLARE SOURCE erp_export FROM 'lake/erp/*.parquet' BY USER analyst;
 DECLARE TABLE orders FROM erp_export BY USER analyst;
 
-ANNOTATE orders
-  ENTITY 'sales order'
-  ROLE fact
-  GRAIN (order_id, line_no)
-  TIME AXIS order_date ANCHOR
-  BY AGENT cataloguer CONFIDENCE 0.9;
+ANNOTATE entity(orders, value := 'sales order') BY AGENT cataloguer CONFIDENCE 0.9;
+ANNOTATE role(orders, value := fact) BY AGENT cataloguer CONFIDENCE 0.9;
+ANNOTATE grain(orders, columns := (order_id, line_no)) BY AGENT cataloguer;
+ANNOTATE time_axis(orders, column := order_date, anchor := true) BY AGENT cataloguer;
 
-ANNOTATE orders.amount
-  MEANING 'gross invoiced amount per order line'
-  UNIT 'EUR'
-  BEHAVIOR flow
-  NULL TOKENS ('', 'n/a')
+ANNOTATE meaning(orders.amount, value := 'gross invoiced amount per order line')
   BY AGENT cataloguer CONFIDENCE 0.92;
+ANNOTATE unit(orders.amount, value := 'EUR') BY AGENT cataloguer CONFIDENCE 0.92;
+ANNOTATE behavior(orders.amount, value := flow) BY AGENT cataloguer CONFIDENCE 0.92;
+ANNOTATE null_token(orders.amount, token := 'n/a', value := is_null) BY USER analyst;
+-- one aspect application per statement: exactly one claim slot
+-- (subject, aspect, argument), the supersession unit. An aspect's payload is
+-- typed by its declaration: a closed label set (VALUES), prose, or structure.
 
 DECLARE RELATIONSHIP orders.customer_id REFERENCES customers.id
   CARDINALITY many_to_one
@@ -384,8 +420,7 @@ concerns. Results land in the lake, keyed to the request. Two result channels:
 - **Witnesses** → the log, as `WITNESS` statements emitted by detectors (§4):
 
 ```sql
-WITNESS orders.amount behavior
-  DISTRIBUTION (flow 0.83, stock 0.11, point_in_time 0.06)
+WITNESS behavior(orders.amount, flow := 0.83, stock := 0.11, point_in_time := 0.06)
   BY DETECTOR aggregation_lineage
   EVIDENCE 'obs://run-342/aggregation_lineage/orders.amount';
 ```
@@ -417,12 +452,14 @@ label set per aspect, ending today's per-layer spellings of the same claim
 space. Whether a small core of aspects is universal enough to standardize —
 bound to data processing itself rather than to any domain — is held open (§8.1).
 
-An aspect may take an argument where claims are per-instance rather than
-per-subject (today: per null token, per candidate formula):
+An aspect may take arguments where claims are per-instance rather than
+per-subject (today: per null token, per candidate formula). Arguments and
+distribution labels share the call's named-argument surface; admission tells
+them apart by the aspect's declaration (declared argument names vs declared
+`VALUES`):
 
 ```sql
-WITNESS orders.amount null_token 'n/a'
-  DISTRIBUTION (is_null 0.91, is_value 0.09)
+WITNESS null_token(orders.amount, token := 'n/a', is_null := 0.91, is_value := 0.09)
   BY DETECTOR null_semantics
   EVIDENCE 'obs://run-342/null_semantics/orders.amount';
 ```
@@ -432,7 +469,7 @@ argument)*. Witness reliability comes from `DECLARE RELIABILITY` (§3.4), not fr
 the witness itself.
 
 `EVIDENCE` is the witness's citation, not its substance: an opaque ref resolved
-at read time (`EXPLAIN`, drill-down), and optional — the engine keys its own
+at read time (`WHY()`, drill-down), and optional — the engine keys its own
 measurements' bulk results to the request; an external detector that omits the
 ref simply cannot be drilled into. A dangling ref degrades drill-down, never
 adjudication.
@@ -473,11 +510,15 @@ over seed) is itself a policy default, overridable.
 
 ### 3.5 Consumption
 
-Context is queryable as relations, composable with data in the same SQL session:
+Consumption adds almost no grammar — principle 7. Context relations are table
+functions taking **subject strings**, so every one of them is standard SQL, and
+they compose with data queries in the same session. The grammar additions are
+exactly two: `CONTEXT FOR` (the rendered context document) and the `AT` pin
+(time travel over the whole context, not one table):
 
 ```sql
 SELECT aspect, value, posterior, contested
-FROM CONTEXT(orders.amount);
+FROM CONTEXT('orders.amount');
 
 SELECT subject, aspect FROM DECLARATIONS WHERE contested;
 
@@ -485,21 +526,46 @@ SELECT target, band, top_driver FROM READINESS WHERE band <> 'ready';
 
 SELECT id, version, aspects FROM MEASUREMENTS;  -- what the engine itself can run
 
-SELECT month, value FROM METRIC dso BY month;   -- engine composes glosses + data
+SELECT month, value FROM METRIC('dso', grain => 'month');  -- glosses + data, composed
 
-EXPLAIN orders.amount behavior;
--- declaration, witnesses, reliabilities, pooling trace, posterior — the why-audit
+SELECT * FROM WHY('orders.amount', 'behavior');
+-- declaration, witnesses, reliabilities, pooling trace, posterior — the
+-- why-audit as a relation (today's why-tools; EXPLAIN stays SQL's keyword)
+
+SELECT concept, relation, sql FROM GLOSSES('revenue');
+-- the gloss library searched by concept — KB-first composition starts here
 
 CONTEXT FOR (SELECT sum(amount) FROM orders GROUP BY channel)
   USING SERVING answer_agent;
 -- the curated context document relevant to a query, rendered per serving policy
 
-AT '2026-07-01' SELECT * FROM CONTEXT(orders.amount);   -- log replay, time travel
+AT '2026-07-01' SELECT * FROM CONTEXT('orders.amount');  -- log replay, time travel
+-- context-wide pin: state = f(log ≤ t, lake ≤ t); syntax alignment with lake
+-- time travel (AT (TIMESTAMP => ...)) is a flag item
 ```
 
 `CONTEXT FOR` replaces bespoke prompt assembly: the engine selects and renders the
 declarations, posteriors, and caveats relevant to a query, bounded by a named
 serving policy. One mechanism serves every agent; policies differ, code does not.
+
+The graph is the serving **spine**, not a consumer verb set. `CONTEXT FOR`'s
+renderer traverses the derived graph projection to assemble each concept's
+neighbourhood (part-of closure, confirmed relationships, drivers, additivity) —
+fieldwork: when the running system made the graph its one serving spine, neither
+LLM agent gained a traversal tool; the graph arrived as pushed structure. Code
+consumers (drill UIs) query the same projection as derived relations with plain
+SQL — recursive CTEs are SQL (principle 7). No graph grammar exists.
+
+The projection's vocabulary is not new vocabulary: nodes are the language's own
+names (tables, columns, concepts, glosses, metrics, parameters, plus derived
+verdicts); edges are the references statements already carry or that the engine
+derives from their ASTs (`REFERENCES` pairs, concept relations, grounded-by,
+uses, rolls-up-to, derives-from). The derived plane exposes it as relations;
+the exact shape is engine-defined, not grammar. Two fieldwork notes: today's
+projection outruns consumption (9 of 25 element views have no production
+reader — project on demand, not by completeness), and its one tuning constant
+(part-of closure depth, hand-mirrored across two languages today) is exactly
+the kind of number that becomes declared serving policy here.
 
 Rendering extensions (ggsql-style trailing `VISUALISE` clauses) are compatible with
 this grammar and out of scope for v0.
@@ -507,10 +573,13 @@ this grammar and out of scope for v0.
 ### 3.6 Lifecycle
 
 ```sql
-RETRACT ANNOTATE orders.amount UNIT BY USER analyst;   -- removes, no replacement
+RETRACT unit(orders.amount) BY USER analyst;          -- removes, no replacement
+RETRACT null_token(orders.amount, token := 'n/a')
+  BY USER analyst;                                    -- the argument addresses the slot
 ```
 
-Supersession needs no statement (re-declare the same (subject, aspect)). There is
+Supersession needs no statement (re-apply the same (subject, aspect[, argument])
+slot). There is
 no UPDATE and no DELETE-of-history; the log is append-only.
 
 ---
@@ -542,7 +611,7 @@ invisible to replay — state stops being f(log, lake)); all evidence as stateme
 For each (subject, aspect): the engine pools witnesses (weighted by declared
 reliabilities) into a posterior over the claim space, compares it with the current
 declaration, and exposes: `posterior`, `agreement`, `contested` (policy-thresholded),
-and the trace (`EXPLAIN`). Readiness aggregates contested/ignorant aspects per
+and the trace (`WHY()`). Readiness aggregates contested/ignorant aspects per
 target under the readiness policy. Verdicts for validations apply declared tolerance
 to observed deviation at read time.
 
@@ -579,34 +648,38 @@ One line each; none designed in v0:
 
 ## 8. Open questions for review
 
-1. **Universal-core aspects** — no aspect vocabulary is fixed by the grammar and
-   no detector is fixed by the language, ever. The only open question is whether
-   a few aspects are so obviously bound to data processing itself — null
-   semantics, type parsing — that a spec-blessed seed pack should standardize
-   their label sets. Domain aspects (behavior, cycle stages) are pack vocabulary
-   regardless.
-2. **Aspect-driven annotation clauses** — §3.3 makes claim spaces declared, not
-   grammar. Follow-on: do declared aspects also drive `ANNOTATE` clauses
-   (`ANNOTATE orders.amount behavior flow`, with `behavior` resolved against
-   declared aspects), or do core annotation clauses remain grammar keywords?
-   §1.2(6) suggests the former; the cost is that `ANNOTATE` loses its fixed
-   clause shape.
-3. **Concept relations** — transcription evidence: part-of is authored as
-   compositions (whole + parts), reconciles-with is an edge carrying a
-   tolerance, disjointness is *derived* from convention concept groups (never
-   authored), and the statement axis on metric extracts (`balance_sheet`,
-   `income_statement`) is plausibly just part-of. Open: clauses on
-   `DECLARE CONCEPT`, edge statements, or group declarations — and whether
-   derived edges stay out of the log entirely (§2.5 suggests yes).
-4. **Typing vocabulary** — type-pattern teaches (pattern → type +
-   standardization expression), workspace-level null-token vocabulary, and
-   expected-dependency assertions (intentional conditional nulls) have no
-   statement family. Candidates: `DECLARE TYPE PATTERN`, pack-level null
-   vocabulary, and a small expectation form — or §6 reserved space.
-5. **Cycle vocabulary (concept space)** — cycle types (stages with indicators,
-   completion indicators, aliases, feeds-into) live in pack YAML with no
-   glossql home, and real cycle-family directions bind *concepts*
-   (`incoming accounts_receivable`), not bare labels as §3.1 sketches.
+Items carry direction from review, not final decisions; "shaped later" is a
+legal resolution.
+
+1. **Universal-core aspects** — direction: the built-in-function model. Like
+   `md5()`, a core library of data-processing aspects (null semantics, type
+   parsing) is standardized and *named* by the spec, shipped as a seed pack —
+   product-standard, never grammar. Aspects are extensible the way engine UDFs
+   are (an extension point, not a first concern). Domain aspects (behavior,
+   cycle stages) stay pack vocabulary regardless. Remaining: the core list and
+   its label sets.
+2. **Concept relations** — derived edges are settled (computed, out of the log,
+   §2.6). Open is the *authored* half: part-of (today authored as
+   compositions), reconciles-with (an authored edge carrying a tolerance), and
+   where disjointness's authored source lives once conventions are opaque
+   prose (today it derives from convention concept groups — likely a small
+   group declaration). Likeliest shape: clauses on `DECLARE CONCEPT`. The
+   statement axis on metric extracts (`balance_sheet`, `income_statement`) is
+   plausibly just part-of.
+3. **Typing vocabulary and DECLARE proliferation** — type-pattern teaches,
+   workspace-level null-token vocabulary, and expected-dependency assertions
+   still have no statement family. Direction: resist new `DECLARE` families;
+   prefer SQL-bodied forms under few heads (type patterns are expressions;
+   enrichment and typing transforms are view-shaped SQL — principle 7). Start
+   small and see how it works out.
+4. **Cycle vocabulary and the genericity bar** — the SQL-inventor test: SQL has
+   no INVOICE statement; domain lives in tables. A family earns grammar only
+   if it is generic to analytics/data processing. Validations pass that bar;
+   cycle *types* (stages, indicators, feeds-into) may not — they may be pack
+   vocabulary expressed through generic constructs rather than `DECLARE CYCLE`
+   grammar. Real cycle-family directions bind *concepts*
+   (`incoming accounts_receivable`), not bare labels as §3.1 sketches. No 1-1
+   mapping of today's YAML is owed. May be shaped later.
 
 ## 9. Validation and first implementation slice
 
@@ -622,6 +695,12 @@ direction: every current mechanism the language claims to subsume is listed and
 confirmed droppable **without a workaround**. Implementation starts when §2's
 rows are transcribed and the section-status flags are cleared.
 
+Transcription covers artifacts; **walkthroughs** cover flows. For each producing
+moment in §2.5 (pack import, onboarding, a catalog run, a calibration release, a
+metric execution, a user teach, an agent answering a question) write the exact
+statement sequence produced and consumed, end to end. §2's rows prove every
+artifact has a home; walkthroughs prove every moment has a script.
+
 ### 9.2 First implementation slice (v0.1 PoC)
 
 Scope for the first implementation, gated on §9.1 — the adjudication slice on
@@ -632,13 +711,13 @@ encodings below are placeholders; the persistence decision (§1.1) stays open.
 - **Statements:** `DECLARE CONCEPT`, `DECLARE ASPECT`, `ANNOTATE`, `OBSERVE`,
   `WITNESS`, `DECLARE RELIABILITY`, `DECLARE POLICY` (readiness bands only),
   `RETRACT`.
-- **Consumption:** `CONTEXT(subject)`, `DECLARATIONS`, `EXPLAIN`, `AT`.
+- **Consumption:** `CONTEXT()`, `DECLARATIONS`, `WHY()`, `AT`.
 - **Substrate:** DataFusion custom statements; log = one plain-text statement
   file; lake = a parquet directory.
 - **Loop closure:** one built-in detector (null semantics over `profile`
   results), so `OBSERVE → lake → WITNESS → pooling → CONTEXT` runs end to end.
 - **Acceptance:** replay determinism (identical derived state from log + lake),
-  contested detection under declared reliabilities, a faithful `EXPLAIN` trace,
+  contested detection under declared reliabilities, a faithful `WHY()` trace,
   `AT` time travel by prefix replay.
 - **Excluded:** `GLOSS`, metrics, validations, enrichments, hierarchies,
   serving policy, `CONTEXT FOR`.
