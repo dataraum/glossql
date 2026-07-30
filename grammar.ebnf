@@ -1,0 +1,123 @@
+(* glossql grammar — machine-readable source of truth for syntax.
+   Status: derived from SPEC.md §3 examples on 2026-07-30. Productions marked
+   [REPAIR] do not exist in SPEC.md §3.0's skeleton and were reconstructed from
+   the spec's own examples; each is a pending SPEC.md diff. Clause details are
+   sketch-level where the spec says so; statement forms are normative.
+   Token level (identifiers, strings with '' escaping, numbers, -- comments,
+   keyword case-insensitivity) is inherited from the substrate SQL dialect.
+
+   Known unresolved syntax issues (tracked, not hidden):
+   - U1: provenance `BY` after an opaque SQL body (DECLARE VIEW/TABLE recipes)
+         is ambiguous with SQL's GROUP BY / ORDER BY without a reserved
+         delimiter; the harness parses from the end (last BY + actor class).
+   - U2: aspect-application arguments vs claim-space labels share one surface;
+         syntactically identical, split only by the aspect's declaration.
+   - U3: GROUNDING's stated supersession key member `parameter` has no surface
+         syntax (sprint candidate).
+   - U4: GLOSS subject resolution spans concept and data namespaces.            *)
+
+statement    = writing | reading ;
+
+(* ------------------------------------------------------------------ writing *)
+
+writing      = declaration | witness | observation | lifecycle ;
+
+declaration  = named_decl | keyed_decl | aspect_appl ;
+
+(* --- named classes: DECLARE <CLASS> <name> clauses provenance --- *)
+named_decl   = "DECLARE", named_class, name, { clause }, provenance, ";" ;
+named_class  = "SOURCE" | "TABLE" | "VIEW" | "CONCEPT" | "CONVENTION"
+             | "METRIC" | "VALIDATION" | "CYCLE", "FAMILY"            (* [REPAIR] multi-token class *)
+             | "ASPECT" | "HIERARCHY" | "SERVING" ;
+
+(* --- keyed classes: identity is the key, not a name. All [REPAIR]. --- *)
+keyed_decl   = relationship_decl | grounding_decl | reliability_decl | policy_decl ;
+
+relationship_decl                                                     (* [REPAIR] *)
+             = "DECLARE", "RELATIONSHIP",
+               ( pair, [ "CARDINALITY", ident ], [ "REJECTED" ]       (* data space *)
+               | name, "PART", "OF", name                             (* concept space *)
+               | name, "RECONCILES", "WITH", expr, [ "TOLERANCE", number ]
+               | "DISJOINT", "(", name, { ",", name }, ")"
+               ), provenance, ";" ;
+
+grounding_decl                                                        (* [REPAIR] *)
+             = "DECLARE", "GROUNDING", name, "IN", name,
+               "AS", expr, [ "WHERE", expr ], provenance, ";" ;
+               (* key: (concept, relation, parameter) — parameter has NO surface
+                  syntax here: issue U3 *)
+
+reliability_decl                                                      (* [REPAIR] *)
+             = "DECLARE", "RELIABILITY", actor, "FOR", name, number,
+               provenance, ";" ;
+               (* key: (detector, witness, aspect) — sprint 1 fork B, 2026-07-30.
+                  Bare DETECTOR x is shorthand for WITNESS x (single-witness). *)
+
+policy_decl                                                           (* [REPAIR] *)
+             = "DECLARE", "POLICY", policy_kind, [ name ], [ "FOR", name ],
+               { clause }, provenance, ";" ;
+policy_kind  = "readiness" | "contract" | "interpretation" ;
+               (* three key shapes: singleton (readiness), named (contract),
+                  keyed FOR a metric (interpretation) *)
+
+(* --- aspect applications and witnesses: one claim slot each --- *)
+aspect_appl  = "DECLARE", ident, "(", subject, { ",", arg_pair }, ")",
+               provenance, ";" ;
+witness      = "WITNESS", ident, "(", subject, { ",", arg_pair }, ")",
+               provenance, ";" ;
+arg_pair     = ident, ":=", value ;                                   (* issue U2 *)
+
+(* --- observation --- *)
+observation  = "OBSERVE", ident, { ",", ident },                      (* [REPAIR] — no production in §3.0 *)
+               [ "ON", ( subject | subject_tuple ) ], [ name ], ";" ;
+               (* `OBSERVE validation receivables_roll_forward`: measurement id
+                  followed by a declared name.
+                  `OBSERVE overlap ON (a.x, b.y)`: a column tuple, NOT a §3.0
+                  pair — no REFERENCES. *)
+subject_tuple= "(", qualified, { ",", qualified }, ")" ;
+
+(* --- lifecycle --- *)
+lifecycle    = "RETRACT", ident, "(", subject, { ",", arg_pair }, ")",(* [REPAIR] — no production in §3.0 *)
+               provenance, ";" ;
+
+(* --- shared --- *)
+provenance   = "BY", actor, [ "CONFIDENCE", number ], [ "EVIDENCE", string ] ;
+actor        = "DETECTOR", ( ident | string ), [ "WITNESS", ident ]   (* sprint 1 fork B *)
+             | other_class, ( ident | string ) ;
+               (* string form is real: BY CALIBRATION '2026-07'. A detector pools
+                  one or more witnesses; reliability is declared per witness.
+                  Bare DETECTOR x ≡ DETECTOR x WITNESS x. *)
+other_class  = "USER" | "AGENT" | "SEED" | "CALIBRATION" ;
+
+subject      = "workspace" | qualified | pair | name ;
+qualified    = ident, [ ".", ident ] ;                                (* table | table.column *)
+pair         = qualified, "REFERENCES", qualified
+             | ident, "(", ident, { ",", ident }, ")",
+               "REFERENCES", ident, "(", ident, { ",", ident }, ")" ;
+
+(* Clauses: keyword + payload. Statement forms are normative; clause payloads
+   are sketch-level, parsed as keyword-delimited spans. Known clause keywords: *)
+clause       = clause_kw, clause_payload ;
+clause_kw    = "KIND" | "DESCRIPTION" | "INDICATORS" | "EXCLUDE"
+             | "UNIT" | "UNIT FROM" | "ORDERING" | "STATEMENT" | "AS"
+             | "PARAMETER" | "ON CYCLE" | "OVER" | "TOLERANCE" | "SEVERITY"
+             | "GUIDANCE" | "DIRECTIONS" | "VALUES" | "FROM" | "CONNECTION"
+             | "VIA" | "IN" | "LEVELS" | "WHERE" | "BANDS" | "WEIGHT"
+             | "OVERALL THRESHOLD" | "BLOCK ON" | "PREFER"
+             | "DIMENSION BUDGET" | "RESTRICT JOINS TO DECLARED RELATIONSHIPS"
+             | "INCLUDE" ;
+clause_payload = ? balanced token span up to the next clause_kw or provenance ? ;
+
+expr         = ? substrate-SQL expression; balanced token span ? ;
+
+value        = ident | number | string | "(", ident | number, { ",", ident | number }, ")" ;
+name         = ident ;
+
+(* ------------------------------------------------------------------ reading *)
+
+reading      = [ "AT", string ], ( gloss | sql_query ) ;
+gloss        = "GLOSS", ( subject | "(", sql_query, ")" ),
+               [ "USING", "SERVING", name ], [ "AS", "PACK" ], ";" ;
+sql_query    = ? substrate SQL statement, passed through; context relations
+                 (CONTEXT, DECLARATIONS, READINESS, MEASUREMENTS, METRIC, WHY,
+                 GROUNDINGS, PROFILE, OBSERVATIONS) are table functions in it ? ;

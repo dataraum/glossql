@@ -7,12 +7,35 @@ harness (grammar parser, replay/pooling simulator, constrained-decoding authorin
 test) may exist; its only outputs are transcription verdicts and SPEC.md diffs,
 and it does not survive into the implementation.
 
-## The one-document rule
+## The one-document rule (amended 2026-07-30)
 
-**SPEC.md is the only normative document.** No satellite design docs, no assumption
-files, no per-topic notes. Proposals are edits to SPEC.md; open questions live in
-SPEC.md §8 and get folded into the body when decided, not appended as history. If a
-discussion produces something worth keeping, it becomes a SPEC.md diff.
+**SPEC.md is the only normative prose.** No satellite design docs, no assumption
+files, no per-topic notes. Open questions live in SPEC.md §8 and get folded into
+the body when decided, not appended as history.
+
+Four non-prose artifacts are first-class — they are fixtures and machinery, not
+documents, and they exist precisely so the spec stops absorbing untested ideas:
+
+- `grammar.ebnf` — the machine-readable grammar; the source of truth for syntax.
+  Productions marked [REPAIR] are pending SPEC.md diffs.
+- `corpus/` — transcriptions of **real** `../dataraum-context` artifacts
+  (` ```glossql ` must parse; ` ```glossql-gap ` documents a gap and must fail).
+- `harness/` — the §9.1 machinery (parser now; replay/pooling simulator and
+  constrained-decoding authoring test to come). Disposable; does not survive
+  into the implementation.
+- `reports/` — §9.1 outputs: review verdicts and sprint fork write-ups.
+
+**Standing invariant:** `python3 harness/check.py` passes — every ```sql block
+in SPEC.md parses, every corpus fixture behaves as tagged. A grammar edit that
+breaks it doesn't land.
+
+**Ideation before prose:** no idea enters SPEC.md until it has survived a
+corpus test — write 2–3 competing statement forms for the same real artifact,
+check them against grammar and the real table shapes, present the forks to the
+project lead. Only the surviving fork becomes a SPEC.md diff, and the diff
+should shrink or hold the spec, never grow it by essay. An open §8 question
+closes only by a transcription verdict, never by argument. Progress is corpus
+burn-down over §2's rows, not lines written.
 
 ## Grounding
 

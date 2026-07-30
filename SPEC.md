@@ -228,7 +228,8 @@ declaration := DECLARE class name clauses provenance ';'
              | DECLARE aspect '(' subject { ',' arg ':=' value } ')' provenance ';'
 witness     := WITNESS aspect '(' subject { ',' arg ':=' value } ')' provenance ';'
 provenance  := BY actor [ CONFIDENCE number ] [ EVIDENCE ref ]
-actor       := USER name | AGENT name | DETECTOR name | SEED name | CALIBRATION name
+actor       := USER name | AGENT name | DETECTOR name [ WITNESS name ]
+             | SEED name | CALIBRATION name
 subject     := workspace | table | table '.' column | pair | declared_name
 pair        := table '.' column REFERENCES table '.' column
              | table '(' column {',' column} ')' REFERENCES table '(' column {',' column} ')'
@@ -258,8 +259,10 @@ pair        := table '.' column REFERENCES table '.' column
   `TABLE`, `VIEW`, `CONCEPT`, `CONVENTION`, `METRIC`, `VALIDATION`,
   `CYCLE FAMILY`, `ASPECT`, `HIERARCHY`, `SERVING`); *keyed* classes carry no
   name — their identity is their key (`RELATIONSHIP` by its edge, `GROUNDING`
-  by (concept, relation, parameter), `RELIABILITY` by (actor, aspect));
-  *aspect applications* are keyed by their claim slot. Policy keys are
+  by (concept, relation, parameter), `RELIABILITY` by (detector, witness,
+  aspect) — a detector pools one or more named witnesses, each with its own
+  declared reliability, and bare `DETECTOR x` is shorthand for `DETECTOR x
+  WITNESS x`); *aspect applications* are keyed by their claim slot. Policy keys are
   mechanism-defined (a readiness singleton, a named contract, an
   interpretation keyed `FOR` a metric). A proposed class that would carry no
   name and no principled key is an aspect wearing a costume.
@@ -575,6 +578,10 @@ being addressable in the language.
 ```sql
 DECLARE RELIABILITY DETECTOR aggregation_lineage FOR behavior 0.72
   BY CALIBRATION '2026-07';
+DECLARE RELIABILITY DETECTOR null_semantics WITNESS null_vocabulary
+  FOR null_token 0.944 BY CALIBRATION '2026-07';
+-- reliability is per witness within a detector; a bare DETECTOR name is the
+-- single-witness shorthand (DETECTOR x ≡ DETECTOR x WITNESS x)
 
 DECLARE POLICY readiness
   BANDS (ready < 0.30, investigate < 0.70, blocked)
