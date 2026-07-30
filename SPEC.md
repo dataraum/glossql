@@ -12,8 +12,7 @@ Status by section — the iteration loop works the flagged items (§9.1):
 - **Ready** (reads unambiguously for practitioners and agents): §1 · §3.0 ·
   §3.6 · §4 · §5 · §7 · §10.
 - **Under iteration** (statement forms hold; clause details do not):
-  - §3.1 — the `PARAMETER` clause shape (type, options, grain derivation) is a
-    sketch; the `RECONCILES WITH` right-hand side is open (§8.2).
+  - §3.1 — the `RECONCILES WITH` right-hand side is open (§8.2).
   - §3.0 — the semantic admission checklist is unwritten; the log envelope is
     deliberately last (§1.1).
   - §3.2 — typing/null/expectation teaches (§8.3) have no statement form yet;
@@ -131,8 +130,10 @@ reserved (§6), or deliberately excluded (§7).
 | enrichment selection | which neighbours enrich a fact table, exposed columns | `DECLARE VIEW` |
 | business cycles (LLM) | cycle assertion, stages, status column, completion semantics | decomposed: stage concepts + `PART OF`, ordered stage aspect with `TERMINAL`, per-value applications (§3.3) |
 | surrogate key confirmation | composite-key intent confirmed/declined | `DECLARE key(table, …)` — an aspect |
+| type decisions (resolved type per column) | decided type; decision source automatic/manual/fallback | `DECLARE type(column, …)` — an aspect; candidates stay measurements (§2.2 `typing`) |
+| bus matrix / conformed dimensions | cross-fact attachment (folded/referenced), conformed groups, roles, confirmation | reserved (§6) |
 | groundings (snippet parts + provenance basis) | concept → relation, expression, filters | `DECLARE GROUNDING` |
-| teach payloads (all 8 types, today free JSON) | type patterns, null tokens, units, plus the families above | the same statements, `BY user` — type/null/expectation teaches pending §8.3 |
+| teach payloads (9 types, Zod-typed per payload) | type patterns, null tokens, units, plus the families above | the same statements, `BY user` — type/null/expectation teaches pending §8.3 |
 | sources / tables | where data lives | `DECLARE SOURCE`, `DECLARE TABLE` |
 | db recipes (verbatim query per connection) | source name, credential reference, backend, query | `DECLARE SOURCE … CONNECTION` + `DECLARE TABLE … AS` |
 
@@ -152,7 +153,8 @@ reserved (§6), or deliberately excluded (§7).
 | driver rankings | `drivers` |
 | additivity resolution inputs | `additivity` |
 | validation execution (deviation, magnitude) | `validation` |
-| 17 entropy detectors across 4 layers | detector ids (open vocabulary) |
+| concept reconciliation execution (delta, verdict, abstain vocabulary) | `reconciliation` |
+| 18 entropy detectors across 4 layers | detector ids (open vocabulary) |
 
 The measurement vocabulary is open and versioned; detectors register into it.
 
@@ -170,7 +172,7 @@ Two shapes, and the distinction drives §4:
 
 | Today | glossql construct |
 |---|---|
-| six-block answer-agent context (schema+meanings, entities, curated dimensions, relationship whitelist, drivers, grain caveats) + conventions + snippet vocabulary | `GLOSS (query)`, shaped by `DECLARE SERVING` policy |
+| nine-block answer-agent context (schema+meanings, entities, curated dimensions, relationship whitelist, drivers, grain caveats, snippet vocabulary, conventions, concept context) | `GLOSS (query)`, shaped by `DECLARE SERVING` policy |
 | engine GraphAgent served context | same `GLOSS`, different serving policy — one mechanism, two policies |
 | readiness surfaces (bands, drivers, coverage) | `READINESS()` relation |
 | why-tools (adjudication audit) | `WHY(subject, aspect)` |
@@ -203,8 +205,11 @@ so shapes must be regular enough for constrained decoding.
 ### 2.6 Derived (computed, never authored, never in the log)
 
 Pooled posteriors and conflict flags · readiness bands · validation verdicts ·
-additivity conclusions · graph projections · rendered view SQL · rendered
-grounding SQL. All queryable (§3.5); none writable.
+reconciliation verdicts · additivity conclusions · graph projections · rendered
+view SQL · rendered grounding SQL · the current-state surface itself (today's
+promoted heads and `current_*` views — replay plus supersession define
+*current*; runs and promotion are engine-internal). All queryable (§3.5); none
+writable.
 
 ---
 
@@ -251,7 +256,8 @@ pair        := table '.' column REFERENCES table '.' column
   `CREATE <CLASS> <name>` convention: the token after the class is the name,
   usable in any later statement. References resolve against the declaring
   namespace at admission — never joined by naming convention, as today's
-  `standard_field` strings are.
+  `standard_field` strings are (string equality on a declared concept name,
+  ~43 name-keyed joins).
 - **The aspect-application form declares no name.** `DECLARE
   behavior(orders.amount, value := flow)` occupies a claim slot *(subject,
   aspect[, argument])*: the class form defines names, the application form
@@ -269,7 +275,9 @@ pair        := table '.' column REFERENCES table '.' column
   interpretation keyed `FOR` a metric). A proposed class that would carry no
   name and no principled key is an aspect wearing a costume.
 - Every authored statement carries `BY`. The actor classes generalize today's
-  `source`/`confirmation_source`/`detection_source` vocabularies into one clause.
+  seven-plus per-table source vocabularies (`source`, `confirmation_source`,
+  `detection_source`, `annotation_source`, `decision_source`,
+  `detection_method`, `detector_id`) into one clause.
 - `CONFIDENCE` is logged provenance metadata in [0, 1] — never an adjudication
   input. The pooling plane ignores it; serving decides whether and how consumers
   see it (prompts govern what an LLM must do with it, as today).
@@ -326,20 +334,22 @@ DECLARE CONVENTION accrual_basis
   BY USER analyst;
 
 DECLARE METRIC dso
-  AS 90 * avg(receivables) / sum(revenue)      -- identifiers denote concepts here
+  AS avg(receivables) / sum(revenue) * days_in_period  -- identifiers denote concepts here
   UNIT 'days'
-  PARAMETER period GRAIN month DEFAULT last_complete
+  PARAMETER days_in_period DEFAULT 30 OPTIONS (30, 90, 365) DERIVED BY period_grain
   BY SEED finance;
 -- interpretation bands are read-time policy (§3.4), never metric declaration
 
 DECLARE VALIDATION receivables_roll_forward
   KIND balance                      -- balance | comparison | constraint | aggregate
-  ON CYCLE order_to_cash
+  ON CYCLES (order_to_cash)
   OVER (receivables, revenue, collections)
+  CONVENTIONS (accrual_basis)
   TOLERANCE 0.01
   SEVERITY error
-  GUIDANCE 'opening receivables plus revenue minus collections reconciles with
-            closing receivables; a gap usually indicates unposted collections'
+  OUTCOME 'opening receivables plus revenue minus collections reconciles with
+           closing receivables'
+  GUIDANCE 'a gap usually indicates unposted collections'
   BY AGENT inductor;
 
 DECLARE CYCLE FAMILY settlement
@@ -374,6 +384,13 @@ operator without a named mechanism. Admission rejects cross-space edges — a
 `PART OF` between a concept and a column is an error — so
 grounding-as-only-bridge is enforced, not just stated.
 
+`PARAMETER` declares a named hole in the metric: `DEFAULT` takes a literal —
+the literal types the parameter, there is no TYPE clause; `OPTIONS` is the
+closed value set; `DERIVED BY` names an engine mechanism from a spec-defined
+list (today: `period_grain` — when the caller provides no value, the rule
+computes one from the data's observed accumulation window; the declared
+default stands otherwise). `DERIVED BY` absent means a plain constant.
+
 Rule: inside `DECLARE METRIC` / `DECLARE VALIDATION` expressions, bare identifiers
 resolve against a single concept-space namespace: concepts, declared metrics, and
 parameters. A name that would denote more than one of these is a declaration-time
@@ -382,10 +399,15 @@ only bridge (§3.2) — so the expressions stay portable. Metric composition is 
 `operating_income` in another metric's body denotes the declared metric.
 
 Validations carry **no formal check expression** — principle 4 taken fully. The
-authored surface is the typed envelope (kind, cycle scope, tolerance, severity)
-plus opaque guidance prose; the executed SQL is derived at run time and auditable
+authored surface is the typed envelope (kind, cycle scope, conventions,
+tolerance, severity) plus two opaque prose slots — `OUTCOME` (what passing
+means) and `GUIDANCE` (what a gap usually means) — consumed separately by the
+SQL binder; the executed SQL is derived at run time and auditable
 via `WHY()`. `OVER` is the membership contract: every name it lists must
 resolve in the glossary, so a fabricated reference fails at declaration time.
+`ON CYCLES` lists cycle concepts — absent means universal; `CONVENTIONS` lists
+declared conventions the derived SQL must honor, membership-checked like
+`OVER`.
 Validation *induction* is not a language mechanism — it is an agent authoring
 these statements (`BY AGENT inductor`), grounded in served context.
 
@@ -631,8 +653,8 @@ DECLARE SERVING answer_agent
 ```
 
 Policies are declarations like any other — supersedable, attributed. Today's
-hardcoded curation constants (the dimension budget, prefer-enriched, the join
-whitelist rule) become declared serving policy. Actor-precedence (user over agent
+hardcoded curation constants (prefer-enriched, the join-whitelist rule, the
+part-of closure depth) become declared serving policy. Actor-precedence (user over agent
 over seed) is itself a policy default, overridable. Metric interpretation is
 the same move applied to `DECLARE METRIC`: bands over metric values are
 read-time judgment (principle 3), keyed to the metric name under the same
@@ -721,7 +743,7 @@ verdicts); edges are the references statements already carry or that the engine
 derives from their ASTs (`REFERENCES` pairs, concept relations, grounded-by,
 uses, rolls-up-to, derives-from). The derived plane exposes it as relations;
 the exact shape is engine-defined, not grammar. Two fieldwork notes: today's
-projection outruns consumption (9 of 25 element views have no production
+projection outruns consumption (a majority of element views have no production
 reader — project on demand, not by completeness), and its one tuning constant
 (part-of closure depth, hand-mirrored across two languages today) is exactly
 the kind of number that becomes declared serving policy here.
@@ -788,7 +810,8 @@ One line each; none designed in v0:
 
 - **Synonyms** on any subject (`SYNONYMS ('turnover', ...)`) — we don't do this systematically yet.
 - **Verified example queries** — question + query + verified-by; today only half-exists as saved snippets.
-- **Agent instructions per subject** — prose guidance scoped to a table/metric (beyond global conventions).
+- **Agent instructions per subject** — prose guidance scoped to a table/metric (beyond global conventions); pack `analysis_hints` prose ships today — reserved means undesigned, not nonexistent.
+- **Conformed dimensions / bus matrix** — cross-fact dimension attachment (folded/referenced), conformed groups, roles; authored and judged today (`bus_matrix`). Needs a designed statement family.
 - **Expectations on incoming data** — schema stability, freshness SLAs, arrival contracts.
 - **Unit conversion** — FX, unit algebra; today units are labels only.
 - **Entity resolution** — same-entity assertions across sources.
@@ -798,8 +821,10 @@ One line each; none designed in v0:
 
 ## 7. Deliberately excluded
 
-- **Orchestration and scheduling** — the language requests observations; it never sequences them.
+- **Orchestration and scheduling** — the language requests observations; it never sequences them. Artifact lifecycle states (today's `lifecycle_artifacts`: declared/executed/grounded/canonical, strictness) are the same concern; their `teaches` payloads arrive as ordinary statements.
 - **Prompt configuration** — LLM prompts/versions are operational engine config, not context.
+- **Detector calibration** — per-detector scoring parameters (today's `thresholds.yaml`) are engine config like prompts; `DECLARE RELIABILITY` covers pooling weights only.
+- **Application state** — reports, conversations, drill pins, UI state are the cockpit's own persistence, not context.
 - **Storage layout** — log/lake encodings are implementation.
 - **Interchange formats** — an Ossie mapping is possible for the vocabulary tier and is not part of the language.
 
@@ -890,9 +915,11 @@ The canonical walkthrough (§9.1): the producing moments of §2.5 in the order a
 real workspace meets them, as well-formed statements (abridged where marked).
 Two boundaries hold throughout. Orchestration appears nowhere: workflows
 *emit* statements and *read* derived state — the language says what, never
-when (§7). And the cockpit is a pure consumer: every inspection surface is
-`GLOSS` or a relation; every teach control emits a `DECLARE`. A cockpit
-feature that cannot be written this way is a grammar gap (§9.1, bucket two).
+when (§7). And the cockpit is a pure consumer *of context*: every context
+inspection surface is `GLOSS` or a relation; every teach control emits a
+`DECLARE`; its own application state (reports, conversations, drill pins) is
+excluded (§7). A context feature that cannot be written this way is a grammar
+gap (§9.1, bucket two).
 
 **1 · Frame.** Choosing a vertical replays its pack — framing is not a
 mechanism, it is provenance:
@@ -902,7 +929,9 @@ DECLARE ASPECT behavior VALUES (flow, stock, point_in_time) BY SEED core;
 DECLARE CONCEPT revenue KIND measure UNIT FROM currency
   DESCRIPTION 'income from sales of goods and services' BY SEED finance;
 DECLARE RELATIONSHIP net_revenue PART OF revenue BY SEED finance;
-DECLARE METRIC dso AS 90 * avg(receivables) / sum(revenue) UNIT 'days'
+DECLARE METRIC dso
+  AS avg(receivables) / sum(revenue) * days_in_period UNIT 'days'
+  PARAMETER days_in_period DEFAULT 30 OPTIONS (30, 90, 365) DERIVED BY period_grain
   BY SEED finance;
 -- abridged: receivables, collections, conventions, validations elided
 ```

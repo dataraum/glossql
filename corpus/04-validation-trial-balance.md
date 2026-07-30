@@ -1,4 +1,4 @@
-# 04 · Validation `trial_balance` — GRAMMAR GAP + INFORMATION LOST
+# 04 · Validation `trial_balance` — envelope RESOLVED (sprint 7, fork A); OVER honesty open
 
 Source: `validations` table (engine schema.sql) — fields: validation_id, name,
 description, category, severity, check_type ∈ (aggregate|balance|comparison|
@@ -22,45 +22,33 @@ expected_outcome: >
   Total debits must equal total credits across all account types. …
 ```
 
-## Transcription — best legal approximation (semantically dishonest, see findings)
+## Transcription — decided envelope (sprint 7, fork A)
 
 ```glossql
 DECLARE VALIDATION trial_balance
   KIND balance
-  ON CYCLE journal_entry_cycle
+  ON CYCLES (journal_entry_cycle, accounts_receivable, accounts_payable)
   OVER (current_assets, operating_expense, current_liabilities, equity, revenue)
+  CONVENTIONS (sign_natural_balance)
   TOLERANCE 0.01
   SEVERITY critical
   GUIDANCE 'Join the trial balance table with the chart of accounts …'
-  BY SEED finance;
-```
-
-## Gaps
-
-```glossql-gap
-DECLARE VALIDATION trial_balance
-  KIND balance
-  ON CYCLES (journal_entry_cycle, accounts_receivable, accounts_payable)
-  RELEVANT CONVENTIONS (sign_natural_balance)
-  EXPECTED OUTCOME 'Total debits must equal total credits across all account types.'
+  OUTCOME 'Total debits must equal total credits across all account types.'
   BY SEED finance;
 ```
 
 ## Findings
 
-- check_type/tolerance/severity/guidance: clean — §3.1's envelope was visibly
-  designed off this row.
-- **GRAMMAR GAP — OVER cannot be filled honestly.** The real operands are
-  account-type *families* resolved at bind time (asset+expense vs
-  liability+equity+revenue); the OVER list above fabricates concept-shaped
-  operands that are not what the check reads. No optional-OVER form exists.
-- **GRAMMAR GAP — cycle scope is a list** (`relevant_cycles`, three members;
-  empty-means-universal is defined semantics today). §3.1 offers singular
-  `ON CYCLE`.
-- **GRAMMAR GAP — `relevant_conventions`** (DAT-865): the typed
-  validation→convention dependency the SQL binder is fed. No clause references
-  declared CONVENTIONs.
-- **INFORMATION LOST:** category, tags, `expected_outcome` (a second prose slot,
-  distinct from guidance: what passing *means* vs how to *bind*).
+- **RESOLVED (sprint 7, fork A):** `ON CYCLES` is a list, absent = universal;
+  `CONVENTIONS` carries the validation→convention dependency, membership-
+  checked like `OVER` (the load-bearing pull direction — `validation_phase.py`
+  errors on unresolved ids); `OUTCOME` is the second prose slot, kept separate
+  from `GUIDANCE` as the binder consumes them.
+- **OPEN — OVER cannot be filled honestly.** The real operands are account-type
+  *families* resolved at bind time (asset+expense vs liability+equity+revenue);
+  the OVER list above fabricates concept-shaped operands that are not what the
+  check reads. No optional-OVER form exists. Sprint candidate.
+- **INFORMATION LOST (accepted):** category, tags — browsing metadata; revisit
+  as generic aspects if it ever earns a mechanism.
 - `check_type: expected_formula` + `{table, column, formula}`: §8.3-admitted gap
   (expectation teaches have no statement form).

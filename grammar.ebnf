@@ -110,16 +110,26 @@ pair         = qualified, "REFERENCES", qualified
 clause       = clause_kw, clause_payload ;
 clause_kw    = "KIND" | "DESCRIPTION" | "INDICATORS" | "EXCLUDE"
              | "UNIT" | "UNIT FROM" | "ORDERING" | "STATEMENT" | "AS"
-             | "PARAMETER" | "ON CYCLE" | "OVER" | "TOLERANCE" | "SEVERITY"
-             | "GUIDANCE" | "DIRECTIONS" | "VALUES" | "TERMINAL" | "ARGUMENTS"
-             | "FROM" | "CONNECTION"
+             | "PARAMETER" | "ON CYCLES" | "OVER" | "CONVENTIONS"
+             | "TOLERANCE" | "SEVERITY"
+             | "GUIDANCE" | "OUTCOME" | "DIRECTIONS" | "VALUES" | "TERMINAL"
+             | "ARGUMENTS" | "FROM" | "CONNECTION"
              | "VIA" | "IN" | "LEVELS" | "WHERE" | "BANDS" | "WEIGHT"
              | "OVERALL THRESHOLD" | "BLOCK ON" | "PREFER"
              | "DIMENSION BUDGET" | "RESTRICT JOINS TO DECLARED RELATIONSHIPS"
              | "INCLUDE" ;
                (* VALUES lists may be ordered (a < b < c); TERMINAL marks
                   absorbing labels; ARGUMENTS declares per-instance argument
-                  names — sprint 3 fork B, 2026-07-30 *)
+                  names — sprint 3 fork B, 2026-07-30.
+                  PARAMETER (sprint 6 fork B) = "PARAMETER", name,
+                  ["DEFAULT", value], ["OPTIONS", "(", ... , ")"],
+                  ["DERIVED", "BY", mechanism] — no TYPE clause, the DEFAULT
+                  literal types the parameter; mechanisms are spec-defined
+                  (today: period_grain).
+                  Validation envelope (sprint 7 fork A): ON CYCLES lists cycle
+                  concepts, absent = universal; CONVENTIONS is membership-
+                  checked against declared conventions; OUTCOME is the second
+                  prose slot (what passing means). *)
 clause_payload = ? balanced token span up to the next clause_kw or provenance ? ;
 
 expr         = ? substrate-SQL expression; balanced token span ? ;

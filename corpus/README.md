@@ -20,8 +20,8 @@ Sources snapshot 2026-07-30. Full analysis: `reports/2026-07-30-adversarial-revi
 |---|---|---|
 | 01 | concept `revenue` | TRANSCRIBES CLEANLY |
 | 02 | convention `sign_natural_balance` | GRAMMAR GAP |
-| 03 | metric `dso` | GRAMMAR GAP |
-| 04 | validation `trial_balance` | GRAMMAR GAP |
+| 03 | metric `dso` | PARAMETER RESOLVED (sprint 6, fork B) |
+| 04 | validation `trial_balance` | envelope RESOLVED (sprint 7, fork A) |
 | 05 | cycle `accounts_receivable` | RESOLVED (sprint 3, fork B) |
 | 06 | claim witnesses + reliabilities | RESOLVED (sprint 1, fork B) |
 | 07 | grounding / sql_snippets | key RESOLVED (sprint 2, fork A) |

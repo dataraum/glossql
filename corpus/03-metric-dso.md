@@ -1,4 +1,4 @@
-# 03 · Metric `dso` — GRAMMAR GAP + INFORMATION LOST + SEMANTICS UNDEFINED
+# 03 · Metric `dso` — PARAMETER RESOLVED (sprint 6, fork B); losses + step-validation remain
 
 Source: `dataraum-context/packages/dataraum-config/verticals/finance/metrics/working_capital/dso.yaml`
 (persisted per `metrics` / `metric_parameters` / `metric_derives_from`, engine schema.sql)
@@ -43,13 +43,13 @@ interpretation:
   - {min: 91, max: 999, label: CRITICAL,   description: Urgent intervention required}
 ```
 
-## Transcription — forced into §3.1/§3.4 as written
+## Transcription — decided form (sprint 6, fork B)
 
 ```glossql
 DECLARE METRIC dso
   AS (accounts_receivable / revenue) * days_in_period
   UNIT 'days'
-  PARAMETER days_in_period GRAIN month DEFAULT 30
+  PARAMETER days_in_period DEFAULT 30 OPTIONS (30, 90, 365) DERIVED BY period_grain
   BY SEED finance;
 
 DECLARE POLICY interpretation FOR dso
@@ -57,26 +57,30 @@ DECLARE POLICY interpretation FOR dso
   BY SEED finance;
 ```
 
-## Gap — what the real parameter and metadata need
+## Gap — display/browsing metadata still has no home
 
 ```glossql-gap
 DECLARE METRIC dso
-  AS (accounts_receivable / revenue) * days_in_period
-  UNIT 'days'
-  PARAMETER days_in_period TYPE integer OPTIONS (30, 90, 365)
-    DERIVED FROM period_grain DEFAULT 30
   DISPLAY NAME 'Days Sales Outstanding'
   CATEGORY working_capital
+  AS (accounts_receivable / revenue) * days_in_period
   BY SEED finance;
 ```
+
+(The invented clauses sit *before* `AS` deliberately: under the reserved-word
+rule, unreserved words after an expression clause are legal expression content
+— which also means every future clause keyword must join the reserved list the
+moment it is introduced.)
 
 ## Findings
 
 - Expression, unit, dependency DAG: clean — concept-space resolution covers the
   concepts and the parameter; the level-1/2 DAG derives from the AST.
-- **GRAMMAR GAP — `PARAMETER` clause.** The sketch has no surface for parameter
-  *type*, the closed *options* list, or `derivation: period_grain` (a derivation
-  *rule*, not a grain *value* — `GRAIN month` names the wrong thing).
+- **RESOLVED (was GRAMMAR GAP) — `PARAMETER` clause.** Sprint 6 fork B:
+  `DEFAULT` literal types the parameter (no TYPE clause), `OPTIONS` is the
+  closed value set, `DERIVED BY` names a spec-defined mechanism (today:
+  `period_grain`). The sketch's `GRAIN month DEFAULT last_complete` is gone —
+  both halves were fiction.
 - **GRAMMAR GAP + INFORMATION LOST — interpretation.** `BANDS` can encode the
   boundaries (after an unstated inclusive-range → strict-< translation) but not
   the per-range `description` prose served to agents today.

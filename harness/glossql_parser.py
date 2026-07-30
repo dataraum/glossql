@@ -43,7 +43,8 @@ POLICY_KINDS = {"readiness", "contract", "interpretation"}
 CLAUSE_HEADS = {
     "KIND", "DESCRIPTION", "INDICATORS", "EXCLUDE", "UNIT", "ORDERING",
     "STATEMENT", "AS", "PARAMETER", "ON", "OVER", "TOLERANCE", "SEVERITY",
-    "GUIDANCE", "DIRECTIONS", "VALUES", "TERMINAL", "ARGUMENTS",
+    "GUIDANCE", "OUTCOME", "CONVENTIONS", "DIRECTIONS", "VALUES",
+    "TERMINAL", "ARGUMENTS", "OPTIONS", "DERIVED",
     "FROM", "CONNECTION", "VIA", "IN",
     "LEVELS", "WHERE", "BANDS", "WEIGHT", "OVERALL", "BLOCK", "PREFER",
     "DIMENSION", "RESTRICT", "INCLUDE", "CARDINALITY", "REJECTED",
@@ -228,12 +229,13 @@ class P:
         if kw.kind != "ident":
             raise ParseError(f"expected clause keyword, got {kw.text!r}")
         k = kw.up()
-        if k in ("DESCRIPTION", "STATEMENT", "GUIDANCE"):
+        if k in ("DESCRIPTION", "STATEMENT", "GUIDANCE", "OUTCOME"):
             self.string(f"{k} payload")
         elif k == "KIND" or k == "SEVERITY" or k == "PREFER" or k == "CONNECTION":
             self.ident(f"{k} payload")
         elif k in ("INDICATORS", "EXCLUDE", "OVER", "DIRECTIONS", "VALUES",
-                   "INCLUDE", "LEVELS", "BANDS", "TERMINAL", "ARGUMENTS"):
+                   "INCLUDE", "LEVELS", "BANDS", "TERMINAL", "ARGUMENTS",
+                   "CONVENTIONS"):
             self.balanced_parens()
         elif k == "ORDERING":
             if self.peek() and self.peek().kind == "punct" and self.peek().text == "(":
@@ -249,16 +251,20 @@ class P:
         elif k == "TOLERANCE":
             self.number()
         elif k == "ON":
-            self.expect_kw("CYCLE")
-            self.ident("cycle name")
-        elif k == "PARAMETER":
+            self.expect_kw("CYCLES")
+            self.balanced_parens()
+        elif k == "PARAMETER":  # sprint 6 fork B
             self.ident("parameter name")
-            if self.at_kw("GRAIN"):
-                self.take()
-                self.ident("grain")
             if self.at_kw("DEFAULT"):
                 self.take()
                 self.value()
+            if self.at_kw("OPTIONS"):
+                self.take()
+                self.balanced_parens()
+            if self.at_kw("DERIVED"):
+                self.take()
+                self.expect_kw("BY")
+                self.ident("derivation mechanism")
         elif k == "AS":
             if self.peek() and self.peek().kind == "str":
                 self.take()  # transported recipe body
