@@ -353,7 +353,7 @@ class P:
         elif self.at_kw("RECONCILES"):
             self.take()
             self.expect_kw("WITH")
-            self.expr_span(stop_extra={"TOLERANCE"})
+            self.ident("reconciling concept")  # bare concept rhs — sprint 9
             if self.at_kw("TOLERANCE"):
                 self.take()
                 self.number()

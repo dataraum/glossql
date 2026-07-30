@@ -9,19 +9,14 @@ Scope of this document: the language only. One document; no satellite docs.
 
 Status by section — the iteration loop works the flagged items (§9.1):
 
-- **Ready** (reads unambiguously for practitioners and agents): §1 · §3.0 ·
-  §3.6 · §4 · §5 · §7 · §10.
+- **Ready** (reads unambiguously for practitioners and agents): §1 · §2 · §3.1 ·
+  §3.3 · §3.6 · §4 · §5 · §7 · §8 · §10.
 - **Under iteration** (statement forms hold; clause details do not):
-  - §3.1 — the `RECONCILES WITH` right-hand side is open (§8.2).
   - §3.0 — the semantic admission checklist is unwritten; the log envelope is
     deliberately last (§1.1).
-  - §3.2 — typing/null/expectation teaches (§8.3) have no statement form yet;
-    the `DECLARE VIEW` admission contract (join matching) and the recipe
-    clause (`CONNECTION`/`VIA` shape, dialect boundary) are sketches; the
-    rest transcribes cleanly.
-  - §3.3 — the core aspect library and its label sets are open (§8.1); the
-    aspect model itself (declared spaces, function-shaped application) is
-    settled.
+  - §3.2 — the `DECLARE VIEW` admission contract (join matching) and the
+    recipe clause (`CONNECTION`/`VIA` shape, dialect boundary) are sketches;
+    the rest transcribes cleanly.
   - §3.4 — `WEIGHT` semantics, the contract policy, the interpretation policy
     key, and the serving clause list are sketches.
   - §3.5 — relation schemas for `CONTEXT()` / `READINESS` / `WHY()` /
@@ -227,18 +222,33 @@ double-quoted, as in SQL; transported SQL strings are unaffected.
 ### 3.0 Shared skeleton
 
 ```
-statement   := writing | reading
-writing     := declaration | witness | observation | lifecycle
-reading     := [ AT timestamp ] ( gloss | sql_query )       -- §3.5
-gloss       := GLOSS ( subject | '(' query ')' ) [ USING SERVING name ] [ AS PACK ]
-declaration := DECLARE class name clauses provenance ';'
-             | DECLARE aspect '(' subject { ',' arg ':=' value } ')' provenance ';'
-witness     := WITNESS aspect '(' subject { ',' arg ':=' value } ')' provenance ';'
-provenance  := BY actor [ CONFIDENCE number ] [ EVIDENCE ref ]
-actor       := USER name | AGENT name | DETECTOR name [ WITNESS name ]
-             | SEED name | CALIBRATION name
-subject     := workspace | table | table '.' column | pair | declared_name
-pair        := table '.' column REFERENCES table '.' column
+statement    := writing | reading
+writing      := declaration | witness | observation | lifecycle
+reading      := [ AT timestamp ] ( gloss | sql_query )      -- §3.5
+gloss        := GLOSS ( subject | '(' query ')' ) [ USING SERVING name ] [ AS PACK ]
+
+declaration  := named | keyed | application
+named        := DECLARE named_class name { clause } provenance ';'
+named_class  := SOURCE | TABLE | VIEW | CONCEPT | CONVENTION | METRIC
+              | VALIDATION | CYCLE FAMILY | ASPECT | HIERARCHY | SERVING
+keyed        := DECLARE RELATIONSHIP ( pair [ CARDINALITY name ] [ REJECTED ]
+                                     | name PART OF name
+                                     | name RECONCILES WITH name [ TOLERANCE number ]
+                                     | DISJOINT '(' name { ',' name } ')' ) provenance ';'
+              | DECLARE GROUNDING name IN name AS expr [ WHERE expr ] provenance ';'
+              | DECLARE RELIABILITY actor FOR name number provenance ';'
+              | DECLARE POLICY policy_kind [ name ] [ FOR name ] { clause } provenance ';'
+policy_kind  := readiness | contract | interpretation
+application  := DECLARE aspect '(' subject { ',' arg ':=' value } ')' provenance ';'
+witness      := WITNESS aspect '(' subject { ',' arg ':=' value } ')' provenance ';'
+observation  := OBSERVE id { ',' id } [ ON ( subject | column_tuple ) ] [ name ] provenance ';'
+lifecycle    := RETRACT aspect '(' subject { ',' arg ':=' value } ')' provenance ';'
+
+provenance   := BY actor [ CONFIDENCE number ] [ EVIDENCE ref ]
+actor        := USER name | AGENT name | DETECTOR name [ WITNESS name ]
+              | SEED name | CALIBRATION name
+subject      := workspace | table | table '.' column | pair | declared_name
+pair         := table '.' column REFERENCES table '.' column
              | table '(' column {',' column} ')' REFERENCES table '(' column {',' column} ')'
 ```
 
@@ -324,14 +334,19 @@ DECLARE CONCEPT revenue
 -- dimension concepts may declare ORDERING (ordered | nominal)
 
 DECLARE RELATIONSHIP net_revenue PART OF revenue BY SEED finance;
-DECLARE RELATIONSHIP receivables RECONCILES WITH (revenue - collections)
-  TOLERANCE 0.01 BY AGENT inductor;           -- right-hand-side shape: §8.2
+DECLARE RELATIONSHIP receivables RECONCILES WITH net_movement
+  TOLERANCE 0.01 BY AGENT inductor;
+-- the right-hand side is a concept: a derived quantity earns a declared
+-- concept first (grounded or metric-defined), then reconciles pairwise
 DECLARE RELATIONSHIP DISJOINT (product_revenue, service_revenue, other_revenue)
   BY SEED finance;
 
 DECLARE CONVENTION accrual_basis
   STATEMENT 'amounts are recognized when earned, not when paid'
   BY USER analyst;
+-- a convention's machine-checked half is not a clause: member groups are
+-- concepts (KIND group, PART OF members) referenced from the prose by name;
+-- routing to consumers is serving policy
 
 DECLARE METRIC dso
   AS avg(receivables) / sum(revenue) * days_in_period  -- identifiers denote concepts here
@@ -357,8 +372,8 @@ DECLARE CYCLE FAMILY settlement
   BY SEED finance;
 -- directions bind concepts, never bare labels
 DECLARE calendar(workspace, fiscal_year_starts := april) BY USER analyst;
--- workspace is a subject: the home of workspace-scoped facts (calendar now;
--- §8.3's null-token vocabulary when it lands)
+-- workspace is a subject: the home of workspace-scoped facts (the calendar,
+-- null-token and type-pattern vocabulary — §3.2)
 ```
 
 A context's **glossary** is implicit: it is the set of concept-space declarations
@@ -377,8 +392,10 @@ supersession slot, provenance, and retraction — never a clause on an
 endpoint's declaration (tolerance is edge payload; disjointness is n-ary over
 a group, not a property of one concept). The operator set is closed and
 mechanism-backed — §1.2(6) applied to edges: `PART OF` feeds the serving
-spine's closure traversal (§3.5), `RECONCILES WITH` carries the tolerance
-balance checks derive from, `DISJOINT` feeds admission-time contradiction
+spine's closure traversal (§3.5), `RECONCILES WITH` carries the tolerance the
+pairwise `reconciliation` measurement (§2.2) applies — `KIND balance`
+validations stay the authored n-ary checks, distinct mechanisms as they are
+today — and `DISJOINT` feeds admission-time contradiction
 checks. Domain edges (feeds-into, stage order) stay pack vocabulary: no
 operator without a named mechanism. Admission rejects cross-space edges — a
 `PART OF` between a concept and a column is an error — so
@@ -405,6 +422,9 @@ means) and `GUIDANCE` (what a gap usually means) — consumed separately by the
 SQL binder; the executed SQL is derived at run time and auditable
 via `WHY()`. `OVER` is the membership contract: every name it lists must
 resolve in the glossary, so a fabricated reference fails at declaration time.
+Group-shaped operands are concepts too: a family (`credit_normal`,
+`debit_normal`) is a declared concept (`KIND group`) with `PART OF` members,
+and `OVER` lists the family concepts.
 `ON CYCLES` lists cycle concepts — absent means universal; `CONVENTIONS` lists
 declared conventions the derived SQL must honor, membership-checked like
 `OVER`.
@@ -441,6 +461,14 @@ DECLARE null_token(orders.amount, token := 'n/a', value := is_null) BY USER anal
 -- one aspect application per statement: exactly one claim slot
 -- (subject, aspect, argument), the supersession unit. An aspect's payload is
 -- typed by its declaration: a closed label set (VALUES), prose, or structure.
+
+DECLARE null_token(workspace, token := 'TBD', value := is_null) BY USER analyst;
+DECLARE type_pattern(workspace, name := 'eu_date',
+  pattern := '^\d{2}\.\d{2}\.\d{4}$', type := 'DATE') BY USER analyst;
+DECLARE derived(orders.total, formula := 'subtotal + tax') BY USER analyst;
+-- workspace scope is vocabulary, column scope is a specific binding — the
+-- same aspect may bind at both. type_pattern, derived, and their kin are
+-- core-pack aspect declarations (§3.3); a teach is these statements BY USER
 
 DECLARE RELATIONSHIP orders.customer_id REFERENCES customers.id
   CARDINALITY many_to_one
@@ -590,8 +618,12 @@ open; influence is earned through `DECLARE RELIABILITY` (§3.4).
 Aspects arrive the way all vocabulary does — as declarations, normally replayed
 from a vocabulary pack (§3.1). An aspect's declaration is its single home: one
 label set per aspect, ending today's per-layer spellings of the same claim
-space. Whether a small core of aspects is universal enough to standardize —
-bound to data processing itself rather than to any domain — is held open (§8.1).
+space. A core of data-processing aspects ships as the **core seed pack**
+(`BY SEED core`) — product-standard, never grammar: the spec names only the
+two the §9.2 slice needs (`null_token`, `behavior`); the roster (type
+patterns, stored sign, derived formulas, …) is pack content, versioned with
+the product the way a standard library is. Domain aspects stay vertical-pack
+vocabulary.
 
 An aspect may take arguments where claims are per-instance rather than
 per-subject (today: per null token, per candidate formula). Arguments and
@@ -832,31 +864,10 @@ One line each; none designed in v0:
 
 ## 8. Open questions for review
 
-Items carry direction from review, not final decisions; "shaped later" is a
-legal resolution.
-
-1. **Universal-core aspects** — direction: the built-in-function model. Like
-   `md5()`, a core library of data-processing aspects (null semantics, type
-   parsing) is standardized and *named* by the spec, shipped as a seed pack —
-   product-standard, never grammar. Aspects are extensible the way engine UDFs
-   are (an extension point, not a first concern). Domain aspects (behavior,
-   cycle stages) stay pack vocabulary regardless. Remaining: the core list and
-   its label sets.
-2. **Concept relations** — decided and folded into §3.1: authored edges are
-   statements under the `DECLARE RELATIONSHIP` head (`PART OF`,
-   `RECONCILES WITH … TOLERANCE`, `DISJOINT`), one closed, mechanism-backed
-   operator set across both spaces. Remaining open: the `RECONCILES WITH`
-   right-hand side (bare concept vs concept-space expression), and whether a
-   `RECONCILES WITH` edge subsumes `KIND balance` validations or only feeds
-   them. The statement axis on metric extracts is decided: `PART OF` structure
-   (§3.2), not a grounding key member.
-3. **Typing vocabulary and DECLARE proliferation** — type-pattern teaches,
-   workspace-level null-token vocabulary, and expected-dependency assertions
-   still have no statement form. Direction: resist new `DECLARE` families;
-   prefer SQL-bodied forms under few heads. `DECLARE VIEW … AS` (§3.2) now
-   hosts the transform-shaped half (enrichment, cleaning, typing transforms);
-   type patterns are expressions and likely ride an existing head. Start
-   small and see how it works out.
+None standing. Questions opened during review were closed by transcription
+verdicts against the running system; the trail is the corpus and its reports.
+New questions enter as corpus gap blocks — concrete statement forms tested
+against real artifacts — never as prose items here.
 
 ## 9. Validation and first implementation slice
 

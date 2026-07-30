@@ -1,8 +1,8 @@
 (* glossql grammar — machine-readable source of truth for syntax.
-   Status: derived from SPEC.md §3 examples on 2026-07-30. Productions marked
-   [REPAIR] do not exist in SPEC.md §3.0's skeleton and were reconstructed from
-   the spec's own examples; each is a pending SPEC.md diff. Clause details are
-   sketch-level where the spec says so; statement forms are normative.
+   Status: aligned with SPEC.md §3.0 as of sprint 9 (2026-07-30) — the
+   productions reconstructed during review are now folded into the
+   spec's skeleton. Clause details are sketch-level where the spec says so;
+   statement forms are normative.
    Token level (identifiers, strings with '' escaping, numbers, -- comments,
    keyword case-insensitivity) is inherited from the substrate SQL dialect.
 
@@ -33,34 +33,38 @@ declaration  = named_decl | keyed_decl | aspect_appl ;
 (* --- named classes: DECLARE <CLASS> <name> clauses provenance --- *)
 named_decl   = "DECLARE", named_class, name, { clause }, provenance, ";" ;
 named_class  = "SOURCE" | "TABLE" | "VIEW" | "CONCEPT" | "CONVENTION"
-             | "METRIC" | "VALIDATION" | "CYCLE", "FAMILY"            (* [REPAIR] multi-token class *)
+             | "METRIC" | "VALIDATION" | "CYCLE", "FAMILY"
              | "ASPECT" | "HIERARCHY" | "SERVING" ;
 
-(* --- keyed classes: identity is the key, not a name. All [REPAIR]. --- *)
+(* --- keyed classes: identity is the key, not a name --- *)
 keyed_decl   = relationship_decl | grounding_decl | reliability_decl | policy_decl ;
 
-relationship_decl                                                     (* [REPAIR] *)
+relationship_decl
              = "DECLARE", "RELATIONSHIP",
                ( pair, [ "CARDINALITY", ident ], [ "REJECTED" ]       (* data space *)
                | name, "PART", "OF", name                             (* concept space *)
-               | name, "RECONCILES", "WITH", expr, [ "TOLERANCE", number ]
+               | name, "RECONCILES", "WITH", name, [ "TOLERANCE", number ]
                | "DISJOINT", "(", name, { ",", name }, ")"
                ), provenance, ";" ;
+               (* RECONCILES rhs is a bare concept (sprint 9): derived
+                  quantities earn a declared concept first, then reconcile
+                  pairwise. Feeds the `reconciliation` measurement; KIND
+                  balance validations stay distinct. *)
 
-grounding_decl                                                        (* [REPAIR] *)
+grounding_decl   
              = "DECLARE", "GROUNDING", name, "IN", name,
                "AS", expr, [ "WHERE", expr ], provenance, ";" ;
                (* key: (concept) — one active grounding per concept; the
                   expression is row-level (metrics own aggregation).
                   Sprint 2 fork A, 2026-07-30. *)
 
-reliability_decl                                                      (* [REPAIR] *)
+reliability_decl 
              = "DECLARE", "RELIABILITY", actor, "FOR", name, number,
                provenance, ";" ;
                (* key: (detector, witness, aspect) — sprint 1 fork B, 2026-07-30.
                   Bare DETECTOR x is shorthand for WITNESS x (single-witness). *)
 
-policy_decl                                                           (* [REPAIR] *)
+policy_decl      
              = "DECLARE", "POLICY", policy_kind, [ name ], [ "FOR", name ],
                { clause }, provenance, ";" ;
 policy_kind  = "readiness" | "contract" | "interpretation" ;
@@ -75,7 +79,7 @@ witness      = "WITNESS", ident, "(", subject, { ",", arg_pair }, ")",
 arg_pair     = ident, ":=", value ;                                   (* issue U2 *)
 
 (* --- observation --- *)
-observation  = "OBSERVE", ident, { ",", ident },                      (* [REPAIR] — no production in §3.0 *)
+observation  = "OBSERVE", ident, { ",", ident },                      
                [ "ON", ( subject | subject_tuple ) ], [ name ],
                provenance, ";" ;
                (* provenance required — sprint 5 fork A, 2026-07-30:
@@ -87,7 +91,7 @@ observation  = "OBSERVE", ident, { ",", ident },                      (* [REPAIR
 subject_tuple= "(", qualified, { ",", qualified }, ")" ;
 
 (* --- lifecycle --- *)
-lifecycle    = "RETRACT", ident, "(", subject, { ",", arg_pair }, ")",(* [REPAIR] — no production in §3.0 *)
+lifecycle    = "RETRACT", ident, "(", subject, { ",", arg_pair }, ")",
                provenance, ";" ;
 
 (* --- shared --- *)

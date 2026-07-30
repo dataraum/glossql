@@ -1,4 +1,4 @@
-# 04 · Validation `trial_balance` — envelope RESOLVED (sprint 7, fork A); OVER honesty open
+# 04 · Validation `trial_balance` — envelope RESOLVED (sprint 7); OVER RESOLVED (sprint 9)
 
 Source: `validations` table (engine schema.sql) — fields: validation_id, name,
 description, category, severity, check_type ∈ (aggregate|balance|comparison|
@@ -28,7 +28,7 @@ expected_outcome: >
 DECLARE VALIDATION trial_balance
   KIND balance
   ON CYCLES (journal_entry_cycle, accounts_receivable, accounts_payable)
-  OVER (current_assets, operating_expense, current_liabilities, equity, revenue)
+  OVER (debit_normal, credit_normal)
   CONVENTIONS (sign_natural_balance)
   TOLERANCE 0.01
   SEVERITY critical
@@ -44,10 +44,10 @@ DECLARE VALIDATION trial_balance
   checked like `OVER` (the load-bearing pull direction — `validation_phase.py`
   errors on unresolved ids); `OUTCOME` is the second prose slot, kept separate
   from `GUIDANCE` as the binder consumes them.
-- **OPEN — OVER cannot be filled honestly.** The real operands are account-type
-  *families* resolved at bind time (asset+expense vs liability+equity+revenue);
-  the OVER list above fabricates concept-shaped operands that are not what the
-  check reads. No optional-OVER form exists. Sprint candidate.
+- **RESOLVED (sprint 9) — OVER's family operands.** Account-type families are
+  declared group concepts (`KIND group`, `PART OF` members — fixture 02);
+  `OVER (debit_normal, credit_normal)` lists exactly what the check reads, and
+  the membership contract stands.
 - **INFORMATION LOST (accepted):** category, tags — browsing metadata; revisit
   as generic aspects if it ever earns a mechanism.
 - `check_type: expected_formula` + `{table, column, formula}`: §8.3-admitted gap
