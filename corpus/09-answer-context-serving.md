@@ -1,4 +1,4 @@
-# 09 · Answer-agent served context vs GLOSS + DECLARE SERVING — SEMANTICS UNDEFINED
+# 09 · Answer-agent served context vs GLOSS + DECLARE SERVING — RESOLVED (sprints 8, 10)
 
 Source: `dataraum-context/packages/cockpit/src/tools/query-context.ts` (+
 `query.ts:813-848`). Nine blocks served, byte-identical per session as a cached
@@ -19,14 +19,14 @@ GLOSS (SELECT sum(amount) FROM orders GROUP BY channel)
   USING SERVING answer_agent;
 ```
 
-## Gap — disclosure as serving semantics (no clause family exists)
+## Resolution (sprint 10): disclosure is a mechanism guarantee, not a clause
 
-```glossql-gap
-DECLARE SERVING answer_agent
-  PREFER enriched
-  DISCLOSE OMITTED (dimensions, relationships)
-  BY USER analyst;
-```
+There is deliberately no `DISCLOSE` clause: §3.5 makes curation disclosure and
+confidence-state marking guarantees of the `GLOSS` mechanism itself — every
+cut is stated with count and reason, because silence converts to false
+abstention (DAT-622/671). Per-convention routing is the `audience` aspect
+(§3.4). The instructional prose is renderer configuration, excluded by §7 and
+consistent with §10's claim as scoped in sprint 8.
 
 ## Findings
 

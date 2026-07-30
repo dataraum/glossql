@@ -51,9 +51,10 @@ relationship_decl
                   pairwise. Feeds the `reconciliation` measurement; KIND
                   balance validations stay distinct. *)
 
-grounding_decl   
+grounding_decl
              = "DECLARE", "GROUNDING", name, "IN", name,
-               "AS", expr, [ "WHERE", expr ], provenance, ";" ;
+               ( "AS", expr, [ "WHERE", expr ] | "REJECTED" ),
+               provenance, ";" ;
                (* key: (concept) — one active grounding per concept; the
                   expression is row-level (metrics own aggregation).
                   Sprint 2 fork A, 2026-07-30. *)
@@ -115,7 +116,7 @@ clause       = clause_kw, clause_payload ;
 clause_kw    = "KIND" | "DESCRIPTION" | "INDICATORS" | "EXCLUDE"
              | "UNIT" | "UNIT FROM" | "ORDERING" | "STATEMENT" | "AS"
              | "PARAMETER" | "ON CYCLES" | "OVER" | "CONVENTIONS"
-             | "TOLERANCE" | "SEVERITY"
+             | "TOLERANCE" | "SEVERITY" | "THRESHOLDS" | "WARNING MARGIN"
              | "GUIDANCE" | "OUTCOME" | "DIRECTIONS" | "VALUES" | "TERMINAL"
              | "ARGUMENTS" | "FROM" | "CONNECTION"
              | "VIA" | "IN" | "LEVELS" | "WHERE" | "BANDS" | "WEIGHT"
@@ -144,8 +145,10 @@ name         = ident ;
 (* ------------------------------------------------------------------ reading *)
 
 reading      = [ "AT", string ], ( gloss | sql_query ) ;
-gloss        = "GLOSS", ( subject | "(", sql_query, ")" ),
+gloss        = "GLOSS", ( subject | actor | "(", sql_query, ")" ),
                [ "USING", "SERVING", name ], [ "AS", "PACK" ], ";" ;
+               (* actor form is the pack export: GLOSS SEED finance AS PACK —
+                  the pack boundary is the provenance boundary (sprint 10) *)
 sql_query    = ? substrate SQL statement, passed through; context relations
                  (CONTEXT, DECLARATIONS, READINESS, MEASUREMENTS, METRIC, WHY,
                  GROUNDINGS, PROFILE, OBSERVATIONS) are table functions in it ? ;

@@ -44,7 +44,7 @@ CLAUSE_HEADS = {
     "KIND", "DESCRIPTION", "INDICATORS", "EXCLUDE", "UNIT", "ORDERING",
     "STATEMENT", "AS", "PARAMETER", "ON", "OVER", "TOLERANCE", "SEVERITY",
     "GUIDANCE", "OUTCOME", "CONVENTIONS", "DIRECTIONS", "VALUES",
-    "TERMINAL", "ARGUMENTS", "OPTIONS", "DERIVED",
+    "TERMINAL", "ARGUMENTS", "OPTIONS", "DERIVED", "THRESHOLDS", "WARNING",
     "FROM", "CONNECTION", "VIA", "IN",
     "LEVELS", "WHERE", "BANDS", "WEIGHT", "OVERALL", "BLOCK", "PREFER",
     "DIMENSION", "RESTRICT", "INCLUDE", "CARDINALITY", "REJECTED",
@@ -235,7 +235,7 @@ class P:
             self.ident(f"{k} payload")
         elif k in ("INDICATORS", "EXCLUDE", "OVER", "DIRECTIONS", "VALUES",
                    "INCLUDE", "LEVELS", "BANDS", "TERMINAL", "ARGUMENTS",
-                   "CONVENTIONS"):
+                   "CONVENTIONS", "THRESHOLDS"):
             self.balanced_parens()
         elif k == "ORDERING":
             if self.peek() and self.peek().kind == "punct" and self.peek().text == "(":
@@ -282,6 +282,9 @@ class P:
             self.expr_span()
         elif k == "DIMENSION":
             self.expect_kw("BUDGET")
+            self.number()
+        elif k == "WARNING":
+            self.expect_kw("MARGIN")
             self.number()
         elif k == "RESTRICT":
             for w in ("JOINS", "TO", "DECLARED", "RELATIONSHIPS"):
@@ -376,6 +379,10 @@ class P:
         self.ident("concept")
         self.expect_kw("IN")
         self.ident("relation")
+        if self.at_kw("REJECTED"):  # sprint 10: negative grounding
+            self.take()
+            self.provenance()
+            return
         self.expect_kw("AS")
         self.expr_span()
         if self.at_kw("WHERE"):
@@ -504,6 +511,9 @@ class P:
         t = self.peek()
         if t and t.kind == "punct" and t.text == "(":
             self.balanced_parens()
+        elif t and t.kind == "ident" and t.up() in ACTOR_CLASSES:
+            self.take()  # actor form: pack export (GLOSS SEED finance AS PACK)
+            self.ident("actor name")
         else:
             self.qualified()
         if self.at_kw("USING"):

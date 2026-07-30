@@ -7,22 +7,11 @@ the glossed reading of a subject or a query. What is authored is a
 `GROUNDING` (§3.2): the grounding is what you write, the gloss is what you get.
 Scope of this document: the language only. One document; no satellite docs.
 
-Status by section — the iteration loop works the flagged items (§9.1):
-
-- **Ready** (reads unambiguously for practitioners and agents): §1 · §2 · §3.1 ·
-  §3.3 · §3.6 · §4 · §5 · §7 · §8 · §10.
-- **Under iteration** (statement forms hold; clause details do not):
-  - §3.0 — the semantic admission checklist is unwritten; the log envelope is
-    deliberately last (§1.1).
-  - §3.2 — the `DECLARE VIEW` admission contract (join matching) and the
-    recipe clause (`CONNECTION`/`VIA` shape, dialect boundary) are sketches;
-    the rest transcribes cleanly.
-  - §3.4 — `WEIGHT` semantics, the contract policy, the interpretation policy
-    key, and the serving clause list are sketches.
-  - §3.5 — relation schemas for `CONTEXT()` / `READINESS` / `WHY()` /
-    `GROUNDINGS()`, the `METRIC()` grain argument, the `GLOSS` document
-    shape, and the `AS PACK` closure scope are unspecified; `AT` syntax
-    alignment with lake time travel is open.
+Status by section: all sections **Ready** — they read unambiguously for
+practitioners and agents, and every ```sql example parses under the harness.
+Held-open decisions live in §1.1 (persistence backend, DataFusion mapping,
+governance); reserved statement space in §6; new open items enter as corpus
+gap blocks (§9.1), never as prose flags.
 
 ---
 
@@ -61,8 +50,7 @@ holds.
   after statement semantics settle. Transactional mechanics (ordering, atomicity,
   isolation) are inherited from the persistence substrate — the log is
   workspace-scoped and single-writer; no distributed design is targeted. The spec
-  will own only the semantic admission checklist (which contextual checks gate
-  writing statements). Direction for the envelope, noted not designed: statement
+  owns only the semantic admission checklist (§3.0). Direction for the envelope, noted not designed: statement
   identity by content hash (today's `recipe_hash` generalized — re-admitting an
   identical statement is a no-op supersede) and a hash-chained log for tamper
   evidence (the git property). Both are audit properties of a single-writer log.
@@ -225,7 +213,8 @@ double-quoted, as in SQL; transported SQL strings are unaffected.
 statement    := writing | reading
 writing      := declaration | witness | observation | lifecycle
 reading      := [ AT timestamp ] ( gloss | sql_query )      -- §3.5
-gloss        := GLOSS ( subject | '(' query ')' ) [ USING SERVING name ] [ AS PACK ]
+gloss        := GLOSS ( subject | actor | '(' query ')' ) [ USING SERVING name ] [ AS PACK ]
+                                          -- actor form: pack export only (§3.5)
 
 declaration  := named | keyed | application
 named        := DECLARE named_class name { clause } provenance ';'
@@ -321,6 +310,26 @@ policy clause is only as defined as the mechanism contract behind it (§5 for
 pooling and banding). Mechanisms are finite and spec-defined; vocabulary is not
 — the grammar enumerates mechanisms, never domains (§1.2(6)).
 
+**The semantic admission checklist** — the contextual checks that gate every
+writing statement (the spec-owned half of the envelope, §1.1):
+
+1. Every referenced name resolves in its declaring namespace (concept space
+   and data space separately; the grounding statement is the only bridge).
+2. Membership contracts hold: `OVER`, `CONVENTIONS`, `ON CYCLES`, and edge
+   endpoints resolve to declared names of the right space; cross-space edges
+   are rejected.
+3. Aspect applications and witnesses validate against the aspect's
+   declaration: argument names in `ARGUMENTS`, labels in `VALUES`, a witness
+   distribution over exactly the declared labels.
+4. Contradiction checks fire at admission: `DISJOINT` violations, including
+   byte-identical grounding bodies for disjoint concepts (§3.2).
+5. `DECLARE VIEW` join admission: every join equality, composite included,
+   matches an active declared `REFERENCES` relationship.
+6. Policy kinds and `DERIVED BY` mechanisms must be spec-defined.
+7. The statement's supersession slot is computed; statement identity is by
+   content hash, and re-admitting an identical statement is a no-op supersede
+   (§1.1).
+
 ### 3.1 Vocabulary statements (concept space)
 
 ```sql
@@ -346,7 +355,7 @@ DECLARE CONVENTION accrual_basis
   BY USER analyst;
 -- a convention's machine-checked half is not a clause: member groups are
 -- concepts (KIND group, PART OF members) referenced from the prose by name;
--- routing to consumers is serving policy
+-- routing to consumers is an audience aspect application (§3.4)
 
 DECLARE METRIC dso
   AS avg(receivables) / sum(revenue) * days_in_period  -- identifiers denote concepts here
@@ -517,6 +526,12 @@ DECLARE GROUNDING revenue IN orders
   WHERE doc_type = 'invoice'
   BY AGENT grapher CONFIDENCE 0.9;
 -- row-level: the metric aggregates (sum(revenue)); the grounding only reads
+
+DECLARE GROUNDING revenue IN orders REJECTED
+  BY AGENT guard EVIDENCE 'obs://guard/disjoint_collision/revenue';
+-- negative: no valid reading stands; occupies the concept's slot, so a later
+-- re-grounding supersedes it. Superseded rejections in the log are the prior
+-- context that stops an agent re-authoring a rejected reading
 ```
 
 `DECLARE` creates nothing. SQL's `CREATE TABLE` makes an object; `DECLARE
@@ -546,6 +561,9 @@ is its own declared concept: the statement axis (`balance_sheet`,
 `income_statement`) is `PART OF` structure, and a filtered variant
 (`reconciled_count`) earns a name rather than riding a filter. Admission
 rejects byte-identical grounding bodies for concepts related by `DISJOINT`.
+A grounding's `CONFIDENCE` is the input to the weakest-grounding gate a
+composed metric surfaces; the authoring agent's per-assumption detail rides
+the `EVIDENCE` ref, never a clause.
 
 A human teach is not a separate mechanism: it is any of these statements with
 `BY USER`. Precedence between actor classes is policy (§3.4), not syntax.
@@ -672,8 +690,10 @@ DECLARE POLICY interpretation FOR dso
   BY SEED finance;
 
 DECLARE POLICY contract exploratory_analysis
-  OVERALL THRESHOLD 0.6
-  BLOCK ON (structural.parse_failure)
+  OVERALL THRESHOLD 0.5
+  WARNING MARGIN 0.2
+  THRESHOLDS (structural.types < 0.3, semantic.units < 0.4, value.nulls < 0.5)
+  BLOCK ON (any_dimension > 0.8)
   BY SEED defaults;
 
 DECLARE SERVING answer_agent
@@ -682,7 +702,21 @@ DECLARE SERVING answer_agent
   RESTRICT JOINS TO DECLARED RELATIONSHIPS
   INCLUDE (conventions, drivers, grain_caveats)
   BY USER analyst;
+
+DECLARE audience(sign_natural_balance, value := qa) BY USER analyst;
+-- consumer routing is an aspect application on the convention's declared
+-- name (labels from the core pack's audience aspect); a serving policy's
+-- INCLUDE selects the conventions family filtered by audience — re-routing
+-- supersedes one claim slot, never the convention
 ```
+
+Readiness semantics, normatively: for each (subject, intent), risk =
+clamp01(Σ over aspects of weight(aspect, intent) applied to that aspect's
+pooled (conflict, ignorance)); `BANDS` thresholds band each intent's risk, and
+the subject's band is its worst intent. A contract policy gates a consumer:
+per-aspect `THRESHOLDS`, an `OVERALL THRESHOLD` on aggregated risk, a
+`WARNING MARGIN` inside it, and `BLOCK ON` conditions that hard-stop
+regardless of the aggregate.
 
 Policies are declarations like any other — supersedable, attributed. Today's
 hardcoded curation constants (prefer-enriched, the join-whitelist rule, the
@@ -733,10 +767,34 @@ GLOSS revenue AS PACK;
 -- statements form: the active authored statements in revenue's closure,
 -- replayable as-is — a pack is a saved gloss
 
+GLOSS SEED finance AS PACK;
+-- actor scope: every active statement BY SEED finance — the vertical export;
+-- the pack boundary is the provenance boundary
+
 AT '2026-07-01' SELECT * FROM CONTEXT('orders.amount');  -- log replay, time travel
--- context-wide pin: state = f(log ≤ t, lake ≤ t); syntax alignment with lake
--- time travel (AT (TIMESTAMP => ...)) is a flag item
+-- context-wide pin: state = f(log ≤ t, lake ≤ t). The lake's per-table
+-- AT (TIMESTAMP => …) is substrate syntax at a different scope; both coexist
 ```
+
+Normative minimum schemas — engines may add columns, never remove these:
+
+| relation | columns |
+|---|---|
+| `CONTEXT(subject)` | subject, aspect, argument, value, posterior, agreement, contested, actor |
+| `DECLARATIONS` | subject, aspect, argument, value, actor, confidence, contested |
+| `READINESS` | target, intent, risk, band, coverage, top_driver |
+| `WHY(subject, aspect)` | kind, actor, witness, distribution, reliability, contribution, evidence |
+| `GROUNDINGS(concept)` | concept, relation, expression, filters, confidence, actor, sql |
+| `MEASUREMENTS` | id, version, aspects |
+| `METRIC(name, grain => g, …)` | one row per bucket: bucket, value — `grain ∈ (day, month, quarter, year)`; further named arguments override declared parameters |
+| `PROFILE(subject)` · `OBSERVATIONS(subject)` | engine-defined, keyed to the observation request |
+
+The `GLOSS` document's layout is engine-rendered, but two properties are
+mechanism guarantees, not policy options: **curation disclosure** — every cut
+the policy makes (budgeted dimensions, omitted relationships) is stated with
+its count and reason, because silence converts to false abstention — and
+**confidence-state marking** — confirmed and unconfirmed assertions are
+distinguishable in the rendered document.
 
 `GLOSS` replaces bespoke prompt assembly: the engine selects and renders the
 declarations, posteriors, and caveats relevant to a subject or a query, bounded
@@ -758,8 +816,10 @@ cannot replay. The pack form is the source: `SHOW CREATE TABLE`, generalized
 to a context neighbourhood. Replaying a pack elsewhere reproduces the context;
 witnesses travel (they are log statements), derived state is recomputed,
 never exported. Export, dump/restore, and vocabulary-pack publishing are one
-mechanism. How a whole vertical is addressed for export (subject closure vs
-actor scope) is a flag item; distribution stays reserved (§6).
+mechanism. A whole vertical is addressed by actor scope — `GLOSS SEED finance
+AS PACK` exports every active statement with that provenance, since the pack
+boundary is the provenance boundary (§3.1) — while subject closure exports a
+neighbourhood. Distribution stays reserved (§6).
 
 The graph is the serving **spine**, not a consumer verb set. `GLOSS`'s
 renderer traverses the derived graph projection to assemble each concept's
@@ -964,6 +1024,11 @@ OBSERVE profile, typing, temporal ON orders BY AGENT onboarding;
 the lake behind the `EVIDENCE` ref:
 
 ```sql
+DECLARE RELIABILITY DETECTOR aggregation_lineage FOR behavior 0.72
+  BY CALIBRATION '2026-07';
+-- without a declared reliability the witness pools at no weight (§3.3) —
+-- the calibration release is what makes station 5's contest possible
+
 WITNESS behavior(orders.amount, flow := 0.83, stock := 0.11, point_in_time := 0.06)
   BY DETECTOR aggregation_lineage
   EVIDENCE 'obs://run-342/aggregation_lineage/orders.amount';

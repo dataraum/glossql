@@ -26,4 +26,5 @@ Sources snapshot 2026-07-30. Full analysis: `reports/2026-07-30-adversarial-revi
 | 06 | claim witnesses + reliabilities | RESOLVED (sprint 1, fork B) |
 | 07 | grounding / sql_snippets | key RESOLVED (sprint 2, fork A) |
 | 08 | teach payloads (8 types) | mixed |
-| 09 | answer-agent served context | SEMANTICS UNDEFINED |
+| 09 | answer-agent served context | serving semantics RESOLVED (sprint 10); prose = renderer config |
+| 10 | remaining §2.1 rows (coverage completion) | TRANSCRIBE CLEANLY |
