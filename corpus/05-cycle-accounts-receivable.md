@@ -1,4 +1,4 @@
-# 05 · Cycle `accounts_receivable` + family `settlement` — GRAMMAR GAP (heaviest)
+# 05 · Cycle `accounts_receivable` + family `settlement` — RESOLVED (sprint 3, fork B)
 
 Source: `dataraum-context/packages/dataraum-config/verticals/finance/cycles.yaml`
 
@@ -20,29 +20,24 @@ cycle_families:
     directions: {incoming: accounts_receivable, outgoing: accounts_payable}
 ```
 
-Asserted side: `detected_business_cycles` (schema.sql) — cycle_name, cycle_type,
-canonical_type, is_known_type, family, direction, stages, entity_flows,
-status_table, status_column, completion_value, completion_rate, evidence,
-confidence, business_value.
+Asserted side: `detected_business_cycles` (schema.sql) — stages, status_table,
+status_column, completion_value, completion_rate, family, direction, evidence.
 
-## Transcription — §8.4's decomposition recipe, attempted honestly
+## Transcription — the decomposition, complete (decided 2026-07-30)
 
 ```glossql
-DECLARE CONCEPT invoice_created KIND event BY SEED finance;
+DECLARE CONCEPT invoice_created KIND event
+  DESCRIPTION 'AR stage: invoice created' BY SEED finance;
 DECLARE RELATIONSHIP invoice_created PART OF accounts_receivable BY SEED finance;
-DECLARE ASPECT ar_stage VALUES (created, sent, due, paid) BY SEED core;
-DECLARE ar_stage(invoices.status, value := created) BY AGENT cataloguer CONFIDENCE 0.8;
-DECLARE CYCLE FAMILY settlement DIRECTIONS (incoming, outgoing) BY SEED finance;
-```
 
-## Gaps — four fields the decomposition cannot carry
+DECLARE ASPECT ar_stage VALUES (created < sent < due < paid) TERMINAL (paid)
+  BY SEED finance;
 
-```glossql-gap
-DECLARE ASPECT ar_stage ORDERED VALUES (created, sent, due, paid) BY SEED core;
-DECLARE CONCEPT accounts_receivable COMPLETION (paid, collected, cleared, closed)
-  BY SEED finance;
-DECLARE RELATIONSHIP accounts_receivable FEEDS INTO journal_entry_cycle
-  BY SEED finance;
+DECLARE ar_stage(invoices.status, token := 'delivered', value := sent)
+  BY AGENT cataloguer CONFIDENCE 0.8;
+DECLARE ar_stage(invoices.status, token := 'paid', value := paid)
+  BY AGENT cataloguer CONFIDENCE 0.9;
+
 DECLARE CYCLE FAMILY settlement
   DIRECTIONS (incoming accounts_receivable, outgoing accounts_payable)
   BY SEED finance;
@@ -50,24 +45,16 @@ DECLARE CYCLE FAMILY settlement
 
 ## Findings
 
-- **`DECLARE CYCLE` is promised in §2.1 and absent from §3** — a gap by the
-  spec's own completeness rule.
-- **GRAMMAR GAP — stage ORDER.** `order: 1..4` is load-bearing (progression,
-  stuck-cycle analysis); PART OF edges are unordered, ASPECT VALUES are
-  unordered label sets (only dimension concepts may declare ORDERING).
-- **SEMANTICS UNDEFINED — value→stage binding.** Binding several status values
-  to one stage needs per-(value, stage) argumented applications; nothing says
-  stage aspects take arguments.
-- **GRAMMAR GAP — completion semantics.** "This status value means complete" is
-  a semantics assertion, not a check; §8.4 says "completion-semantics
-  validations," but the completion-rate measurement needs the declaration first.
-  Circular; no construct.
-- **INFORMATION LOST (by explicit design) — `feeds_into`.** §3.1 bans domain
-  edges without a mechanism; today it is typed, seeded data.
-- **GRAMMAR GAP (spec-admitted, §8.4)** — family directions bind *concepts*
-  (`incoming: accounts_receivable`), not the bare labels §3.1 sketches.
-- Aliases → §6 reserved (Synonyms). Detected-instance derived fields correctly
-  excluded per §2.6.
-
-**§9.1 acceptance status for §8.4's decomposition: FAILS** on stage order,
-value→stage binding, and completion semantics.
+- **Stage order — RESOLVED.** `VALUES (a < b < c)` declares ordered label sets
+  (generic: stages, severity ladders, bands); progression checks derive.
+- **Completion — RESOLVED.** `TERMINAL (paid)` marks absorbing labels;
+  completion validations and the completion-rate measurement derive from it —
+  the §8.4 circularity is gone.
+- **Value→stage binding — RESOLVED.** Per-instance argumented applications
+  (`token := 'delivered'`), with argument names declared via `ARGUMENTS` on
+  the aspect (spec §3.3).
+- **Family directions — RESOLVED.** `DIRECTIONS` binds concepts, never bare
+  labels; `DECLARE CYCLE` is struck from the §2.1 map (the row now points at
+  this decomposition).
+- **INFORMATION LOST, by decision:** `feeds_into` and per-stage indicator
+  prose stay pack description; aliases remain §6 reserved (Synonyms).

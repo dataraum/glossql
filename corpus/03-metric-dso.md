@@ -86,5 +86,6 @@ DECLARE METRIC dso
   metric's output: `DECLARE VALIDATION … KIND constraint OVER (…)` takes
   concepts; whether a metric name is admissible in OVER, and what
   range-check-on-output means under the KIND vocabulary, is unspecified.
-- The extract axis `statement: balance_sheet | income_statement` is part of the
-  snippet semantic key today and open under §8.2 — see fixture 07.
+- The extract axis `statement: balance_sheet | income_statement` — DECIDED
+  (sprint 2, fork A): `PART OF` structure, not a grounding key member; the
+  extract's `aggregation:` folds into the metric expression. See fixture 07.

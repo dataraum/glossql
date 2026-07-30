@@ -13,8 +13,7 @@ Status by section — the iteration loop works the flagged items (§9.1):
   §3.6 · §4 · §5 · §7 · §10.
 - **Under iteration** (statement forms hold; clause details do not):
   - §3.1 — the `PARAMETER` clause shape (type, options, grain derivation) is a
-    sketch; cycle vocabulary is open (§8.4); the `RECONCILES WITH` right-hand
-    side is open (§8.2).
+    sketch; the `RECONCILES WITH` right-hand side is open (§8.2).
   - §3.0 — the semantic admission checklist is unwritten; the log envelope is
     deliberately last (§1.1).
   - §3.2 — typing/null/expectation teaches (§8.3) have no statement form yet;
@@ -95,8 +94,9 @@ holds.
    (`orders.amount`), pairs (`orders.customer_id REFERENCES customers.id`), or
    declared names (`metric dso`). Cross-time identity is textual, by construction.
 6. **Mechanism in grammar, vocabulary in declarations.** The grammar never
-   enumerates domain specifics: claim spaces, concept vocabularies, and their
-   groupings are declarations — importable, supersedable — never keywords. The
+   enumerates domain specifics (the SQL-inventor test: SQL has no INVOICE
+   statement; domain lives in tables): claim spaces, concept vocabularies, and
+   their groupings are declarations — importable, supersedable — never keywords. The
    same holds for detectors: the grammar knows the actor class, never a roster.
 7. **Ride SQL.** glossql adds statements only where SQL has no construct: the
    authored context. Querying, data CRUD, and functions stay plain SQL against
@@ -129,7 +129,7 @@ reserved (§6), or deliberately excluded (§7).
 | hierarchies — judged half | drilldown/alias/role kinds, levels | `DECLARE HIERARCHY` |
 | slice definitions — ranked half | priority, business context | `DECLARE dimension(…)` — an aspect |
 | enrichment selection | which neighbours enrich a fact table, exposed columns | `DECLARE VIEW` |
-| business cycles (LLM) | cycle assertion, stages, status column, completion semantics | `DECLARE CYCLE` |
+| business cycles (LLM) | cycle assertion, stages, status column, completion semantics | decomposed: stage concepts + `PART OF`, ordered stage aspect with `TERMINAL`, per-value applications (§3.3) |
 | surrogate key confirmation | composite-key intent confirmed/declined | `DECLARE key(table, …)` — an aspect |
 | groundings (snippet parts + provenance basis) | concept → relation, expression, filters | `DECLARE GROUNDING` |
 | teach payloads (all 8 types, today free JSON) | type patterns, null tokens, units, plus the families above | the same statements, `BY user` — type/null/expectation teaches pending §8.3 |
@@ -215,7 +215,9 @@ Notation: lowercase = nonterminal, `UPPER` = keyword, `[...]` optional, `{...}` 
 illustrative pending review. Token-level grammar (identifier quoting, string
 literals, comments, keyword case) is inherited from the engine substrate's SQL
 dialect — DataFusion's PostgreSQL-style parser. glossql adds statement forms,
-not a lexer.
+not a lexer. One token rule is glossql's own: clause-head keywords are
+reserved inside glossql statement bodies — an identifier that collides is
+double-quoted, as in SQL; transported SQL strings are unaffected.
 
 ### 3.0 Shared skeleton
 
@@ -259,7 +261,7 @@ pair        := table '.' column REFERENCES table '.' column
   `TABLE`, `VIEW`, `CONCEPT`, `CONVENTION`, `METRIC`, `VALIDATION`,
   `CYCLE FAMILY`, `ASPECT`, `HIERARCHY`, `SERVING`); *keyed* classes carry no
   name — their identity is their key (`RELATIONSHIP` by its edge, `GROUNDING`
-  by (concept, relation, parameter), `RELIABILITY` by (detector, witness,
+  by concept — one active grounding per concept, `RELIABILITY` by (detector, witness,
   aspect) — a detector pools one or more named witnesses, each with its own
   declared reliability, and bare `DETECTOR x` is shorthand for `DETECTOR x
   WITNESS x`); *aspect applications* are keyed by their claim slot. Policy keys are
@@ -340,7 +342,10 @@ DECLARE VALIDATION receivables_roll_forward
             closing receivables; a gap usually indicates unposted collections'
   BY AGENT inductor;
 
-DECLARE CYCLE FAMILY conversion DIRECTIONS (forward, reverse) BY SEED finance;
+DECLARE CYCLE FAMILY settlement
+  DIRECTIONS (incoming accounts_receivable, outgoing accounts_payable)
+  BY SEED finance;
+-- directions bind concepts, never bare labels
 DECLARE calendar(workspace, fiscal_year_starts := april) BY USER analyst;
 -- workspace is a subject: the home of workspace-scoped facts (calendar now;
 -- §8.3's null-token vocabulary when it lands)
@@ -458,9 +463,10 @@ DECLARE key(orders, columns := (order_id, line_no), value := confirmed)
 -- composite-key intent is an aspect (VALUES (confirmed, declined)), not a class
 
 DECLARE GROUNDING revenue IN orders
-  AS sum(amount)
+  AS amount
   WHERE doc_type = 'invoice'
   BY AGENT grapher CONFIDENCE 0.9;
+-- row-level: the metric aggregates (sum(revenue)); the grounding only reads
 ```
 
 `DECLARE` creates nothing. SQL's `CREATE TABLE` makes an object; `DECLARE
@@ -482,9 +488,14 @@ the snippet parts + provenance
 contract: concept, relation, expression, filter — as grammar rather than JSON.
 Columns-used, filter members, and rendered SQL are all derived from the
 statement's AST by the engine; the statement is the single typed source. A
-grounding's supersession key is *(concept, relation, parameter)*: a concept
-may hold several groundings — per relation, per parameter — and re-grounding
-the same key supersedes.
+grounding's supersession key is the *concept*: one active grounding per
+concept, and re-grounding supersedes. A grounding is a **row-level reading** —
+relation, expression, filter; aggregation belongs to the metric expression,
+never the grounding body. A differently-filtered or differently-axised reading
+is its own declared concept: the statement axis (`balance_sheet`,
+`income_statement`) is `PART OF` structure, and a filtered variant
+(`reconciled_count`) earns a name rather than riding a filter. Admission
+rejects byte-identical grounding bodies for concepts related by `DISJOINT`.
 
 A human teach is not a separate mechanism: it is any of these statements with
 `BY USER`. Precedence between actor classes is policy (§3.4), not syntax.
@@ -499,13 +510,14 @@ materialized is engine-internal.
 ### 3.3 Observation statements
 
 ```sql
-OBSERVE profile, temporal, quality ON orders;
-OBSERVE overlap ON (orders.customer_id, customers.id);
-OBSERVE validation receivables_roll_forward;
+OBSERVE profile, temporal, quality ON orders BY AGENT onboarding;
+OBSERVE overlap ON (orders.customer_id, customers.id) BY AGENT relationships;
+OBSERVE validation receivables_roll_forward BY AGENT scheduler;
 ```
 
 An `OBSERVE` statement is the authored *request*; execution and storage are engine
-concerns. Results land in the lake, keyed to the request. `OBSERVE` returns no
+concerns. Like every writing statement it carries `BY` — orchestration code
+writes as an `AGENT` actor named for its workflow. Results land in the lake, keyed to the request. `OBSERVE` returns no
 rows, and replay re-runs nothing: requests re-bind to results already in the
 lake, which is what keeps replay deterministic. Two result channels:
 
@@ -525,8 +537,21 @@ vocabulary is fixed by the grammar:
 
 ```sql
 DECLARE ASPECT behavior VALUES (flow, stock, point_in_time) BY SEED core;
-DECLARE ASPECT null_token VALUES (is_null, is_value) BY SEED core;
+DECLARE ASPECT null_token ARGUMENTS (token) VALUES (is_null, is_value) BY SEED core;
+DECLARE ASPECT ar_stage VALUES (created < sent < due < paid) TERMINAL (paid)
+  BY SEED finance;
 ```
+
+`ARGUMENTS` declares the per-instance argument names; `VALUES` may declare a
+total order (`<`) — ordered label sets are generic to data processing (stages,
+severity ladders, bands) and back progression checks and ordered rendering;
+`TERMINAL` marks absorbing labels, and completion semantics — with the
+validations that check them — derive from it. Cycle types need no statement of
+their own: stage concepts in a pack, `PART OF` edges to the cycle concept, an
+ordered stage aspect binding the status column's values per instance
+(`DECLARE ar_stage(invoices.status, token := 'delivered', value := sent) BY
+AGENT cataloguer`), `TERMINAL` for completion. `feeds_into` and stage
+indicator prose stay pack description — a deliberate drop.
 
 **There are no fixed detectors — the witness statement is the detector
 interface.** A detector is anything that produces attributed witnesses and their
@@ -549,7 +574,7 @@ bound to data processing itself rather than to any domain — is held open (§8.
 An aspect may take arguments where claims are per-instance rather than
 per-subject (today: per null token, per candidate formula). Arguments and
 distribution labels share the call's named-argument surface; admission tells
-them apart by the aspect's declaration (declared argument names vs declared
+them apart by the aspect's declaration (names in `ARGUMENTS` vs labels in
 `VALUES`):
 
 ```sql
@@ -798,8 +823,8 @@ legal resolution.
    operator set across both spaces. Remaining open: the `RECONCILES WITH`
    right-hand side (bare concept vs concept-space expression), and whether a
    `RECONCILES WITH` edge subsumes `KIND balance` validations or only feeds
-   them. The statement axis on metric extracts (`balance_sheet`,
-   `income_statement`) is plausibly just part-of.
+   them. The statement axis on metric extracts is decided: `PART OF` structure
+   (§3.2), not a grounding key member.
 3. **Typing vocabulary and DECLARE proliferation** — type-pattern teaches,
    workspace-level null-token vocabulary, and expected-dependency assertions
    still have no statement form. Direction: resist new `DECLARE` families;
@@ -807,20 +832,6 @@ legal resolution.
    hosts the transform-shaped half (enrichment, cleaning, typing transforms);
    type patterns are expressions and likely ride an existing head. Start
    small and see how it works out.
-4. **Cycle vocabulary and the genericity bar** — the SQL-inventor test: SQL has
-   no INVOICE statement; domain lives in tables. A family earns grammar only
-   if it is generic to analytics/data processing. Validations pass that bar;
-   cycle *types* (stages, indicators, feeds-into) may not. Direction:
-   decomposition — a cycle is stage concepts in a pack, `PART OF` edges
-   (§3.1), a stage aspect binding the status column's values, and
-   completion-semantics validations; an inductor agent authors these exactly
-   as it authors validations, so nothing is lost on the inference side —
-   induction was never a language mechanism. `DECLARE CYCLE FAMILY` stays in
-   §3.1 until §9.1 transcription of the running system's cycle artifacts
-   confirms the decomposition covers stages, status column, and completion
-   semantics without workaround. Real cycle-family directions bind *concepts*
-   (`incoming accounts_receivable`), not bare labels as §3.1 sketches. No 1-1
-   mapping of today's YAML is owed.
 
 ## 9. Validation and first implementation slice
 
@@ -906,7 +917,7 @@ DECLARE TABLE customers FROM erp_export BY USER analyst;
 DECLARE SOURCE crm CONNECTION postgres VIA 'crm_prod' BY USER analyst;
 DECLARE TABLE segments FROM crm
   AS 'SELECT id, segment FROM customer_segments' BY USER analyst;  -- a recipe
-OBSERVE profile, typing, temporal ON orders;
+OBSERVE profile, typing, temporal ON orders BY AGENT onboarding;
 ```
 
 **3 · Witness.** Detectors return claim distributions; bulk results land in
@@ -954,7 +965,7 @@ DECLARE VIEW orders_enriched AS
   BY AGENT enricher;
 
 DECLARE GROUNDING revenue IN orders
-  AS sum(amount) WHERE doc_type = 'invoice'
+  AS amount WHERE doc_type = 'invoice'
   BY AGENT grapher CONFIDENCE 0.9;
 ```
 

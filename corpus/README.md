@@ -22,8 +22,8 @@ Sources snapshot 2026-07-30. Full analysis: `reports/2026-07-30-adversarial-revi
 | 02 | convention `sign_natural_balance` | GRAMMAR GAP |
 | 03 | metric `dso` | GRAMMAR GAP |
 | 04 | validation `trial_balance` | GRAMMAR GAP |
-| 05 | cycle `accounts_receivable` | GRAMMAR GAP (heaviest) |
+| 05 | cycle `accounts_receivable` | RESOLVED (sprint 3, fork B) |
 | 06 | claim witnesses + reliabilities | RESOLVED (sprint 1, fork B) |
-| 07 | grounding / sql_snippets | GRAMMAR GAP (key) |
+| 07 | grounding / sql_snippets | key RESOLVED (sprint 2, fork A) |
 | 08 | teach payloads (8 types) | mixed |
 | 09 | answer-agent served context | SEMANTICS UNDEFINED |

@@ -6,15 +6,21 @@
    Token level (identifiers, strings with '' escaping, numbers, -- comments,
    keyword case-insensitivity) is inherited from the substrate SQL dialect.
 
+   Reserved words (sprint 4 fork B, 2026-07-30): clause-head keywords are
+   reserved inside glossql statement bodies; colliding identifiers are
+   double-quoted ("unit"). Transported SQL strings are unaffected.
+
    Known unresolved syntax issues (tracked, not hidden):
-   - U1: provenance `BY` after an opaque SQL body (DECLARE VIEW/TABLE recipes)
-         is ambiguous with SQL's GROUP BY / ORDER BY without a reserved
-         delimiter; the harness parses from the end (last BY + actor class).
+   - U1: VIEW bodies are bare SQL containing BY (GROUP BY / ORDER BY); the
+         trailing provenance is found from the end (last BY + actor class) —
+         specified behavior, kept so §3.2's join-admission check sees the AST.
    - U2: aspect-application arguments vs claim-space labels share one surface;
-         syntactically identical, split only by the aspect's declaration.
-   - U3: GROUNDING's stated supersession key member `parameter` has no surface
-         syntax (sprint candidate).
-   - U4: GLOSS subject resolution spans concept and data namespaces.            *)
+         split by the aspect's declaration (ARGUMENTS vs VALUES) — the parse
+         stays catalog-dependent.
+   - U3: RESOLVED sprint 2 — the grounding key is (concept); no parameter
+         member exists.
+   - U4: GLOSS subject resolution spans concept and data namespaces.
+   - U5: RESOLVED sprint 4 — reserved clause heads (fork B above).             *)
 
 statement    = writing | reading ;
 
@@ -44,8 +50,9 @@ relationship_decl                                                     (* [REPAIR
 grounding_decl                                                        (* [REPAIR] *)
              = "DECLARE", "GROUNDING", name, "IN", name,
                "AS", expr, [ "WHERE", expr ], provenance, ";" ;
-               (* key: (concept, relation, parameter) — parameter has NO surface
-                  syntax here: issue U3 *)
+               (* key: (concept) — one active grounding per concept; the
+                  expression is row-level (metrics own aggregation).
+                  Sprint 2 fork A, 2026-07-30. *)
 
 reliability_decl                                                      (* [REPAIR] *)
              = "DECLARE", "RELIABILITY", actor, "FOR", name, number,
@@ -69,8 +76,11 @@ arg_pair     = ident, ":=", value ;                                   (* issue U
 
 (* --- observation --- *)
 observation  = "OBSERVE", ident, { ",", ident },                      (* [REPAIR] — no production in §3.0 *)
-               [ "ON", ( subject | subject_tuple ) ], [ name ], ";" ;
-               (* `OBSERVE validation receivables_roll_forward`: measurement id
+               [ "ON", ( subject | subject_tuple ) ], [ name ],
+               provenance, ";" ;
+               (* provenance required — sprint 5 fork A, 2026-07-30:
+                  orchestration code writes BY AGENT <workflow>.
+                  `OBSERVE validation receivables_roll_forward`: measurement id
                   followed by a declared name.
                   `OBSERVE overlap ON (a.x, b.y)`: a column tuple, NOT a §3.0
                   pair — no REFERENCES. *)
@@ -101,11 +111,15 @@ clause       = clause_kw, clause_payload ;
 clause_kw    = "KIND" | "DESCRIPTION" | "INDICATORS" | "EXCLUDE"
              | "UNIT" | "UNIT FROM" | "ORDERING" | "STATEMENT" | "AS"
              | "PARAMETER" | "ON CYCLE" | "OVER" | "TOLERANCE" | "SEVERITY"
-             | "GUIDANCE" | "DIRECTIONS" | "VALUES" | "FROM" | "CONNECTION"
+             | "GUIDANCE" | "DIRECTIONS" | "VALUES" | "TERMINAL" | "ARGUMENTS"
+             | "FROM" | "CONNECTION"
              | "VIA" | "IN" | "LEVELS" | "WHERE" | "BANDS" | "WEIGHT"
              | "OVERALL THRESHOLD" | "BLOCK ON" | "PREFER"
              | "DIMENSION BUDGET" | "RESTRICT JOINS TO DECLARED RELATIONSHIPS"
              | "INCLUDE" ;
+               (* VALUES lists may be ordered (a < b < c); TERMINAL marks
+                  absorbing labels; ARGUMENTS declares per-instance argument
+                  names — sprint 3 fork B, 2026-07-30 *)
 clause_payload = ? balanced token span up to the next clause_kw or provenance ? ;
 
 expr         = ? substrate-SQL expression; balanced token span ? ;

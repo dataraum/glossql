@@ -24,6 +24,7 @@ TOKEN_RE = re.compile(
     r"""(?P<ws>\s+)
       | (?P<comment>--[^\n]*)
       | (?P<str>'(?:[^']|'')*')
+      | (?P<dqident>"(?:[^"]|"")*")
       | (?P<num>\d+(?:\.\d+)?)
       | (?P<ident>[A-Za-z_][A-Za-z0-9_$]*)
       | (?P<assign>:=)
@@ -42,7 +43,8 @@ POLICY_KINDS = {"readiness", "contract", "interpretation"}
 CLAUSE_HEADS = {
     "KIND", "DESCRIPTION", "INDICATORS", "EXCLUDE", "UNIT", "ORDERING",
     "STATEMENT", "AS", "PARAMETER", "ON", "OVER", "TOLERANCE", "SEVERITY",
-    "GUIDANCE", "DIRECTIONS", "VALUES", "FROM", "CONNECTION", "VIA", "IN",
+    "GUIDANCE", "DIRECTIONS", "VALUES", "TERMINAL", "ARGUMENTS",
+    "FROM", "CONNECTION", "VIA", "IN",
     "LEVELS", "WHERE", "BANDS", "WEIGHT", "OVERALL", "BLOCK", "PREFER",
     "DIMENSION", "RESTRICT", "INCLUDE", "CARDINALITY", "REJECTED",
 }
@@ -67,6 +69,8 @@ def tokenize(src: str) -> list[Tok]:
         kind = m.lastgroup
         if kind in ("ws", "comment"):
             continue
+        if kind == "dqident":  # sprint 4 fork B: quoted identifier — never a keyword
+            kind = "ident"
         toks.append(Tok(kind, m.group()))
     return toks
 
@@ -229,7 +233,7 @@ class P:
         elif k == "KIND" or k == "SEVERITY" or k == "PREFER" or k == "CONNECTION":
             self.ident(f"{k} payload")
         elif k in ("INDICATORS", "EXCLUDE", "OVER", "DIRECTIONS", "VALUES",
-                   "INCLUDE", "LEVELS", "BANDS"):
+                   "INCLUDE", "LEVELS", "BANDS", "TERMINAL", "ARGUMENTS"):
             self.balanced_parens()
         elif k == "ORDERING":
             if self.peek() and self.peek().kind == "punct" and self.peek().text == "(":
@@ -488,10 +492,7 @@ class P:
                 self.qualified()
         if self.peek() and self.peek().kind == "ident" and not self.at_provenance():
             self.take()  # OBSERVE validation <name>
-        if self.at_provenance():  # examples carry no BY — spec inconsistency, tolerated
-            self.provenance()
-        elif not self.done():
-            raise ParseError(f"trailing tokens in OBSERVE: {self.peek().text!r}")
+        self.provenance()  # required — sprint 5 fork A
 
     def gloss(self) -> None:
         t = self.peek()
