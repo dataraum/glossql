@@ -2,7 +2,10 @@
 
 The context language (SPEC.md) and, later, its DataFusion-based server. Current
 phase: **language spec under review**. There is no implementation and none should be
-started before the grammar is agreed.
+started before the grammar is agreed. One carve-out: a disposable §9.1 validation
+harness (grammar parser, replay/pooling simulator, constrained-decoding authoring
+test) may exist; its only outputs are transcription verdicts and SPEC.md diffs,
+and it does not survive into the implementation.
 
 ## The one-document rule
 
@@ -26,8 +29,10 @@ discussion produces something worth keeping, it becomes a SPEC.md diff.
 
 - Settled: language before implementation · DataFusion as engine substrate ·
   log/lake split with state = f(log, lake) · four planes (declarations,
-  observations, policies, derived) · the concept/data split with GLOSS as the only
-  bridge · judgment in policy, never in results · authored prose is opaque.
+  observations, policies, derived) · the concept/data split with the grounding
+  statement (`DECLARE GROUNDING`) as the only bridge · `GLOSS` is the read
+  verb, and no word holds two grammatical roles · judgment in policy, never in
+  results · authored prose is opaque.
 - Held open (do not decide in passing): persistence backend · DataFusion mapping ·
   governance.
 

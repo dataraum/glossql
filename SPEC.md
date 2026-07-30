@@ -1,30 +1,35 @@
 # glossql — v0 draft specification
 
 Status: **draft for review**. The name: a *gloss* is a marginal annotation
-explaining a text's meaning; a glossary is a collection of them.
+explaining a text's meaning; a glossary is a collection of them. In the
+language the word has one role: `GLOSS` is the reading statement — it asks for
+the glossed reading of a subject or a query. What is authored is a
+`GROUNDING` (§3.2): the grounding is what you write, the gloss is what you get.
 Scope of this document: the language only. One document; no satellite docs.
 
 Status by section — the iteration loop works the flagged items (§9.1):
 
 - **Ready** (reads unambiguously for practitioners and agents): §1 · §3.0 ·
-  §3.6 · §4 · §5 · §7.
+  §3.6 · §4 · §5 · §7 · §10.
 - **Under iteration** (statement forms hold; clause details do not):
-  - §3.1 — `INTERPRET` ranges and per-step sanity ranges sit awkwardly against
-    principle 3 (judgment belongs in policy, not declarations); concept
-    relations are open (§8.2); cycle vocabulary is open (§8.4); the `PARAMETER`
-    clause shape (type, options, grain derivation) is a sketch.
+  - §3.1 — the `PARAMETER` clause shape (type, options, grain derivation) is a
+    sketch; cycle vocabulary is open (§8.4); the `RECONCILES WITH` right-hand
+    side is open (§8.2).
   - §3.0 — the semantic admission checklist is unwritten; the log envelope is
     deliberately last (§1.1).
   - §3.2 — typing/null/expectation teaches (§8.3) have no statement form yet;
-    the rest transcribes cleanly.
+    the `DECLARE VIEW` admission contract (join matching) and the recipe
+    clause (`CONNECTION`/`VIA` shape, dialect boundary) are sketches; the
+    rest transcribes cleanly.
   - §3.3 — the core aspect library and its label sets are open (§8.1); the
     aspect model itself (declared spaces, function-shaped application) is
     settled.
-  - §3.4 — `WEIGHT` semantics, the contract policy, and the serving clause list
-    are sketches.
+  - §3.4 — `WEIGHT` semantics, the contract policy, the interpretation policy
+    key, and the serving clause list are sketches.
   - §3.5 — relation schemas for `CONTEXT()` / `READINESS` / `WHY()` /
-    `GLOSSES()`, the `METRIC()` grain argument, and the `CONTEXT FOR` output
-    shape are unspecified; `AT` syntax alignment with lake time travel is open.
+    `GROUNDINGS()`, the `METRIC()` grain argument, the `GLOSS` document
+    shape, and the `AS PACK` closure scope are unspecified; `AT` syntax
+    alignment with lake time travel is open.
 
 ---
 
@@ -44,7 +49,9 @@ a pair of stores:
 every statement names an identified actor. Everything computed (posteriors, verdicts,
 readiness, projections) is derived deterministically by the engine and is never
 written to the log. Replaying the log against the lake reproduces the full context,
-at any historical point.
+at any historical point. Replay re-executes nothing at the lake boundary:
+acquisitions (recipes) and observations re-bind to results the lake already
+holds.
 
 ### 1.1 Held-open decisions (explicitly not made here)
 
@@ -62,7 +69,12 @@ at any historical point.
   isolation) are inherited from the persistence substrate — the log is
   workspace-scoped and single-writer; no distributed design is targeted. The spec
   will own only the semantic admission checklist (which contextual checks gate
-  writing statements).
+  writing statements). Direction for the envelope, noted not designed: statement
+  identity by content hash (today's `recipe_hash` generalized — re-admitting an
+  identical statement is a no-op supersede) and a hash-chained log for tamper
+  evidence (the git property). Both are audit properties of a single-writer log.
+  Consensus, anchoring, and distributed trust are explicitly out of scope;
+  tamper evidence is not governance (held open above).
 
 ### 1.2 Design principles
 
@@ -70,9 +82,10 @@ at any historical point.
    share one statement skeleton and one provenance model.
 2. **The concept/data split.** Vocabulary (concepts, metrics, validations,
    conventions) is written in *concept space* — dataset-independent, portable.
-   Assertions about actual data (annotations, relationships, glosses) are written
-   in *data space*. `GLOSS` is the only bridge. This makes the analytical layer
-   portable across datasets by construction.
+   Assertions about actual data (aspect applications, relationships,
+   groundings) are written in *data space*. The grounding statement is the
+   only bridge (§3.2). This makes the analytical layer portable across
+   datasets by construction.
 3. **Judgment lives in policy, never in results.** Derived state carries numbers;
    bands, severities, and verdicts are policy applied at read time.
 4. **Authored prose is opaque.** Meanings, conventions, guidance are string literals
@@ -88,8 +101,8 @@ at any historical point.
 7. **Ride SQL.** glossql adds statements only where SQL has no construct: the
    authored context. Querying, data CRUD, and functions stay plain SQL against
    the attached lake (the DuckLake posture: attach, then little syntax);
-   context reading is table functions and relations, not new grammar. The
-   writing plane is the language.
+   context reading is one statement (`GLOSS`) over derived relations, not a
+   verb set. The writing plane is the language.
 
 ---
 
@@ -103,24 +116,25 @@ reserved (§6), or deliberately excluded (§7).
 
 | Today | Content | glossql construct |
 |---|---|---|
-| concepts / concept edges | vocabulary: name, description, indicators, kind, relations | `DECLARE CONCEPT` |
+| concepts / concept edges | vocabulary: name, description, indicators, kind, relations | `DECLARE CONCEPT`; edges `DECLARE RELATIONSHIP` (§3.1) |
 | conventions | opaque prose rules served verbatim | `DECLARE CONVENTION` |
-| metrics + parameters + dependency DAG | expression over concepts, unit, output, parameters, interpretation ranges | `DECLARE METRIC` |
+| metrics + parameters + dependency DAG | expression over concepts, unit, output, parameters, interpretation ranges | `DECLARE METRIC`; interpretation is policy (§3.4) |
 | validations | check, tolerance, severity, guidance, cycle scope | `DECLARE VALIDATION` |
 | cycle families | closed families + directions | `DECLARE CYCLE FAMILY` |
-| workspace calendar / vertical binding | fiscal year start; active vertical | `DECLARE CALENDAR`; vertical binding has no construct — importing a pack is replaying its statements (§3.1) |
-| column annotations (LLM) | role, business name/description, behavior claim, null tokens | `ANNOTATE <column>` |
-| column concepts (LLM) | meaning (prose), temporal behavior, unit source, derived-formula hypothesis | `ANNOTATE <column>` |
-| table entities (LLM) | entity type, role (fact/dimension/snapshot), grain, time axes, identity columns | `ANNOTATE <table>` |
+| workspace calendar / vertical binding | fiscal year start; active vertical | `DECLARE calendar(workspace, …)`; vertical binding has no construct — importing a pack is replaying its statements (§3.1) |
+| column annotations (LLM) | role, business name/description, behavior claim, null tokens | `DECLARE <aspect>(column)` |
+| column concepts (LLM) | meaning (prose), temporal behavior, unit source, derived-formula hypothesis | `DECLARE <aspect>(column)` |
+| table entities (LLM) | entity type, role (fact/dimension/snapshot), grain, time axes, identity columns | `DECLARE <aspect>(table)` |
 | relationships — confirmation half | type, cardinality, confirmed-by | `DECLARE RELATIONSHIP` |
 | hierarchies — judged half | drilldown/alias/role kinds, levels | `DECLARE HIERARCHY` |
-| slice definitions — ranked half | priority, business context | `DECLARE DIMENSION` |
-| enrichment selection | which neighbours enrich a fact table, exposed columns | `DECLARE ENRICHMENT` |
+| slice definitions — ranked half | priority, business context | `DECLARE dimension(…)` — an aspect |
+| enrichment selection | which neighbours enrich a fact table, exposed columns | `DECLARE VIEW` |
 | business cycles (LLM) | cycle assertion, stages, status column, completion semantics | `DECLARE CYCLE` |
-| surrogate key confirmation | composite-key intent confirmed/declined | `DECLARE KEY` |
-| groundings (snippet parts + provenance basis) | concept → relation, expression, filters | `GLOSS` |
+| surrogate key confirmation | composite-key intent confirmed/declined | `DECLARE key(table, …)` — an aspect |
+| groundings (snippet parts + provenance basis) | concept → relation, expression, filters | `DECLARE GROUNDING` |
 | teach payloads (all 8 types, today free JSON) | type patterns, null tokens, units, plus the families above | the same statements, `BY user` — type/null/expectation teaches pending §8.3 |
 | sources / tables | where data lives | `DECLARE SOURCE`, `DECLARE TABLE` |
+| db recipes (verbatim query per connection) | source name, credential reference, backend, query | `DECLARE SOURCE … CONNECTION` + `DECLARE TABLE … AS` |
 
 ### 2.2 We MEASURE (computed against data; requests are authored, results are not)
 
@@ -156,11 +170,11 @@ Two shapes, and the distinction drives §4:
 
 | Today | glossql construct |
 |---|---|
-| six-block answer-agent context (schema+meanings, entities, curated dimensions, relationship whitelist, drivers, grain caveats) + conventions + snippet vocabulary | `CONTEXT FOR`, shaped by `DECLARE SERVING` policy |
-| engine GraphAgent served context | same `CONTEXT FOR`, different serving policy — one mechanism, two policies |
+| six-block answer-agent context (schema+meanings, entities, curated dimensions, relationship whitelist, drivers, grain caveats) + conventions + snippet vocabulary | `GLOSS (query)`, shaped by `DECLARE SERVING` policy |
+| engine GraphAgent served context | same `GLOSS`, different serving policy — one mechanism, two policies |
 | readiness surfaces (bands, drivers, coverage) | `READINESS()` relation |
 | why-tools (adjudication audit) | `WHY(subject, aspect)` |
-| look-tools (values, profiles, metrics, validations) | context relations (§3.5) |
+| look-tools (values, profiles, metrics, validations) | context relations and `GLOSS <subject>` (§3.5) |
 | property-graph projections (`og_*`) | engine-internal; traversal served via context relations, no PGQ dependency |
 | validation verdicts (computed on demand) | derived: `deviation <= tolerance` at read, tolerance from the declaration |
 
@@ -172,8 +186,8 @@ The grammar's primary author is not human. In steady state:
 |---|---|---|---|
 | `DECLARE SOURCE` / `DECLARE TABLE` | onboarding code | connection time | materialization, everything downstream |
 | concept-space `DECLARE` (concept, aspect, convention, metric, validation, cycle family) | pack replay (`SEED`); inductor agents; users | import · post-catalog induction · teach | catalog steering, execution, serving |
-| `ANNOTATE`, `DECLARE RELATIONSHIP/HIERARCHY/DIMENSION/ENRICHMENT/KEY` | cataloguer/judge/slicer/enricher agents; users | pipeline phases · teach moments | serving, adjudication, enrichment rendering |
-| `GLOSS` | grapher agent; rarely users | lazily, at first metric execution needing (concept, relation) | metric composition, drill-down, serving |
+| aspect applications (`DECLARE <aspect>(…)`), `DECLARE RELATIONSHIP/HIERARCHY/VIEW` | cataloguer/judge/slicer/enricher agents; users | pipeline phases · teach moments | serving, adjudication, view rendering |
+| `DECLARE GROUNDING` | grapher agent; rarely users | lazily, at first metric execution needing (concept, relation) | metric composition, drill-down, serving |
 | `OBSERVE` | orchestration code | phase boundaries, re-runs | engine execution → lake |
 | `WITNESS` | detectors; external producers | measurement completion | pooling |
 | `DECLARE RELIABILITY` | calibration job | calibration release | pooling weights |
@@ -189,8 +203,8 @@ so shapes must be regular enough for constrained decoding.
 ### 2.6 Derived (computed, never authored, never in the log)
 
 Pooled posteriors and conflict flags · readiness bands · validation verdicts ·
-additivity conclusions · graph projections · rendered enrichment SQL · rendered
-gloss SQL. All queryable (§3.5); none writable.
+additivity conclusions · graph projections · rendered view SQL · rendered
+grounding SQL. All queryable (§3.5); none writable.
 
 ---
 
@@ -207,18 +221,27 @@ not a lexer.
 
 ```
 statement   := writing | reading
-writing     := declaration | annotation | observation | witness | policy | lifecycle
-reading     := consumption
+writing     := declaration | witness | observation | lifecycle
+reading     := [ AT timestamp ] ( gloss | sql_query )       -- §3.5
+gloss       := GLOSS ( subject | '(' query ')' ) [ USING SERVING name ] [ AS PACK ]
 declaration := DECLARE class name clauses provenance ';'
-annotation  := ANNOTATE aspect '(' subject { ',' arg ':=' value } ')' provenance ';'
+             | DECLARE aspect '(' subject { ',' arg ':=' value } ')' provenance ';'
 witness     := WITNESS aspect '(' subject { ',' arg ':=' value } ')' provenance ';'
 provenance  := BY actor [ CONFIDENCE number ] [ EVIDENCE ref ]
 actor       := USER name | AGENT name | DETECTOR name | SEED name | CALIBRATION name
-subject     := table | table '.' column | pair | declared_name
+subject     := workspace | table | table '.' column | pair | declared_name
 pair        := table '.' column REFERENCES table '.' column
              | table '(' column {',' column} ')' REFERENCES table '(' column {',' column} ')'
 ```
 
+- **One verb per replay semantics.** Four verbs write: `DECLARE` asserts — the
+  latest statement per claim slot wins; `WITNESS` evidences — statements pool
+  under declared reliabilities and never occupy the slot they inform;
+  `OBSERVE` requests — every occurrence fires, nothing supersedes; `RETRACT`
+  removes — the slot is vacated. Merging any two would force one replay rule
+  to serve two speech acts. `GLOSS` is the only reading statement (§3.5). No
+  word holds two roles: verbs are speech acts — four writing, one reading —
+  and every other keyword is a noun (a class after `DECLARE`) or a clause.
 - Only **writing** statements enter the log; **reading** statements (§3.5) are
   session-ephemeral — never logged, never part of replay.
 - **A declared name is a name.** `DECLARE <CLASS> <name>` follows SQL's
@@ -226,6 +249,20 @@ pair        := table '.' column REFERENCES table '.' column
   usable in any later statement. References resolve against the declaring
   namespace at admission — never joined by naming convention, as today's
   `standard_field` strings are.
+- **The aspect-application form declares no name.** `DECLARE
+  behavior(orders.amount, value := flow)` occupies a claim slot *(subject,
+  aspect[, argument])*: the class form defines names, the application form
+  asserts about subjects. Both are declarations — the assertions adjudication
+  compares witnesses against (§5).
+- **Three declaration shapes.** *Named* classes define names (`SOURCE`,
+  `TABLE`, `VIEW`, `CONCEPT`, `CONVENTION`, `METRIC`, `VALIDATION`,
+  `CYCLE FAMILY`, `ASPECT`, `HIERARCHY`, `SERVING`); *keyed* classes carry no
+  name — their identity is their key (`RELATIONSHIP` by its edge, `GROUNDING`
+  by (concept, relation, parameter), `RELIABILITY` by (actor, aspect));
+  *aspect applications* are keyed by their claim slot. Policy keys are
+  mechanism-defined (a readiness singleton, a named contract, an
+  interpretation keyed `FOR` a metric). A proposed class that would carry no
+  name and no principled key is an aspect wearing a costume.
 - Every authored statement carries `BY`. The actor classes generalize today's
   `source`/`confirmation_source`/`detection_source` vocabularies into one clause.
 - `CONFIDENCE` is logged provenance metadata in [0, 1] — never an adjudication
@@ -271,8 +308,13 @@ DECLARE CONCEPT revenue
   EXCLUDE ('cost', 'expense')
   UNIT FROM currency
   BY SEED finance;
--- dimension concepts may declare ORDERING (ordered | nominal);
--- concept relations (part-of, reconciles-with, disjointness) are under design (§8.2)
+-- dimension concepts may declare ORDERING (ordered | nominal)
+
+DECLARE RELATIONSHIP net_revenue PART OF revenue BY SEED finance;
+DECLARE RELATIONSHIP receivables RECONCILES WITH (revenue - collections)
+  TOLERANCE 0.01 BY AGENT inductor;           -- right-hand-side shape: §8.2
+DECLARE RELATIONSHIP DISJOINT (product_revenue, service_revenue, other_revenue)
+  BY SEED finance;
 
 DECLARE CONVENTION accrual_basis
   STATEMENT 'amounts are recognized when earned, not when paid'
@@ -282,8 +324,8 @@ DECLARE METRIC dso
   AS 90 * avg(receivables) / sum(revenue)      -- identifiers denote concepts here
   UNIT 'days'
   PARAMETER period GRAIN month DEFAULT last_complete
-  INTERPRET (ok 0..45, warn 45..75, critical 75..)
   BY SEED finance;
+-- interpretation bands are read-time policy (§3.4), never metric declaration
 
 DECLARE VALIDATION receivables_roll_forward
   KIND balance                      -- balance | comparison | constraint | aggregate
@@ -296,7 +338,9 @@ DECLARE VALIDATION receivables_roll_forward
   BY AGENT inductor;
 
 DECLARE CYCLE FAMILY conversion DIRECTIONS (forward, reverse) BY SEED finance;
-DECLARE CALENDAR FISCAL YEAR STARTS april BY USER analyst;
+DECLARE calendar(workspace, fiscal_year_starts := april) BY USER analyst;
+-- workspace is a subject: the home of workspace-scoped facts (calendar now;
+-- §8.3's null-token vocabulary when it lands)
 ```
 
 A context's **glossary** is implicit: it is the set of concept-space declarations
@@ -304,14 +348,29 @@ currently active in the log — what is defined. There is no pack construct and 
 binding statement (`USE VERTICAL` does not survive). A vocabulary pack is a file
 of statements; importing it is replaying it, and provenance (`BY SEED finance`)
 records where each declaration came from. Collisions between packs resolve by
-supersession like everything else. Publishing/distribution format stays reserved
+supersession like everything else. Exporting is the same mechanism in reverse:
+a pack is a saved gloss (`GLOSS … AS PACK`, §3.5). Distribution stays reserved
 (§6).
+
+`DECLARE RELATIONSHIP` is the single head for authored edges in both spaces:
+`REFERENCES` operates on column pairs (§3.2); `PART OF`, `RECONCILES WITH`,
+and `DISJOINT` operate on concepts. An edge is its own statement — its own
+supersession slot, provenance, and retraction — never a clause on an
+endpoint's declaration (tolerance is edge payload; disjointness is n-ary over
+a group, not a property of one concept). The operator set is closed and
+mechanism-backed — §1.2(6) applied to edges: `PART OF` feeds the serving
+spine's closure traversal (§3.5), `RECONCILES WITH` carries the tolerance
+balance checks derive from, `DISJOINT` feeds admission-time contradiction
+checks. Domain edges (feeds-into, stage order) stay pack vocabulary: no
+operator without a named mechanism. Admission rejects cross-space edges — a
+`PART OF` between a concept and a column is an error — so
+grounding-as-only-bridge is enforced, not just stated.
 
 Rule: inside `DECLARE METRIC` / `DECLARE VALIDATION` expressions, bare identifiers
 resolve against a single concept-space namespace: concepts, declared metrics, and
 parameters. A name that would denote more than one of these is a declaration-time
-error. Columns are unreachable here by construction — `GLOSS` is the only bridge —
-so the expressions stay portable. Metric composition is plain reference:
+error. Columns are unreachable here by construction — the grounding is the
+only bridge (§3.2) — so the expressions stay portable. Metric composition is plain reference:
 `operating_income` in another metric's body denotes the declared metric.
 
 Validations carry **no formal check expression** — principle 4 taken fully. The
@@ -328,16 +387,27 @@ these statements (`BY AGENT inductor`), grounded in served context.
 DECLARE SOURCE erp_export FROM 'lake/erp/*.parquet' BY USER analyst;
 DECLARE TABLE orders FROM erp_export BY USER analyst;
 
-ANNOTATE entity(orders, value := 'sales order') BY AGENT cataloguer CONFIDENCE 0.9;
-ANNOTATE role(orders, value := fact) BY AGENT cataloguer CONFIDENCE 0.9;
-ANNOTATE grain(orders, columns := (order_id, line_no)) BY AGENT cataloguer;
-ANNOTATE time_axis(orders, column := order_date, anchor := true) BY AGENT cataloguer;
+DECLARE SOURCE crm CONNECTION postgres VIA 'crm_prod' BY USER analyst;
+-- VIA references engine-configured credentials; secrets never enter the log
 
-ANNOTATE meaning(orders.amount, value := 'gross invoiced amount per order line')
+DECLARE TABLE active_customers FROM crm
+  AS 'SELECT id, name, segment FROM customers WHERE status = ''active'''
+  BY USER analyst;
+-- a recipe: verbatim SQL in the source's dialect, executed at the origin,
+-- its result materialized into the lake. A transported payload (principle 4),
+-- not glossql SQL — parsed bodies are bare, transported bodies are strings.
+-- Cross-source SQL decomposes: one recipe table per source, a view to join
+
+DECLARE entity(orders, value := 'sales order') BY AGENT cataloguer CONFIDENCE 0.9;
+DECLARE role(orders, value := fact) BY AGENT cataloguer CONFIDENCE 0.9;
+DECLARE grain(orders, columns := (order_id, line_no)) BY AGENT cataloguer;
+DECLARE time_axis(orders, column := order_date, anchor := true) BY AGENT cataloguer;
+
+DECLARE meaning(orders.amount, value := 'gross invoiced amount per order line')
   BY AGENT cataloguer CONFIDENCE 0.92;
-ANNOTATE unit(orders.amount, value := 'EUR') BY AGENT cataloguer CONFIDENCE 0.92;
-ANNOTATE behavior(orders.amount, value := flow) BY AGENT cataloguer CONFIDENCE 0.92;
-ANNOTATE null_token(orders.amount, token := 'n/a', value := is_null) BY USER analyst;
+DECLARE unit(orders.amount, value := 'EUR') BY AGENT cataloguer CONFIDENCE 0.92;
+DECLARE behavior(orders.amount, value := flow) BY AGENT cataloguer CONFIDENCE 0.92;
+DECLARE null_token(orders.amount, token := 'n/a', value := is_null) BY USER analyst;
 -- one aspect application per statement: exactly one claim slot
 -- (subject, aspect, argument), the supersession unit. An aspect's payload is
 -- typed by its declaration: a closed label set (VALUES), prose, or structure.
@@ -362,47 +432,66 @@ DECLARE HIERARCHY geo IN customers
   KIND drilldown
   BY AGENT judge;
 
-DECLARE DIMENSION orders.channel
-  PRIORITY 0.8
-  CONTEXT 'primary go-to-market split'
-  BY AGENT slicer;
+DECLARE dimension(orders.channel, priority := 0.8,
+  context := 'primary go-to-market split') BY AGENT slicer;
 
-DECLARE DIMENSION orders VIA customer_id TO customers.segment
-  PRIORITY 0.7
-  BY AGENT slicer;
--- a dimension subject may be a path: fact table, FK role, reachable attribute
+DECLARE dimension(orders, via := customer_id, to := customers.segment,
+  priority := 0.7) BY AGENT slicer;
+-- a reachable attribute as a slice: the path rides the argument surface
+-- (replacing a bespoke VIA … TO clause form); the arguments are the claim slot
 
-DECLARE ENRICHMENT orders_enriched FROM orders
-  JOIN customers VIA (orders.customer_id REFERENCES customers.id)
-  EXPOSE (customers.region, customers.segment)
+DECLARE VIEW orders_enriched AS
+  SELECT o.order_id, o.line_no, o.amount, c.region, c.segment
+  FROM orders o JOIN customers c ON o.customer_id = c.id
   BY AGENT enricher;
--- the engine renders the grain-preserving SQL; grain verification is an observation
+-- SQL-bodied derivation: enrichment, cleaning, dedup, typing transforms share
+-- this head. The select list is the exposure; joins-used derive from the AST;
+-- every join equality must match a declared relationship at admission (the
+-- OVER membership contract, applied to data space); grain preservation is
+-- verified by observation, not by construction
 
-DECLARE KEY orders (order_id, line_no) CONFIRMED BY AGENT judge;
+DECLARE key(orders, columns := (order_id, line_no), value := confirmed)
+  BY AGENT judge;
+-- composite-key intent is an aspect (VALUES (confirmed, declined)), not a class
 
-GLOSS revenue IN orders
+DECLARE GROUNDING revenue IN orders
   AS sum(amount)
   WHERE doc_type = 'invoice'
   BY AGENT grapher CONFIDENCE 0.9;
 ```
 
-`GLOSS` — the namesake statement: the in-context explanation of a concept, how
-it reads in this dataset. It is the successor of the snippet parts + provenance
+`DECLARE` creates nothing. SQL's `CREATE TABLE` makes an object; `DECLARE
+TABLE` makes an assertion — the files already exist in the lake, and the
+statement records, attributed, that they carry this name here. The binding
+must be log content, not engine configuration: subjects resolve against it at
+admission, and state = f(log, lake) fails if a third input holds the names.
+The engine's material work (scanning, typing, layering, perhaps an internal
+`CREATE EXTERNAL TABLE`) is the *effect* of replaying the declaration, never
+the record of it. The same reading applies to `DECLARE VIEW` against `CREATE
+VIEW`: same body, plus attribution, supersession, and the join-admission
+check.
+
+`GROUNDING` — the bridge class: how a concept reads in this dataset, the one
+statement family that names both a concept and columns. The grounding is what
+is authored; the gloss is what is rendered (§3.5) — the read verb assembles
+groundings with everything else known about a subject. It is the successor of
+the snippet parts + provenance
 contract: concept, relation, expression, filter — as grammar rather than JSON.
 Columns-used, filter members, and rendered SQL are all derived from the
 statement's AST by the engine; the statement is the single typed source. A
-gloss's supersession key is *(concept, relation, parameter)*: a concept may hold
-several glosses — per relation, per parameter — and re-glossing the same key
-supersedes.
+grounding's supersession key is *(concept, relation, parameter)*: a concept
+may hold several groundings — per relation, per parameter — and re-grounding
+the same key supersedes.
 
 A human teach is not a separate mechanism: it is any of these statements with
 `BY USER`. Precedence between actor classes is policy (§3.4), not syntax.
 
 The language knows **one logical table name**. Layered materializations
-(raw/typed/quarantine/enriched) are engine-internal; annotations attach to the
-logical name, and layer resolution happens at the engine's SQL-emission boundary.
-Enrichments are the one layered artifact with language-level identity, and they
-get their own declared name (`orders_enriched` above).
+(raw/typed/quarantine/enriched) are engine-internal; aspect applications attach
+to the logical name, and layer resolution happens at the engine's SQL-emission
+boundary. Views are the derived relations with language-level identity — each
+gets its own declared name (`orders_enriched` above); whether a view is
+materialized is engine-internal.
 
 ### 3.3 Observation statements
 
@@ -413,7 +502,9 @@ OBSERVE validation receivables_roll_forward;
 ```
 
 An `OBSERVE` statement is the authored *request*; execution and storage are engine
-concerns. Results land in the lake, keyed to the request. Two result channels:
+concerns. Results land in the lake, keyed to the request. `OBSERVE` returns no
+rows, and replay re-runs nothing: requests re-bind to results already in the
+lake, which is what keeps replay deterministic. Two result channels:
 
 - **Bulk results** → lake, referenced. Queryable via observation relations
   (`PROFILE(orders.amount)`, `OBSERVATIONS(subject)`).
@@ -490,6 +581,10 @@ DECLARE POLICY readiness
   WEIGHT behavior FOR aggregation_intent (conflict 0.8, ignorance 0.4)
   BY USER analyst;
 
+DECLARE POLICY interpretation FOR dso
+  BANDS (ok < 45, warn < 75, critical)
+  BY SEED finance;
+
 DECLARE POLICY contract exploratory_analysis
   OVERALL THRESHOLD 0.6
   BLOCK ON (structural.parse_failure)
@@ -506,15 +601,19 @@ DECLARE SERVING answer_agent
 Policies are declarations like any other — supersedable, attributed. Today's
 hardcoded curation constants (the dimension budget, prefer-enriched, the join
 whitelist rule) become declared serving policy. Actor-precedence (user over agent
-over seed) is itself a policy default, overridable.
+over seed) is itself a policy default, overridable. Metric interpretation is
+the same move applied to `DECLARE METRIC`: bands over metric values are
+read-time judgment (principle 3), keyed to the metric name under the same
+`BANDS` mechanism as readiness.
 
 ### 3.5 Consumption
 
 Consumption adds almost no grammar — principle 7. Context relations are table
 functions taking **subject strings**, so every one of them is standard SQL, and
 they compose with data queries in the same session. The grammar additions are
-exactly two: `CONTEXT FOR` (the rendered context document) and the `AT` pin
-(time travel over the whole context, not one table):
+exactly two: `GLOSS` — the reading statement, rendering the context document
+for a subject or a query — and the `AT` pin (time travel over the whole
+context, not one table):
 
 ```sql
 SELECT aspect, value, posterior, contested
@@ -526,29 +625,57 @@ SELECT target, band, top_driver FROM READINESS WHERE band <> 'ready';
 
 SELECT id, version, aspects FROM MEASUREMENTS;  -- what the engine itself can run
 
-SELECT month, value FROM METRIC('dso', grain => 'month');  -- glosses + data, composed
+SELECT month, value FROM METRIC('dso', grain => 'month');  -- groundings + data, composed
 
 SELECT * FROM WHY('orders.amount', 'behavior');
 -- declaration, witnesses, reliabilities, pooling trace, posterior — the
 -- why-audit as a relation (today's why-tools; EXPLAIN stays SQL's keyword)
 
-SELECT concept, relation, sql FROM GLOSSES('revenue');
--- the gloss library searched by concept — KB-first composition starts here
+SELECT concept, relation, sql FROM GROUNDINGS('revenue');
+-- the grounding library searched by concept — KB-first composition starts here
 
-CONTEXT FOR (SELECT sum(amount) FROM orders GROUP BY channel)
+GLOSS orders.amount;        -- subject document: aspects, posteriors, contested
+GLOSS orders;               -- table document: entity header, per-column bands
+GLOSS revenue;              -- concept document: its groundings and neighbourhood
+
+GLOSS (SELECT sum(amount) FROM orders GROUP BY channel)
   USING SERVING answer_agent;
--- the curated context document relevant to a query, rendered per serving policy
+-- query-anchored: the curated context document relevant to a query,
+-- rendered per serving policy
+
+GLOSS revenue AS PACK;
+-- statements form: the active authored statements in revenue's closure,
+-- replayable as-is — a pack is a saved gloss
 
 AT '2026-07-01' SELECT * FROM CONTEXT('orders.amount');  -- log replay, time travel
 -- context-wide pin: state = f(log ≤ t, lake ≤ t); syntax alignment with lake
 -- time travel (AT (TIMESTAMP => ...)) is a flag item
 ```
 
-`CONTEXT FOR` replaces bespoke prompt assembly: the engine selects and renders the
-declarations, posteriors, and caveats relevant to a query, bounded by a named
-serving policy. One mechanism serves every agent; policies differ, code does not.
+`GLOSS` replaces bespoke prompt assembly: the engine selects and renders the
+declarations, posteriors, and caveats relevant to a subject or a query, bounded
+by a named serving policy. Row-shaped access stays in the relations above;
+`GLOSS` renders the document. `USING SERVING` is its only shaping knob —
+document shape is policy, never per-call arguments. Fieldwork: the running
+system serves a byte-identical context block per session so it rides as a
+cached prompt prefix; per-call include/exclude would break that and open a
+second shaping surface beside `DECLARE SERVING`. One mechanism serves every
+agent; policies differ, code does not — and calls do not either.
 
-The graph is the serving **spine**, not a consumer verb set. `CONTEXT FOR`'s
+`AS PACK` is the closure move. SQL closes over tables — `SELECT` consumes
+them and produces them. glossql closes over context: statements produce it,
+and `GLOSS … AS PACK` reproduces the statements — the active (unsuperseded)
+writing statements in the subject's closure, scope bounded by serving policy
+like the document form. The document form is the rendered page — authored
+plus derived, for prompts and screens; its posteriors are computed, so it
+cannot replay. The pack form is the source: `SHOW CREATE TABLE`, generalized
+to a context neighbourhood. Replaying a pack elsewhere reproduces the context;
+witnesses travel (they are log statements), derived state is recomputed,
+never exported. Export, dump/restore, and vocabulary-pack publishing are one
+mechanism. How a whole vertical is addressed for export (subject closure vs
+actor scope) is a flag item; distribution stays reserved (§6).
+
+The graph is the serving **spine**, not a consumer verb set. `GLOSS`'s
 renderer traverses the derived graph projection to assemble each concept's
 neighbourhood (part-of closure, confirmed relationships, drivers, additivity) —
 fieldwork: when the running system made the graph its one serving spine, neither
@@ -557,7 +684,7 @@ consumers (drill UIs) query the same projection as derived relations with plain
 SQL — recursive CTEs are SQL (principle 7). No graph grammar exists.
 
 The projection's vocabulary is not new vocabulary: nodes are the language's own
-names (tables, columns, concepts, glosses, metrics, parameters, plus derived
+names (tables, columns, concepts, groundings, metrics, parameters, plus derived
 verdicts); edges are the references statements already carry or that the engine
 derives from their ASTs (`REFERENCES` pairs, concept relations, grounded-by,
 uses, rolls-up-to, derives-from). The derived plane exposes it as relations;
@@ -617,8 +744,9 @@ to observed deviation at read time.
 
 Nothing in this plane is authored. In particular, resolution does **not** write back
 into declarations (a change from today's resolve write-back): if an agent or user
-accepts a posterior, that acceptance is a new `ANNOTATE ... BY ...` in the log —
-authored, attributed, and auditable like everything else.
+accepts a posterior, that acceptance is a new aspect-application
+`DECLARE ... BY ...` in the log — authored, attributed, and auditable like
+everything else.
 
 ---
 
@@ -629,11 +757,10 @@ One line each; none designed in v0:
 - **Synonyms** on any subject (`SYNONYMS ('turnover', ...)`) — we don't do this systematically yet.
 - **Verified example queries** — question + query + verified-by; today only half-exists as saved snippets.
 - **Agent instructions per subject** — prose guidance scoped to a table/metric (beyond global conventions).
-- **Derivation declarations** — cleaning/union/dedup transformations beyond enrichment (the Databricks-LDP-shaped territory).
 - **Expectations on incoming data** — schema stability, freshness SLAs, arrival contracts.
 - **Unit conversion** — FX, unit algebra; today units are labels only.
 - **Entity resolution** — same-entity assertions across sources.
-- **Vocabulary sharing** — publishing/importing concept packs (verticals generalized beyond seed files).
+- **Vocabulary sharing** — the format is resolved: a pack is a saved gloss (`AS PACK`, §3.5) and import is replay. Reserved here: distribution (registries, versioning) and addressing a whole vertical for export.
 - **Visualization clauses** — ggsql-compatible rendering tail.
 - **Visibility/governance** — who may see which context.
 
@@ -658,28 +785,35 @@ legal resolution.
    are (an extension point, not a first concern). Domain aspects (behavior,
    cycle stages) stay pack vocabulary regardless. Remaining: the core list and
    its label sets.
-2. **Concept relations** — derived edges are settled (computed, out of the log,
-   §2.6). Open is the *authored* half: part-of (today authored as
-   compositions), reconciles-with (an authored edge carrying a tolerance), and
-   where disjointness's authored source lives once conventions are opaque
-   prose (today it derives from convention concept groups — likely a small
-   group declaration). Likeliest shape: clauses on `DECLARE CONCEPT`. The
-   statement axis on metric extracts (`balance_sheet`, `income_statement`) is
-   plausibly just part-of.
+2. **Concept relations** — decided and folded into §3.1: authored edges are
+   statements under the `DECLARE RELATIONSHIP` head (`PART OF`,
+   `RECONCILES WITH … TOLERANCE`, `DISJOINT`), one closed, mechanism-backed
+   operator set across both spaces. Remaining open: the `RECONCILES WITH`
+   right-hand side (bare concept vs concept-space expression), and whether a
+   `RECONCILES WITH` edge subsumes `KIND balance` validations or only feeds
+   them. The statement axis on metric extracts (`balance_sheet`,
+   `income_statement`) is plausibly just part-of.
 3. **Typing vocabulary and DECLARE proliferation** — type-pattern teaches,
    workspace-level null-token vocabulary, and expected-dependency assertions
-   still have no statement family. Direction: resist new `DECLARE` families;
-   prefer SQL-bodied forms under few heads (type patterns are expressions;
-   enrichment and typing transforms are view-shaped SQL — principle 7). Start
+   still have no statement form. Direction: resist new `DECLARE` families;
+   prefer SQL-bodied forms under few heads. `DECLARE VIEW … AS` (§3.2) now
+   hosts the transform-shaped half (enrichment, cleaning, typing transforms);
+   type patterns are expressions and likely ride an existing head. Start
    small and see how it works out.
 4. **Cycle vocabulary and the genericity bar** — the SQL-inventor test: SQL has
    no INVOICE statement; domain lives in tables. A family earns grammar only
    if it is generic to analytics/data processing. Validations pass that bar;
-   cycle *types* (stages, indicators, feeds-into) may not — they may be pack
-   vocabulary expressed through generic constructs rather than `DECLARE CYCLE`
-   grammar. Real cycle-family directions bind *concepts*
+   cycle *types* (stages, indicators, feeds-into) may not. Direction:
+   decomposition — a cycle is stage concepts in a pack, `PART OF` edges
+   (§3.1), a stage aspect binding the status column's values, and
+   completion-semantics validations; an inductor agent authors these exactly
+   as it authors validations, so nothing is lost on the inference side —
+   induction was never a language mechanism. `DECLARE CYCLE FAMILY` stays in
+   §3.1 until §9.1 transcription of the running system's cycle artifacts
+   confirms the decomposition covers stages, status column, and completion
+   semantics without workaround. Real cycle-family directions bind *concepts*
    (`incoming accounts_receivable`), not bare labels as §3.1 sketches. No 1-1
-   mapping of today's YAML is owed. May be shaped later.
+   mapping of today's YAML is owed.
 
 ## 9. Validation and first implementation slice
 
@@ -699,7 +833,15 @@ Transcription covers artifacts; **walkthroughs** cover flows. For each producing
 moment in §2.5 (pack import, onboarding, a catalog run, a calibration release, a
 metric execution, a user teach, an agent answering a question) write the exact
 statement sequence produced and consumed, end to end. §2's rows prove every
-artifact has a home; walkthroughs prove every moment has a script.
+artifact has a home; walkthroughs prove every moment has a script. §10 is the
+canonical walkthrough; the corpus extends it to every artifact.
+
+Both checks may be tooled: a disposable validation harness — grammar parser,
+log replay and pooling simulator, and a constrained-decoding authoring test
+(§2.5's regularity claim, actually tested against an LLM) — whose only
+outputs are bucket verdicts and SPEC.md diffs. The harness is not the
+implementation and does not survive it; §9.2 stays gated on the cleared
+flags.
 
 ### 9.2 First implementation slice (v0.1 PoC)
 
@@ -708,9 +850,9 @@ DataFusion, chosen because it exercises the two riskiest bets at once: the
 DataFusion extension path and the witness/adjudication plane. Log and lake
 encodings below are placeholders; the persistence decision (§1.1) stays open.
 
-- **Statements:** `DECLARE CONCEPT`, `DECLARE ASPECT`, `ANNOTATE`, `OBSERVE`,
-  `WITNESS`, `DECLARE RELIABILITY`, `DECLARE POLICY` (readiness bands only),
-  `RETRACT`.
+- **Statements:** `DECLARE CONCEPT`, `DECLARE ASPECT`, aspect-application
+  `DECLARE`, `OBSERVE`, `WITNESS`, `DECLARE RELIABILITY`, `DECLARE POLICY`
+  (readiness bands only), `RETRACT`.
 - **Consumption:** `CONTEXT()`, `DECLARATIONS`, `WHY()`, `AT`.
 - **Substrate:** DataFusion custom statements; log = one plain-text statement
   file; lake = a parquet directory.
@@ -719,5 +861,116 @@ encodings below are placeholders; the persistence decision (§1.1) stays open.
 - **Acceptance:** replay determinism (identical derived state from log + lake),
   contested detection under declared reliabilities, a faithful `WHY()` trace,
   `AT` time travel by prefix replay.
-- **Excluded:** `GLOSS`, metrics, validations, enrichments, hierarchies,
-  serving policy, `CONTEXT FOR`.
+- **Excluded:** `DECLARE GROUNDING`, metrics, validations, views, hierarchies,
+  serving policy, the `GLOSS` document renderer.
+
+---
+
+## 10. Happy path — one workspace, end to end
+
+The canonical walkthrough (§9.1): the producing moments of §2.5 in the order a
+real workspace meets them, as well-formed statements (abridged where marked).
+Two boundaries hold throughout. Orchestration appears nowhere: workflows
+*emit* statements and *read* derived state — the language says what, never
+when (§7). And the cockpit is a pure consumer: every inspection surface is
+`GLOSS` or a relation; every teach control emits a `DECLARE`. A cockpit
+feature that cannot be written this way is a grammar gap (§9.1, bucket two).
+
+**1 · Frame.** Choosing a vertical replays its pack — framing is not a
+mechanism, it is provenance:
+
+```sql
+DECLARE ASPECT behavior VALUES (flow, stock, point_in_time) BY SEED core;
+DECLARE CONCEPT revenue KIND measure UNIT FROM currency
+  DESCRIPTION 'income from sales of goods and services' BY SEED finance;
+DECLARE RELATIONSHIP net_revenue PART OF revenue BY SEED finance;
+DECLARE METRIC dso AS 90 * avg(receivables) / sum(revenue) UNIT 'days'
+  BY SEED finance;
+-- abridged: receivables, collections, conventions, validations elided
+```
+
+**2 · Connect.** The add-source workflow authors bindings, then requests
+evidence; its progress widget polls a derived relation, never the log:
+
+```sql
+DECLARE SOURCE erp_export FROM 'lake/erp/*.parquet' BY USER analyst;
+DECLARE TABLE orders FROM erp_export BY USER analyst;
+DECLARE TABLE customers FROM erp_export BY USER analyst;
+DECLARE SOURCE crm CONNECTION postgres VIA 'crm_prod' BY USER analyst;
+DECLARE TABLE segments FROM crm
+  AS 'SELECT id, segment FROM customer_segments' BY USER analyst;  -- a recipe
+OBSERVE profile, typing, temporal ON orders;
+```
+
+**3 · Witness.** Detectors return claim distributions; bulk results land in
+the lake behind the `EVIDENCE` ref:
+
+```sql
+WITNESS behavior(orders.amount, flow := 0.83, stock := 0.11, point_in_time := 0.06)
+  BY DETECTOR aggregation_lineage
+  EVIDENCE 'obs://run-342/aggregation_lineage/orders.amount';
+```
+
+**4 · Catalog.** Agents declare — including, here, a mistake:
+
+```sql
+DECLARE entity(orders, value := 'sales order') BY AGENT cataloguer CONFIDENCE 0.9;
+DECLARE behavior(orders.amount, value := stock) BY AGENT cataloguer CONFIDENCE 0.7;
+DECLARE RELATIONSHIP orders.customer_id REFERENCES customers.id
+  CARDINALITY many_to_one BY AGENT judge CONFIDENCE 0.97;
+```
+
+**5 · Contest.** Nothing is authored; the pooled posterior disagrees with the
+declaration, and the cockpit shows the badge:
+
+```sql
+SELECT aspect, value, posterior, contested FROM CONTEXT('orders.amount');
+--  behavior | stock | {flow: 0.79, …} | true
+SELECT * FROM WHY('orders.amount', 'behavior');  -- the full trace behind the badge
+```
+
+**6 · Teach.** The cockpit's accept control emits one statement: same slot,
+new declaration, contested clears. The log remembers:
+
+```sql
+DECLARE behavior(orders.amount, value := flow) BY USER analyst;
+AT '2026-07-29' SELECT contested FROM CONTEXT('orders.amount');  -- true, back then
+```
+
+**7 · Derive and ground.** The enricher writes a view; the grapher bridges
+concept to columns:
+
+```sql
+DECLARE VIEW orders_enriched AS
+  SELECT o.order_id, o.amount, c.region, c.segment
+  FROM orders o JOIN customers c ON o.customer_id = c.id
+  BY AGENT enricher;
+
+DECLARE GROUNDING revenue IN orders
+  AS sum(amount) WHERE doc_type = 'invoice'
+  BY AGENT grapher CONFIDENCE 0.9;
+```
+
+**8 · Execute.** With `receivables` and `collections` grounded the same way,
+the concept-space metric runs against data:
+
+```sql
+SELECT month, value FROM METRIC('dso', grain => 'month');
+```
+
+**9 · Answer.** The answer agent reads the rendered document, then plain SQL;
+it writes nothing — its teach suggestions surface to users, who write:
+
+```sql
+GLOSS (SELECT sum(amount) FROM orders GROUP BY channel)
+  USING SERVING answer_agent;
+```
+
+**10 · Share.** Closure: context leaves the same way it arrived —
+
+```sql
+GLOSS revenue AS PACK;  -- the active authored statements in revenue's closure
+```
+
+Ten stations, five verbs, one log. §9.1's corpus is this path widened to
+every artifact and every moment.
