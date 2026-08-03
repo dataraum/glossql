@@ -104,7 +104,7 @@ json_pointer      = { "/", pointer_segment }- ;
 pointer_segment   = name | number ;
 
 extract           = "SELECT", call, { ",", call }, "FROM", subject,
-                    [ "SEQUENTIAL" | "PARALLEL" ], [ "REFRESH" ] ;
+                    [ "REFRESH" ] ;
 call              = name, "(", [ named_arg, { ",", named_arg } ], ")" ;
 named_arg         = name, "=>", ( name | string | number | "true" | "false" ) ;
                     (* first run computes and caches; later selects read the

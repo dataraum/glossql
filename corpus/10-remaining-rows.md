@@ -72,7 +72,7 @@ DECLARE FUNCTION profile_min_max FOR GLOBAL FROM 'functions/profile.py'
   RETURNS {"type": "object", "properties": {"min": {}, "max": {}}};
 DECLARE WITNESS min_max_w ON min_max BY (FUNCTION profile_min_max);
 
-SELECT profile_min_max() FROM fin.orders PARALLEL;
+SELECT profile_min_max() FROM fin.orders;
 SELECT * FROM GLOSSARY(fin.orders.amount);
 ```
 

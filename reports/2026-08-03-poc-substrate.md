@@ -25,9 +25,35 @@ in those repos.
   `GLOSSARY()`/`ATTEST()` become table functions inside otherwise plain SQL.
 
 Consequence for the server: parsing is (a) a statement splitter and head
-classifier owning the glossql forms and the `PARALLEL|SEQUENTIAL` tail,
-(b) substrate strings handed to DataFusion verbatim, (c) two registered
-table functions. No sqlparser fork, no patched DataFusion.
+classifier owning the glossql forms, (b) substrate strings handed to
+DataFusion verbatim, (c) two registered table functions. No sqlparser fork,
+no patched DataFusion. The in-tree example
+`datafusion-examples/examples/sql_ops/custom_sql_parser.rs` (`CREATE
+EXTERNAL CATALOG`) is the official form of this pattern: a `CustomStatement`
+enum wrapping `DFParser` delegation — ours with two heads instead of one.
+
+### Statement spelling vs sqlparser (verified, sqlparser 0.60 × generic/postgres/duckdb)
+
+Question: could re-spelled heads make glossql parseable without the router?
+Measured:
+
+- Already valid SQL **today**: `USE`, `SELECT … FROM GLOSSARY(fin.orders.amount)`,
+  `… ATTEST(a.b -> c.d.e)` (`->` parses as a binary op; `<->` on the
+  postgres dialect only). The language is mostly SQL already.
+- `CREATE GLOSS` / `CREATE ASPECT` / `CREATE WITNESS` / `CREATE SOURCE` /
+  `UPDATE GLOSS`: **all fail in every dialect** — `CREATE`'s second word is
+  a closed set. A CREATE-flavored re-spelling still needs the router; it
+  buys nothing and costs the distinct write verb.
+- The only router-free spellings are full dissolution (`CALL gloss(…)`,
+  `INSERT INTO glossary …` — parse everywhere) with JSON bodies as quoted
+  strings. Rejected: the bare `AS {json}` body is the agent-ergonomic core,
+  and no SQL dialect accepts bare braces. (`CALL` forms remain available as
+  a zero-grammar-cost wire alias for SQL-only clients, if ever needed.)
+- `SELECT … FROM t PARALLEL` was a silent-misparse hazard — it *parses* as
+  a table alias named PARALLEL. Resolved by decision, not routing:
+  **`SEQUENTIAL | PARALLEL` is dropped from the grammar** (2026-08-03).
+  Ordering is the caller's choice — one statement with many calls, or many
+  statements. `REFRESH` remains the only extraction modifier.
 
 ## Transactions: DataFusion has none; Iceberg supplies the per-table piece
 

@@ -61,7 +61,7 @@ DECLARE FUNCTION infer_types FOR GLOBAL FROM 'functions/infer_types.py'
   RETURNS {"type": "object", "properties": {"candidates": {"type": "array"}}};
 DECLARE WITNESS type_candidates_w ON type_candidates BY (FUNCTION infer_types);
 
-SELECT profile(), infer_types() FROM fin.orders PARALLEL;
+SELECT profile(), infer_types() FROM fin.orders;
 ```
 
 Typing decisions and semantic annotation are agent glosses (an agent
@@ -99,8 +99,9 @@ that the grammar knows about.
 
 - **The flow transcribes with no flow construct.** Sequencing, retries,
   budgets, the replay-or-surface loop, and the column-limit gate are
-  orchestration — app concern; `SEQUENTIAL | PARALLEL` on extraction is the
-  only ordering surface the grammar carries.
+  orchestration — app concern. The grammar carries no ordering surface at
+  all (`SEQUENTIAL | PARALLEL` was dropped 2026-08-03): the caller either
+  sends one extraction with many calls or several statements in sequence.
 - Quarantine tables and cast-failure routing are the typed view's business
   (script/SQL), not statements.
 - `run_id` versioning and the promote/head flip are the cache and

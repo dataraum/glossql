@@ -279,12 +279,14 @@ Extraction:
 
 ```sql
 SELECT dso(days_in_period => 90) FROM fin;
-SELECT profile_min_max() FROM orders PARALLEL REFRESH;
+SELECT profile_min_max() FROM orders REFRESH;
 ```
 
 The first run computes and caches; later selects read the cache; `REFRESH`
-re-runs. `SEQUENTIAL | PARALLEL` orders multi-function extraction. Functions
-never write the glossary; their results live in the cache.
+re-runs. Whether multi-function extraction fans out or runs one call after
+another is the caller's choice — send one statement with many calls, or many
+statements; the grammar carries no ordering surface. Functions never write
+the glossary; their results live in the cache.
 
 ## 7. Witnesses
 
