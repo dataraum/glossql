@@ -1,0 +1,55 @@
+---
+source: crates/parser/tests/statements.rs
+expression: "GlossqlParser ::\nparse_sql(\"SELECT dso(days_in_period => 90), profile() FROM fin.orders;\").expect(\"must parse\")"
+---
+[
+    Extract(
+        Extract {
+            calls: [
+                Call {
+                    function: Ident {
+                        value: "dso",
+                        quote_style: None,
+                        span: Span(Location(1,8)..Location(1,11)),
+                    },
+                    args: [
+                        NamedArg {
+                            name: Ident {
+                                value: "days_in_period",
+                                quote_style: None,
+                                span: Span(Location(1,12)..Location(1,26)),
+                            },
+                            value: Number(
+                                "90",
+                            ),
+                        },
+                    ],
+                },
+                Call {
+                    function: Ident {
+                        value: "profile",
+                        quote_style: None,
+                        span: Span(Location(1,35)..Location(1,42)),
+                    },
+                    args: [],
+                },
+            ],
+            subject: Path(
+                Path {
+                    segments: [
+                        Ident {
+                            value: "fin",
+                            quote_style: None,
+                            span: Span(Location(1,50)..Location(1,53)),
+                        },
+                        Ident {
+                            value: "orders",
+                            quote_style: None,
+                            span: Span(Location(1,54)..Location(1,60)),
+                        },
+                    ],
+                },
+            ),
+        },
+    ),
+]

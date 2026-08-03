@@ -1,0 +1,192 @@
+//! Classification and rejection behavior the grammar fixes: what routes to
+//! substrate (DataFusion's parser), what must fail, and the respelled
+//! forms' error messages.
+
+use glossql_parser::{GlossqlParser, Statement};
+
+fn single(src: &str) -> Statement {
+    let mut statements = GlossqlParser::parse_sql(src).expect("must parse");
+    assert_eq!(statements.len(), 1, "expected exactly one statement");
+    statements.remove(0)
+}
+
+fn error(src: &str) -> String {
+    GlossqlParser::parse_sql(src)
+        .expect_err("must fail")
+        .to_string()
+}
+
+// -- classification ------------------------------------------------------
+
+#[test]
+fn extract_is_recognized() {
+    assert!(matches!(
+        single("SELECT detect_relationships() FROM fin;"),
+        Statement::Extract(_)
+    ));
+}
+
+#[test]
+fn select_with_projection_is_substrate() {
+    assert!(matches!(
+        single("SELECT subject, band FROM ATTEST(fin.trial_balance) WHERE band = 'red';"),
+        Statement::Substrate(_)
+    ));
+}
+
+#[test]
+fn glossary_read_with_named_arg_is_substrate() {
+    assert!(matches!(
+        single("SELECT * FROM GLOSSARY(fin.orders.amount, all => true);"),
+        Statement::Substrate(_)
+    ));
+}
+
+#[test]
+fn attest_on_one_to_one_pair_path_parses_as_substrate() {
+    // Needs the postgres dialect: `<->` is a single TwoWayArrow token there.
+    assert!(matches!(
+        single("SELECT * FROM ATTEST(invoices.order_id <-> orders.id.fk_note);"),
+        Statement::Substrate(_)
+    ));
+}
+
+#[test]
+fn mixed_call_and_column_select_is_substrate() {
+    assert!(matches!(
+        single("SELECT f(), col FROM t;"),
+        Statement::Substrate(_)
+    ));
+}
+
+#[test]
+fn create_view_is_substrate() {
+    assert!(matches!(
+        single("CREATE VIEW v AS SELECT a FROM t;"),
+        Statement::Substrate(_)
+    ));
+}
+
+#[test]
+fn delete_from_glossary_is_substrate() {
+    assert!(matches!(
+        single("DELETE FROM glossary WHERE subject = 'orders.amount' AND aspect = 'unit';"),
+        Statement::Substrate(_)
+    ));
+}
+
+// -- respelled forms -----------------------------------------------------
+
+#[test]
+fn bare_brace_body_is_rejected_with_guidance() {
+    let e = error(r#"GLOSS unit ON orders.amount AS {"value": "EUR"};"#);
+    assert!(e.contains("dollar-quoted"), "{e}");
+}
+
+#[test]
+fn single_quoted_body_is_rejected() {
+    let e = error(r#"GLOSS unit ON orders.amount AS '{"value": "EUR"}';"#);
+    assert!(e.contains("dollar-quoted"), "{e}");
+}
+
+#[test]
+fn invalid_json_in_dollar_body_is_an_error() {
+    let e = error(r#"GLOSS unit ON orders.amount AS $${"value": }$$;"#);
+    assert!(e.contains("invalid JSON body"), "{e}");
+}
+
+#[test]
+fn non_object_json_body_is_an_error() {
+    let e = error("GLOSS unit ON orders.amount AS $$[1, 2]$$;");
+    assert!(e.contains("must be an object"), "{e}");
+}
+
+#[test]
+fn tagged_dollar_body_parses() {
+    assert!(matches!(
+        single(r#"GLOSS note ON fin AS $json${"text": "a body containing $$"}$json$;"#),
+        Statement::Gloss(_)
+    ));
+}
+
+#[test]
+fn recipe_tail_must_be_dollar_quoted() {
+    let e = error("DECLARE RECIPE segments ON fin FROM crm AS SELECT id FROM t;");
+    assert!(e.contains("dollar-quoted recipe SQL"), "{e}");
+}
+
+#[test]
+fn accepts_pointer_must_carry_producer_and_pointer() {
+    let e = error("DECLARE FUNCTION f FOR fin FROM 's.py' ACCEPTS 'no_hash_here' RETURNS $${}$$;");
+    assert!(e.contains("producer#/json/pointer"), "{e}");
+}
+
+// -- rejections the grammar fixes ----------------------------------------
+
+#[test]
+fn declare_pattern_is_not_a_head() {
+    // Fixture 13's rejected fork: patterns are FACT glosses, not a
+    // declaration head.
+    let e = error("DECLARE PATTERN '^a$' FOR TYPE;");
+    assert!(e.contains("after DECLARE"), "{e}");
+}
+
+#[test]
+fn four_segment_paths_are_rejected() {
+    let e = error(r#"GLOSS a ON w.x.y.z AS $${"v": 1}$$;"#);
+    assert!(e.contains("three segments"), "{e}");
+}
+
+#[test]
+fn relationship_endpoint_needs_table_and_column() {
+    let e = error("DECLARE RELATIONSHIP a -> b.c;");
+    assert!(e.contains("table.column"), "{e}");
+}
+
+#[test]
+fn aspect_kind_must_be_known() {
+    let e = error(r#"DECLARE ASPECT a WITH $${"type": "object"}$$ AS OPINION;"#);
+    assert!(e.contains("MEASUREMENT"), "{e}");
+}
+
+#[test]
+fn trailing_input_after_a_statement_is_an_error() {
+    let e = error("USE fin extra;");
+    assert!(e.contains("end of statement"), "{e}");
+}
+
+// -- statement stream ----------------------------------------------------
+
+#[test]
+fn empty_statements_are_dropped() {
+    assert_eq!(GlossqlParser::parse_sql("USE fin;;").unwrap().len(), 1);
+}
+
+#[test]
+fn semicolons_inside_bodies_do_not_split() {
+    assert_eq!(
+        GlossqlParser::parse_sql(r#"GLOSS m ON t AS $${"value": "a; b"}$$;"#)
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn multi_statement_scripts_parse_in_order() {
+    let statements = GlossqlParser::parse_sql(concat!(
+        "USE fin;\n",
+        r#"DECLARE ASPECT unit WITH $${"type": "object"}$$ AS FACT;"#,
+        "\n",
+        r#"GLOSS unit ON orders.amount AS $${"value": "EUR"}$$;"#,
+        "\nSELECT profile() FROM fin.orders;\n",
+        "SELECT * FROM GLOSSARY(fin.orders.amount);"
+    ))
+    .unwrap();
+    assert_eq!(statements.len(), 5);
+    assert!(matches!(statements[0], Statement::Use(_)));
+    assert!(matches!(statements[1], Statement::Declare(_)));
+    assert!(matches!(statements[2], Statement::Gloss(_)));
+    assert!(matches!(statements[3], Statement::Extract(_)));
+    assert!(matches!(statements[4], Statement::Substrate(_)));
+}

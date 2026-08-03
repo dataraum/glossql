@@ -1,0 +1,33 @@
+---
+source: crates/parser/tests/statements.rs
+expression: "GlossqlParser ::\nparse_sql(r#\"DECLARE FUNCTION dso_auto FOR GLOBAL FROM 'functions/dso.py' ACCEPTS 'period_grain#/properties/days' RETURNS $${\"type\": \"object\"}$$;\"#).expect(\"must parse\")"
+---
+[
+    Declare(
+        Function(
+            FunctionDecl {
+                name: Ident {
+                    value: "dso_auto",
+                    quote_style: None,
+                    span: Span(Location(1,18)..Location(1,26)),
+                },
+                scope: Global,
+                script: "functions/dso.py",
+                accepts: Some(
+                    Pointer(
+                        SchemaPointer {
+                            producer: "period_grain",
+                            pointer: "/properties/days",
+                        },
+                    ),
+                ),
+                returns: JsonBody {
+                    value: Object {
+                        "type": String("object"),
+                    },
+                    raw: "{\"type\": \"object\"}",
+                },
+            },
+        ),
+    ),
+]

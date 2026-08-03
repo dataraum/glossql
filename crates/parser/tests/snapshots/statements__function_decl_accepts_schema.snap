@@ -1,0 +1,44 @@
+---
+source: crates/parser/tests/statements.rs
+expression: "GlossqlParser ::\nparse_sql(r#\"DECLARE FUNCTION dso FOR fin FROM 'functions/dso.py' ACCEPTS $${\"type\": \"object\"}$$ RETURNS $${\"type\": \"object\", \"required\": [\"value\"]}$$;\"#).expect(\"must parse\")"
+---
+[
+    Declare(
+        Function(
+            FunctionDecl {
+                name: Ident {
+                    value: "dso",
+                    quote_style: None,
+                    span: Span(Location(1,18)..Location(1,21)),
+                },
+                scope: Dataset(
+                    Ident {
+                        value: "fin",
+                        quote_style: None,
+                        span: Span(Location(1,26)..Location(1,29)),
+                    },
+                ),
+                script: "functions/dso.py",
+                accepts: Some(
+                    Schema(
+                        JsonBody {
+                            value: Object {
+                                "type": String("object"),
+                            },
+                            raw: "{\"type\": \"object\"}",
+                        },
+                    ),
+                ),
+                returns: JsonBody {
+                    value: Object {
+                        "required": Array [
+                            String("value"),
+                        ],
+                        "type": String("object"),
+                    },
+                    raw: "{\"type\": \"object\", \"required\": [\"value\"]}",
+                },
+            },
+        ),
+    ),
+]

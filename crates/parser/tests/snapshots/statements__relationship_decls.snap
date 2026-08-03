@@ -1,0 +1,72 @@
+---
+source: crates/parser/tests/statements.rs
+expression: "GlossqlParser ::\nparse_sql(\"DECLARE RELATIONSHIP orders.customer_id -> customers.id;\\nDECLARE RELATIONSHIP invoices.order_id <-> orders.id;\").expect(\"must parse\")"
+---
+[
+    Declare(
+        Relationship(
+            RelationshipDecl {
+                left: ColumnPath {
+                    dataset: None,
+                    table: Ident {
+                        value: "orders",
+                        quote_style: None,
+                        span: Span(Location(1,22)..Location(1,28)),
+                    },
+                    column: Ident {
+                        value: "customer_id",
+                        quote_style: None,
+                        span: Span(Location(1,29)..Location(1,40)),
+                    },
+                },
+                op: ManyToOne,
+                right: ColumnPath {
+                    dataset: None,
+                    table: Ident {
+                        value: "customers",
+                        quote_style: None,
+                        span: Span(Location(1,44)..Location(1,53)),
+                    },
+                    column: Ident {
+                        value: "id",
+                        quote_style: None,
+                        span: Span(Location(1,54)..Location(1,56)),
+                    },
+                },
+            },
+        ),
+    ),
+    Declare(
+        Relationship(
+            RelationshipDecl {
+                left: ColumnPath {
+                    dataset: None,
+                    table: Ident {
+                        value: "invoices",
+                        quote_style: None,
+                        span: Span(Location(2,22)..Location(2,30)),
+                    },
+                    column: Ident {
+                        value: "order_id",
+                        quote_style: None,
+                        span: Span(Location(2,31)..Location(2,39)),
+                    },
+                },
+                op: OneToOne,
+                right: ColumnPath {
+                    dataset: None,
+                    table: Ident {
+                        value: "orders",
+                        quote_style: None,
+                        span: Span(Location(2,44)..Location(2,50)),
+                    },
+                    column: Ident {
+                        value: "id",
+                        quote_style: None,
+                        span: Span(Location(2,51)..Location(2,53)),
+                    },
+                },
+            },
+        ),
+    ),
+]
