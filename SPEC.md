@@ -48,6 +48,7 @@ disagree, verify in code, then fix the map.
 | teach payloads (8 types) | re-gloss on a human connection | 08 |
 | answer-agent served context | dropped — reads + agent skills | 09 |
 | catalog annotations, statistics, sources | FACT/MEASUREMENT glosses, SOURCE/RECIPE | 10 |
+| typing + null-value config (`typing.yaml`, `null_values.yaml`, overlay teaches) | FACT aspects, whole-body re-gloss | 13 |
 
 ## 3. Sources and datasets
 
