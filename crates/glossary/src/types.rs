@@ -20,6 +20,10 @@ pub enum Error {
         "aspect `{name}` has {glosses} gloss(es) — delete them before re-declaring it differently"
     )]
     AspectInUse { name: String, glosses: i64 },
+    #[error(
+        "table `{table}` has {glosses} gloss(es) — a different SQL is a different table; declare it under another name"
+    )]
+    RecipeInUse { table: String, glosses: i64 },
     #[error("witness on MEASUREMENT aspect `{0}` must be BY (FUNCTION fn) only")]
     MeasurementWitnessSpeakers(String),
     #[error(
@@ -125,6 +129,22 @@ pub struct FunctionRow {
     /// hands the script as its context document.
     pub accepts: Vec<String>,
     pub returns: Value,
+}
+
+/// What a `DECLARE RECIPE` amounted to (SPEC.md §3): the session
+/// materializes on `Created`/`Replaced` and leaves `Unchanged` alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecipeAdmission {
+    Created,
+    Unchanged,
+    Replaced,
+}
+
+/// A stored recipe, as materialization needs it.
+#[derive(Debug, Clone)]
+pub struct RecipeRow {
+    pub source: String,
+    pub sql: String,
 }
 
 /// A declared witness (SPEC.md §7.1).

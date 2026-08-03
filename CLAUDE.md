@@ -22,16 +22,17 @@ documents:
   fail). Fixtures 11–12 model the system's operational flows as statement
   sequences.
 - `crates/` — the Rust PoC server, a Cargo workspace at the repo root.
-  Directories unprefixed, package names `glossql-*`; datafusion is pinned in
-  lockstep with iceberg-datafusion (see the workspace `Cargo.toml` comment
-  and `reports/2026-08-03-m2-session-glossary.md`). Built: `parser`
+  Directories unprefixed, package names `glossql-*`; datafusion moves in
+  lockstep with iceberg-datafusion, sqlx with iceberg-catalog-sql (see the
+  workspace `Cargo.toml` comment and the M2/M3 reports). Built: `parser`
   (GlossqlParser wrapping DataFusion's DFParser; the corpus is its
   acceptance suite) · `glossary` (sqlx store, supersession, admission) ·
   `session` (SessionContext assembly, RelationPlanner reads, statement
-  router). Planned (a crate is created only when it has real content):
-  `catalog` (iceberg-rust behind the Catalog trait) · `scripts` (rhai +
-  arrow kernels) · `import` (ADBC, CSV/parquet) · `serverd` (Flight SQL +
-  MCP shim).
+  router, recipe materialization) · `catalog` (the workspace Lake:
+  iceberg-rust SqlCatalog on SQLite + warehouse dir; datasets are
+  namespaces) · `import` (recipe execution over file sources; ADBC executor
+  planned). Planned (a crate is created only when it has real content):
+  `scripts` (rhai + arrow kernels) · `serverd` (Flight SQL + MCP shim).
 - `reports/` — pivot records, review verdicts, and evaluation records.
 
 **Standing invariant:** workspace `cargo test` passes — every ```sql block

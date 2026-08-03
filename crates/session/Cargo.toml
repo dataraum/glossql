@@ -6,6 +6,8 @@ edition.workspace = true
 [dependencies]
 glossql-parser = { path = "../parser" }
 glossql-glossary = { path = "../glossary" }
+glossql-catalog = { path = "../catalog" }
+glossql-import = { path = "../import" }
 datafusion.workspace = true
 datafusion-functions-json.workspace = true
 serde_json.workspace = true
@@ -14,3 +16,4 @@ thiserror.workspace = true
 
 [dev-dependencies]
 insta.workspace = true
+tempfile = "3"

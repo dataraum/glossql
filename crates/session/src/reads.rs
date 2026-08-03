@@ -441,8 +441,16 @@ fn relation_batch(table: &str, rows: Vec<Vec<Option<String>>>) -> RecordBatch {
             "actor_id",
             "body",
             "written_at",
+            "snapshot_id",
         ],
-        _ => &["dataset", "subject", "function", "body", "computed_at"],
+        _ => &[
+            "dataset",
+            "subject",
+            "function",
+            "body",
+            "computed_at",
+            "snapshot_id",
+        ],
     };
     let schema = Arc::new(Schema::new(
         names.iter().map(|n| utf8(n)).collect::<Vec<_>>(),

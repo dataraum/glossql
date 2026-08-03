@@ -3,8 +3,9 @@
 use std::sync::{Arc, RwLock};
 
 use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::catalog::TableProvider;
+use datafusion::catalog::{CatalogProvider, SchemaProvider, TableProvider};
 use datafusion::common::DataFusionError;
+use datafusion::datasource::MemTable;
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion::sql::parser::Statement as DFStatement;
@@ -12,7 +13,9 @@ use datafusion::sql::sqlparser::ast::{FromTable, Statement as SQLStatement, Tabl
 use datafusion::sql::sqlparser::parser::ParserError;
 use serde_json::Value;
 
-use glossql_glossary::{Actor, FunctionRow, Store, schemas};
+use glossql_catalog::Lake;
+use glossql_glossary::{Actor, FunctionRow, RecipeAdmission, Store, schemas};
+use glossql_import::SourceSpec;
 use glossql_parser::{Declaration, Extract, Gloss, GlossqlParser, RelOp, Statement, Subject};
 
 use crate::reads::{GlossqlReads, Shared};
@@ -36,6 +39,10 @@ pub enum SessionError {
     OutputRejected { function: String, detail: String },
     #[error("function runtime: {0}")]
     Runtime(String),
+    #[error(transparent)]
+    Lake(#[from] glossql_catalog::Error),
+    #[error(transparent)]
+    Import(#[from] glossql_import::Error),
 }
 
 /// What one statement produced. `Rows` for anything that reads, `Affected`
@@ -76,6 +83,11 @@ pub struct Session {
     shared: Arc<Shared>,
     actor: Actor,
     runtime: Arc<dyn FunctionRuntime>,
+    lake: Option<Lake>,
+    /// Bare-name mounts of the `USE`'d dataset's tables in the default
+    /// schema, so `orders` and `fin.orders` both resolve while views land
+    /// beside them.
+    aliased: RwLock<Vec<String>>,
 }
 
 impl Session {
@@ -102,11 +114,20 @@ impl Session {
             shared,
             actor,
             runtime: Arc::new(NoRuntime),
+            lake: None,
+            aliased: RwLock::new(Vec::new()),
         })
     }
 
     pub fn with_runtime(mut self, runtime: Arc<dyn FunctionRuntime>) -> Self {
         self.runtime = runtime;
+        self
+    }
+
+    /// Attach the workspace data plane: recipes materialize, `USE` mounts
+    /// the dataset's tables, gloss and cache writes carry snapshot ids.
+    pub fn with_lake(mut self, lake: Lake) -> Self {
+        self.lake = Some(lake);
         self
     }
 
@@ -145,11 +166,30 @@ impl Session {
             }
             Declaration::Dataset(d) => {
                 store.declare_dataset(d).await?;
+                if let Some(lake) = &self.lake {
+                    lake.ensure_namespace(&d.name.value).await?;
+                    self.mount_schema(&d.name.value).await?;
+                }
                 format!("DECLARE DATASET {}", d.name.value)
             }
             Declaration::Recipe(d) => {
-                store.declare_recipe(d).await?;
-                format!("DECLARE RECIPE {} ON {}", d.table.value, d.dataset.value)
+                let admission = store.declare_recipe(d).await?;
+                let (dataset, table) = (d.dataset.value.as_str(), d.table.value.as_str());
+                match &self.lake {
+                    None => format!("DECLARE RECIPE {table} ON {dataset}"),
+                    Some(lake)
+                        if admission == RecipeAdmission::Unchanged
+                            && lake.table_exists(dataset, table).await? =>
+                    {
+                        format!("DECLARE RECIPE {table} ON {dataset} (unchanged)")
+                    }
+                    Some(_) => {
+                        let rows = self
+                            .materialize(dataset, table, &d.source.value, &d.sql)
+                            .await?;
+                        format!("DECLARE RECIPE {table} ON {dataset} ({rows} rows)")
+                    }
+                }
             }
             Declaration::Relationship(d) => {
                 let (left, op, right) = self.pair(&d.left, d.op, &d.right).await?;
@@ -185,11 +225,122 @@ impl Session {
             }));
         }
         *self.shared.dataset.write().expect("state lock") = Some(name.to_string());
+        if let Some(lake) = &self.lake {
+            lake.ensure_namespace(name).await?;
+            let schema = self.mount_schema(name).await?;
+            let stale: Vec<String> = std::mem::take(&mut *self.aliased.write().expect("aliases"));
+            for old in stale {
+                let _ = self.ctx.deregister_table(old.as_str());
+            }
+            for table in lake.table_names(name).await? {
+                self.alias(&table, &schema).await?;
+            }
+        }
         Ok(Outcome::Done(format!("USE {name}")))
+    }
+
+    /// Land a recipe as its table: run it at the source, create the table
+    /// through the mounted schema (live — no rebuild), append the batches
+    /// through DataFusion's INSERT path, one snapshot per materialization.
+    async fn materialize(
+        &self,
+        dataset: &str,
+        table: &str,
+        source: &str,
+        sql: &str,
+    ) -> Result<usize, SessionError> {
+        const STAGED: &str = "__glossql_staged";
+        let lake = self.lake.as_ref().expect("caller holds a lake");
+        let settings = self.shared.store.source_settings(source).await?.ok_or(
+            SessionError::Store(glossql_glossary::Error::Unknown {
+                what: "source",
+                name: source.into(),
+            }),
+        )?;
+        let spec = SourceSpec::from_settings(source, &settings)?;
+        let (schema, batches) = glossql_import::run_recipe(&spec, sql).await?;
+        let rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+
+        lake.ensure_namespace(dataset).await?;
+        let mounted = self.mount_schema(dataset).await?;
+        if mounted.table_exist(table) {
+            // a replaced recipe rebuilds its table (admission already ruled)
+            mounted.deregister_table(table)?;
+        }
+        let empty = RecordBatch::new_empty(Arc::clone(&schema));
+        let shape = MemTable::try_new(Arc::clone(&schema), vec![vec![empty]])?;
+        mounted.register_table(table.to_string(), Arc::new(shape))?;
+
+        if rows > 0 {
+            let staged = MemTable::try_new(schema, vec![batches])?;
+            self.ctx.register_table(STAGED, Arc::new(staged))?;
+            let insert = format!("INSERT INTO \"{dataset}\".\"{table}\" SELECT * FROM {STAGED}");
+            let inserted = async {
+                self.ctx.sql(&insert).await?.collect().await?;
+                Ok::<(), DataFusionError>(())
+            }
+            .await;
+            let _ = self.ctx.deregister_table(STAGED);
+            inserted?;
+        }
+        if self.shared.dataset.read().expect("state lock").as_deref() == Some(dataset) {
+            self.alias(table, &mounted).await?;
+        }
+        Ok(rows)
+    }
+
+    /// The dataset's namespace as a schema in the session's default catalog
+    /// — `fin.orders` resolves, views land beside it in the default schema.
+    async fn mount_schema(&self, dataset: &str) -> Result<Arc<dyn SchemaProvider>, SessionError> {
+        let default = self.ctx.catalog("datafusion").expect("default catalog");
+        if let Some(existing) = default.schema(dataset) {
+            return Ok(existing);
+        }
+        let lake = self.lake.as_ref().expect("caller holds a lake");
+        let provider = lake.provider().await?;
+        let schema = provider.schema(dataset).ok_or_else(|| {
+            SessionError::Lake(glossql_catalog::Error::Workspace(format!(
+                "namespace `{dataset}` is missing from the catalog"
+            )))
+        })?;
+        default.register_schema(dataset, Arc::clone(&schema))?;
+        Ok(schema)
+    }
+
+    /// Mount `dataset.table` under its bare name in the default schema.
+    async fn alias(
+        &self,
+        table: &str,
+        schema: &Arc<dyn SchemaProvider>,
+    ) -> Result<(), SessionError> {
+        if let Some(provider) = schema.table(table).await? {
+            let _ = self.ctx.deregister_table(table);
+            self.ctx.register_table(table, provider)?;
+            self.aliased.write().expect("aliases").push(table.to_string());
+        }
+        Ok(())
+    }
+
+    /// The subject's table snapshot at write time — `None` for dataset-level
+    /// subjects, pair paths, tables the lake does not hold, or no lake.
+    async fn stamp(&self, resolved: &Resolved) -> Result<Option<i64>, SessionError> {
+        let Some(lake) = &self.lake else {
+            return Ok(None);
+        };
+        if resolved.subject == resolved.dataset || resolved.subject.contains(' ') {
+            return Ok(None);
+        }
+        let table = resolved
+            .subject
+            .split('.')
+            .next()
+            .expect("subjects are non-empty");
+        Ok(lake.snapshot_id(&resolved.dataset, table).await?)
     }
 
     async fn gloss(&self, gloss: Gloss) -> Result<Outcome, SessionError> {
         let resolved = self.subject(&gloss.subject).await?;
+        let snapshot = self.stamp(&resolved).await?;
         self.shared
             .store
             .gloss(
@@ -198,6 +349,7 @@ impl Session {
                 &gloss.aspect.value,
                 &resolved.subject,
                 &gloss.body,
+                snapshot,
             )
             .await?;
         Ok(Outcome::Done(format!(
@@ -245,12 +397,14 @@ impl Session {
                             detail,
                         }
                     })?;
+                    let snapshot = self.stamp(&resolved).await?;
                     store
                         .cache_put(
                             &resolved.dataset,
                             &resolved.subject,
                             &name,
                             &output.to_string(),
+                            snapshot,
                         )
                         .await?;
                     store

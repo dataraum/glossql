@@ -16,6 +16,6 @@ mod types;
 pub use schemas::{GROUNDING_SCHEMA, grounding_schema};
 pub use store::{Scope, Store};
 pub use types::{
-    Actor, ActorKind, AttestRow, CacheRow, CollapsedRow, Error, FunctionRow, RawRow, Result,
-    WitnessRow,
+    Actor, ActorKind, AttestRow, CacheRow, CollapsedRow, Error, FunctionRow, RawRow,
+    RecipeAdmission, RecipeRow, Result, WitnessRow,
 };

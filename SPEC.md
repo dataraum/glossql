@@ -59,12 +59,13 @@ from a source. A **dataset** is the working unit: one dataset per workspace
 (the binding lives in the app, not the grammar).
 
 ```sql
-DECLARE SOURCE erp_export SET (type: parquet, location: 'lake/erp/*.parquet');
+DECLARE SOURCE erp_export SET (type: parquet, location: 'lake/erp');
 DECLARE SOURCE crm SET (type: relational_db, location: 'postgres://crm.internal/prod', via: crm_prod);
 ```
 
 - `type`: `relational_db | parquet | csv | json`.
-- `location`: url or path — never credentials.
+- `location`: a url; for file sources, the root directory recipe paths
+  resolve under — never credentials.
 - `via`: a reference to engine-held secrets. Secrets never appear in
   statements, so they never enter the log.
 
@@ -72,9 +73,15 @@ DECLARE SOURCE crm SET (type: relational_db, location: 'postgres://crm.internal/
 DECLARE RECIPE segments ON fin FROM crm AS $$SELECT id, segment FROM customer_segments$$;
 ```
 
-The recipe SQL runs **at the source, in the source's dialect**; the result
-lands as table `segments` in dataset `fin`. Statement identity is content
-hash (implementation) — re-declaring an unchanged recipe is a no-op.
+The recipe SQL runs **at the source**: a relational source executes it in
+its own dialect; at a file source the server runs it, with `read_parquet` /
+`read_csv` / `read_json` resolving paths under the source's location. The
+result lands as table `segments` in dataset `fin` — csv and json land raw
+all-VARCHAR, parquet keeps its file types; typing is the typed view's
+business (`corpus/11`). Statement identity is content: an unchanged
+re-declaration is a no-op; a changed one rebuilds the table, but is refused
+while glosses exist under it — a different SQL is a different table, declare
+it under another name.
 
 ```sql
 DECLARE DATASET fin SET (purpose: 'working-capital analysis over ERP and CRM exports');
@@ -233,6 +240,11 @@ GLOSS fk_note ON orders.customer_id -> customers.id AS $${"value": "2% orphaned 
 DELETE FROM glossary WHERE subject = 'orders.amount' AND aspect = 'unit';
 ```
 
+- Every row carries `snapshot_id` — the subject's table snapshot at write
+  time (NULL for dataset-level subjects and pair paths). Provenance and
+  staleness are a join against the table's snapshot history, never a guess.
+  The read shapes in §5.3 are unchanged; the column lives on the relation.
+
 ### 5.3 Reading
 
 One table function, plain SQL:
@@ -321,8 +333,9 @@ SELECT infer_types() FROM orders;
 
 The first run computes and caches; later selects read the cache. The cache
 is an ordinary relation, like the glossary, named `cache`: one row per
-(subject, function) — `(subject, function, body, computed_at)`. Re-running
-is removal, not a modifier — DELETE at whatever
+(subject, function) — `(subject, function, body, computed_at, snapshot_id)`,
+the snapshot being the subject's table state the run computed against
+(§5.2). Re-running is removal, not a modifier — DELETE at whatever
 grain the WHERE clause picks, and select again:
 
 ```sql

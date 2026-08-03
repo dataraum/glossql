@@ -59,7 +59,7 @@ fn human() -> Actor {
 async fn write(store: &Store, actor: &Actor, statement: &str) -> Result<(), Error> {
     let g = gloss(statement);
     store
-        .gloss("fin", actor, &g.aspect.value, "orders.amount", &g.body)
+        .gloss("fin", actor, &g.aspect.value, "orders.amount", &g.body, None)
         .await
 }
 
@@ -376,10 +376,10 @@ async fn function_scope_gates_visibility() {
 #[tokio::test]
 async fn cache_serves_the_latest_row_per_subject_and_function() {
     let s = store().await;
-    s.cache_put("fin", "orders", "profile", r#"{"n": 1}"#)
+    s.cache_put("fin", "orders", "profile", r#"{"n": 1}"#, None)
         .await
         .unwrap();
-    s.cache_put("fin", "orders", "profile", r#"{"n": 2}"#)
+    s.cache_put("fin", "orders", "profile", r#"{"n": 2}"#, None)
         .await
         .unwrap();
     let row = s
@@ -413,4 +413,60 @@ async fn forwarded_deletes_only_touch_the_two_relations() {
         .await
         .unwrap_err();
     assert!(matches!(e, Error::ForwardRejected(_)), "{e}");
+}
+
+// -- recipe admission (SPEC.md §3) ----------------------------------------
+
+#[tokio::test]
+async fn recipe_redeclare_is_content_idempotent_but_refused_once_glossed() {
+    use glossql_glossary::RecipeAdmission;
+
+    let s = store().await;
+    for setup in [
+        "DECLARE DATASET fin SET (purpose: 'test');",
+        "DECLARE SOURCE erp SET (type: parquet, location: 'lake/erp');",
+    ] {
+        match decl(setup) {
+            Declaration::Dataset(d) => s.declare_dataset(&d).await.unwrap(),
+            Declaration::Source(d) => s.declare_source(&d).await.unwrap(),
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+    let recipe = |sql: &str| match decl(sql) {
+        Declaration::Recipe(r) => r,
+        other => panic!("not a recipe: {other:?}"),
+    };
+
+    let v1 = recipe("DECLARE RECIPE orders ON fin FROM erp AS $$SELECT * FROM read_parquet('orders/*.parquet')$$;");
+    assert_eq!(s.declare_recipe(&v1).await.unwrap(), RecipeAdmission::Created);
+    assert_eq!(
+        s.declare_recipe(&v1).await.unwrap(),
+        RecipeAdmission::Unchanged
+    );
+
+    // No glosses yet: a different SQL replaces the table.
+    let v2 = recipe("DECLARE RECIPE orders ON fin FROM erp AS $$SELECT * FROM read_parquet('orders_v2/*.parquet')$$;");
+    assert_eq!(
+        s.declare_recipe(&v2).await.unwrap(),
+        RecipeAdmission::Replaced
+    );
+
+    // A gloss under the table pins it — a different SQL is a different table.
+    write(
+        &s,
+        &agent(),
+        r#"GLOSS unit ON orders.amount AS $${"value": "EUR"}$$;"#,
+    )
+    .await
+    .unwrap();
+    let e = s.declare_recipe(&v1).await.unwrap_err();
+    assert!(
+        matches!(e, Error::RecipeInUse { ref table, glosses: 1 } if table == "orders"),
+        "{e}"
+    );
+    // The unchanged spelling still no-ops.
+    assert_eq!(
+        s.declare_recipe(&v2).await.unwrap(),
+        RecipeAdmission::Unchanged
+    );
 }

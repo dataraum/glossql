@@ -47,10 +47,14 @@ pair              = name, ":", ( name | string | number ) ;
 
 recipe_decl       = "RECIPE", name, "ON", name, "FROM", name, "AS", dollar ;
                     (* RECIPE r ON dataset FROM source AS $$ <sql> $$ — the
-                       sql runs at the source, in the source's dialect;
-                       dollar-quoted so foreign-dialect text never meets the
-                       host tokenizer; the result lands as table r in the
-                       dataset *)
+                       sql runs at the source: a relational source executes
+                       it in its own dialect; at a file source the server
+                       runs it, read_parquet/read_csv/read_json resolving
+                       under the source's location. Dollar-quoted so
+                       foreign-dialect text never meets the host tokenizer;
+                       the result lands as table r in the dataset. Unchanged
+                       re-declaration is a no-op; changed is refused while
+                       glosses exist under the table *)
 
 (* -- datasets ----------------------------------------------------------- *)
 

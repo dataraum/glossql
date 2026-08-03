@@ -1,0 +1,74 @@
+//! Batch normalization before a recipe result lands as an Iceberg table.
+//!
+//! Two maps: `compat` folds Arrow types Iceberg 0.10.1 rejects or would
+//! promote to format-v3 types onto their v2 equivalents (ns timestamps →
+//! µs, `UInt64` → `Int64`, …); `force_utf8` lands every column as a string
+//! — the raw all-VARCHAR shape csv/json sources import as, typing being the
+//! typed view's business, not the import's.
+
+use std::sync::Arc;
+
+use datafusion::arrow::array::RecordBatch;
+use datafusion::arrow::compute::cast;
+use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
+
+use crate::{Error, Result};
+
+fn compat_type(t: &DataType) -> DataType {
+    match t {
+        DataType::Timestamp(TimeUnit::Microsecond, _) => t.clone(),
+        DataType::Timestamp(_, tz) => DataType::Timestamp(TimeUnit::Microsecond, tz.clone()),
+        DataType::Time32(_) | DataType::Time64(_) => DataType::Time64(TimeUnit::Microsecond),
+        DataType::Date64 => DataType::Date32,
+        DataType::UInt64 => DataType::Int64,
+        DataType::Float16 => DataType::Float32,
+        // Iceberg reads these back as Utf8 / LargeBinary; land them that way
+        DataType::Utf8View | DataType::LargeUtf8 => DataType::Utf8,
+        DataType::Binary | DataType::BinaryView => DataType::LargeBinary,
+        other => other.clone(),
+    }
+}
+
+fn recast(
+    schema: &SchemaRef,
+    batches: Vec<RecordBatch>,
+    target: impl Fn(&Field) -> DataType,
+) -> Result<(SchemaRef, Vec<RecordBatch>)> {
+    let fields: Vec<Field> = schema
+        .fields()
+        .iter()
+        .map(|f| Field::new(f.name(), target(f), f.is_nullable()))
+        .collect();
+    let out_schema = Arc::new(Schema::new(fields));
+    if out_schema.fields() == schema.fields() {
+        return Ok((out_schema, batches));
+    }
+    let out_batches = batches
+        .into_iter()
+        .map(|batch| {
+            let columns = batch
+                .columns()
+                .iter()
+                .zip(out_schema.fields())
+                .map(|(col, field)| cast(col, field.data_type()))
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .map_err(|e| Error::Batches(e.to_string()))?;
+            RecordBatch::try_new(Arc::clone(&out_schema), columns)
+                .map_err(|e| Error::Batches(e.to_string()))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok((out_schema, out_batches))
+}
+
+/// Fold types Iceberg v2 cannot hold onto their nearest v2 shape.
+pub fn compat(schema: SchemaRef, batches: Vec<RecordBatch>) -> Result<(SchemaRef, Vec<RecordBatch>)> {
+    recast(&schema, batches, |f| compat_type(f.data_type()))
+}
+
+/// The raw import shape: every column a string.
+pub fn force_utf8(
+    schema: SchemaRef,
+    batches: Vec<RecordBatch>,
+) -> Result<(SchemaRef, Vec<RecordBatch>)> {
+    recast(&schema, batches, |_| DataType::Utf8)
+}

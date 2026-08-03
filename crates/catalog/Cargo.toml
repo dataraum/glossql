@@ -1,0 +1,20 @@
+[package]
+name = "glossql-catalog"
+version = "0.1.0"
+edition.workspace = true
+
+[lib]
+name = "glossql_catalog"
+path = "src/lib.rs"
+
+[dependencies]
+datafusion = { workspace = true }
+iceberg = { workspace = true }
+iceberg-catalog-sql = { workspace = true }
+iceberg-datafusion = { workspace = true }
+sqlx = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

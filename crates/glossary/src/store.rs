@@ -4,7 +4,6 @@
 //! paths; supersession is the `NOT EXISTS` read predicate, never an update.
 
 use serde_json::Value;
-use sqlx::AssertSqlSafe;
 use sqlx::Row as _;
 use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
 
@@ -15,8 +14,8 @@ use glossql_parser::{
 
 use crate::schemas::{grounding_schema, returns_carries_attest_shape};
 use crate::types::{
-    Actor, ActorKind, AttestRow, CacheRow, CollapsedRow, Error, FunctionRow, RawRow, Result,
-    WitnessRow,
+    Actor, ActorKind, AttestRow, CacheRow, CollapsedRow, Error, FunctionRow, RawRow,
+    RecipeAdmission, RecipeRow, Result, WitnessRow,
 };
 
 /// What a read sweeps over (SPEC.md §5.3, §7.2): the whole dataset, or a
@@ -103,7 +102,8 @@ CREATE TABLE IF NOT EXISTS glossary (
   actor_kind TEXT NOT NULL,
   actor_id TEXT NOT NULL,
   body TEXT NOT NULL,
-  written_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+  written_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  snapshot_id INTEGER
 );
 CREATE TABLE IF NOT EXISTS cache (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -111,7 +111,8 @@ CREATE TABLE IF NOT EXISTS cache (
   subject TEXT NOT NULL,
   function TEXT NOT NULL,
   body TEXT NOT NULL,
-  computed_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+  computed_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+  snapshot_id INTEGER
 );
 "#;
 
@@ -158,23 +159,75 @@ impl Store {
         Ok(())
     }
 
-    /// Statement identity is content: re-declaring an unchanged recipe
-    /// replaces it with itself (SPEC.md §3).
-    pub async fn declare_recipe(&self, decl: &RecipeDecl) -> Result<()> {
-        self.require("dataset", "datasets", decl.dataset.value.as_str())
-            .await?;
+    /// Statement identity is content (SPEC.md §3): an unchanged recipe is a
+    /// no-op; a changed one is refused while glosses exist under the table —
+    /// a different SQL is a different table, declare it under another name.
+    pub async fn declare_recipe(&self, decl: &RecipeDecl) -> Result<RecipeAdmission> {
+        let dataset = decl.dataset.value.as_str();
+        let table = decl.table.value.as_str();
+        self.require("dataset", "datasets", dataset).await?;
         self.require("source", "sources", decl.source.value.as_str())
             .await?;
+        let existing = self.recipe(dataset, table).await?;
+        let admission = match &existing {
+            None => RecipeAdmission::Created,
+            Some(prior) if prior.source == decl.source.value && prior.sql == decl.sql => {
+                return Ok(RecipeAdmission::Unchanged);
+            }
+            Some(_) => {
+                let (pred, binds) = Scope::Subject(table.to_string()).predicate("subject");
+                let sql =
+                    format!("SELECT count(*) AS n FROM glossary WHERE dataset = ? AND {pred}");
+                let mut q = sqlx::query(&sql).bind(dataset);
+                for b in &binds {
+                    q = q.bind(b);
+                }
+                let glosses: i64 = q.fetch_one(&self.pool).await?.get("n");
+                if glosses > 0 {
+                    return Err(Error::RecipeInUse {
+                        table: table.into(),
+                        glosses,
+                    });
+                }
+                RecipeAdmission::Replaced
+            }
+        };
         sqlx::query(
             "INSERT OR REPLACE INTO recipes (dataset, table_name, source, sql) VALUES (?, ?, ?, ?)",
         )
-        .bind(decl.dataset.value.as_str())
-        .bind(decl.table.value.as_str())
+        .bind(dataset)
+        .bind(table)
         .bind(decl.source.value.as_str())
         .bind(decl.sql.as_str())
         .execute(&self.pool)
         .await?;
-        Ok(())
+        Ok(admission)
+    }
+
+    pub async fn recipe(&self, dataset: &str, table: &str) -> Result<Option<RecipeRow>> {
+        let row = sqlx::query(
+            "SELECT source, sql FROM recipes WHERE dataset = ? AND table_name = ?",
+        )
+        .bind(dataset)
+        .bind(table)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|r| RecipeRow {
+            source: r.get("source"),
+            sql: r.get("sql"),
+        }))
+    }
+
+    pub async fn source_settings(&self, name: &str) -> Result<Option<Value>> {
+        let row = sqlx::query("SELECT settings FROM sources WHERE name = ?")
+            .bind(name)
+            .fetch_optional(&self.pool)
+            .await?;
+        row.map(|r| {
+            serde_json::from_str(&r.get::<String, _>("settings"))
+                .map_err(|e| Error::Corrupt(e.to_string()))
+        })
+        .transpose()
     }
 
     /// Endpoints arrive canonical (dataset-relative `table.column`); the
@@ -350,6 +403,9 @@ impl Store {
 
     /// Admission by aspect kind (SPEC.md §5.2), then a plain insert; the
     /// supersession key (subject, aspect, actor kind) is applied by reads.
+    /// `snapshot_id` is the subject's table snapshot at write time — `None`
+    /// when the subject has no table (dataset-level, pair paths) or no data
+    /// plane is attached.
     pub async fn gloss(
         &self,
         dataset: &str,
@@ -357,6 +413,7 @@ impl Store {
         aspect: &str,
         subject: &str,
         body: &JsonBody,
+        snapshot_id: Option<i64>,
     ) -> Result<()> {
         let (schema, kind) = self.aspect(aspect).await?.ok_or_else(|| Error::Unknown {
             what: "aspect",
@@ -386,8 +443,8 @@ impl Store {
             }
         }
         sqlx::query(
-            "INSERT INTO glossary (dataset, subject, aspect, actor_kind, actor_id, body) \
-             VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO glossary (dataset, subject, aspect, actor_kind, actor_id, body, snapshot_id) \
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(dataset)
         .bind(subject)
@@ -395,6 +452,7 @@ impl Store {
         .bind(actor.kind.as_str())
         .bind(actor.id.as_str())
         .bind(body.raw.as_str())
+        .bind(snapshot_id)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -429,7 +487,7 @@ impl Store {
                  AND n.aspect = g.aspect AND n.actor_kind = g.actor_kind AND n.id > g.id) \
              ORDER BY g.subject, g.aspect, g.actor_kind"
         );
-        let mut q = sqlx::query(AssertSqlSafe(sql)).bind(dataset);
+        let mut q = sqlx::query(&sql).bind(dataset);
         for b in &binds {
             q = q.bind(b);
         }
@@ -603,14 +661,19 @@ impl Store {
         subject: &str,
         function: &str,
         body: &str,
+        snapshot_id: Option<i64>,
     ) -> Result<()> {
-        sqlx::query("INSERT INTO cache (dataset, subject, function, body) VALUES (?, ?, ?, ?)")
-            .bind(dataset)
-            .bind(subject)
-            .bind(function)
-            .bind(body)
-            .execute(&self.pool)
-            .await?;
+        sqlx::query(
+            "INSERT INTO cache (dataset, subject, function, body, snapshot_id) \
+             VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(dataset)
+        .bind(subject)
+        .bind(function)
+        .bind(body)
+        .bind(snapshot_id)
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 
@@ -629,7 +692,7 @@ impl Store {
                  AND n.function = c.function AND n.id > c.id) \
              ORDER BY c.subject"
         );
-        let mut q = sqlx::query(AssertSqlSafe(sql)).bind(dataset).bind(function);
+        let mut q = sqlx::query(&sql).bind(dataset).bind(function);
         for b in &binds {
             q = q.bind(b);
         }
@@ -649,9 +712,7 @@ impl Store {
         if target != "glossary" && target != "cache" {
             return Err(Error::ForwardRejected(target.into()));
         }
-        let done = sqlx::raw_sql(AssertSqlSafe(sql.to_string()))
-            .execute(&self.pool)
-            .await?;
+        let done = sqlx::raw_sql(sql).execute(&self.pool).await?;
         Ok(done.rows_affected())
     }
 
@@ -659,11 +720,13 @@ impl Store {
     pub async fn relation_rows(&self, table: &str) -> Result<Vec<Vec<Option<String>>>> {
         let sql = match table {
             "glossary" => {
-                "SELECT dataset, subject, aspect, actor_kind, actor_id, body, written_at \
+                "SELECT dataset, subject, aspect, actor_kind, actor_id, body, written_at, \
+                        CAST(snapshot_id AS TEXT) AS snapshot_id \
                  FROM glossary ORDER BY id"
             }
             "cache" => {
-                "SELECT dataset, subject, function, body, computed_at \
+                "SELECT dataset, subject, function, body, computed_at, \
+                        CAST(snapshot_id AS TEXT) AS snapshot_id \
                  FROM cache ORDER BY id"
             }
             other => return Err(Error::ForwardRejected(other.into())),
@@ -777,7 +840,7 @@ impl Store {
 
     async fn require(&self, what: &'static str, table: &str, name: &str) -> Result<()> {
         let sql = format!("SELECT 1 FROM {table} WHERE name = ?");
-        if sqlx::query(AssertSqlSafe(sql))
+        if sqlx::query(&sql)
             .bind(name)
             .fetch_optional(&self.pool)
             .await?

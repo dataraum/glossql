@@ -29,7 +29,7 @@ Human registers the source; recipes land the tables:
 
 ```glossql
 USE fin;
-DECLARE SOURCE erp_export SET (type: parquet, location: 'lake/erp/*.parquet');
+DECLARE SOURCE erp_export SET (type: parquet, location: 'lake/erp');
 DECLARE RECIPE orders ON fin FROM erp_export AS $$SELECT * FROM read_parquet('orders/*.parquet')$$;
 ```
 
@@ -97,6 +97,11 @@ that the grammar knows about.
 
 ## Findings
 
+- **Location is a root, not a glob** (respelled 2026-08-04, with the M3
+  build-out): the original transcription had `location:
+  'lake/erp/*.parquet'` while the recipe read `'orders/*.parquet'` — two
+  globs that cannot compose. The source names the root directory; the globs
+  belong to recipe SQL, resolving under it.
 - **The flow transcribes with no flow construct.** Sequencing, retries,
   budgets, the replay-or-surface loop, and the column-limit gate are
   orchestration — app concern. The grammar carries no ordering surface at

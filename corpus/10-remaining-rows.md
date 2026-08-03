@@ -6,7 +6,7 @@ table shape (engine `schema.sql`).
 ## Sources, recipes (`sources`, `recipe_hash`)
 
 ```glossql
-DECLARE SOURCE erp_export SET (type: parquet, location: 'lake/erp/*.parquet');
+DECLARE SOURCE erp_export SET (type: parquet, location: 'lake/erp');
 DECLARE SOURCE crm SET (type: relational_db, location: 'postgres://crm.internal/prod', via: crm_prod);
 DECLARE RECIPE segments ON fin FROM crm AS $$SELECT id, segment FROM customer_segments$$;
 ```
