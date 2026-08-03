@@ -1,59 +1,37 @@
-# 09 · Answer-agent served context vs GLOSS + DECLARE SERVING — RESOLVED (sprints 8, 10)
+# 09 · Answer-agent served context — DROPPED BY DESIGN (the agent experiment)
 
 Source: `dataraum-context/packages/cockpit/src/tools/query-context.ts` (+
 `query.ts:813-848`). Nine blocks served, byte-identical per session as a cached
 prompt prefix (DAT-660): schema (prefer-enriched), dimensions, relationships,
-entities, drivers, grain, vocabulary, conventions, business_concepts.
+entities, drivers, grain, vocabulary, conventions, business_concepts. ~40% of
+every block is engineer-authored instructional prose; curation disclosure
+("Showing 9 of 41 catalogued dimensions…") and alias confirmation gates are
+load-bearing serving semantics (DAT-622/671).
 
-## Transcription — the serving policy §3.4 can state
+## Transcription
+
+None — deliberately. The language has no serving construct: reading is
+`GLOSSARY()` / `ATTEST()` and plain SQL; context assembly is an agent skill,
+not grammar. The old track's `DECLARE SERVING` policy (PREFER / DIMENSION
+BUDGET / RESTRICT JOINS / INCLUDE) and its disclosure guarantees are gone with
+the serving document.
 
 ```glossql
-DECLARE SERVING answer_agent
-  PREFER enriched
-  DIMENSION BUDGET 12
-  RESTRICT JOINS TO DECLARED RELATIONSHIPS
-  INCLUDE (conventions, drivers, grain_caveats)
-  BY USER analyst;
-
-GLOSS (SELECT sum(amount) FROM orders GROUP BY channel)
-  USING SERVING answer_agent;
+SELECT * FROM GLOSSARY(fin.orders);
+SELECT * FROM GLOSSARY(fin.orders.amount, all => true);
+SELECT subject, band FROM ATTEST(fin.trial_balance) WHERE band = 'red';
 ```
-
-## Resolution (sprint 10): disclosure is a mechanism guarantee, not a clause
-
-There is deliberately no `DISCLOSE` clause: §3.5 makes curation disclosure and
-confidence-state marking guarantees of the `GLOSS` mechanism itself — every
-cut is stated with count and reason, because silence converts to false
-abstention (DAT-622/671). Per-convention routing is the `audience` aspect
-(§3.4). The instructional prose is renderer configuration, excluded by §7 and
-consistent with §10's claim as scoped in sprint 8.
 
 ## Findings
 
-Covered by authored statements + derived state: table inventory and the
-prefer-enriched cut, column meanings, stock/flow markers, join whitelist,
-dimensions with priority, hierarchies, entity/grain/time/identity, conventions
-(minus per-convention `targets`, fixture 02), drivers and readiness as derived.
-The one-mechanism/one-policy architecture matches the running system's shape.
-
-Served content with **no authored statement that could produce it**:
-
-1. **Instructional prose** — ~40% of every block is engineer-authored teaching
-   text ("Ground EVERY join on a pair listed here … abstain", "(additive) is a
-   flow: SUM it…"). §3.4's clauses select *content*; nothing authors the words.
-   §7 excludes prompt config — then GLOSS output is f(log, lake,
-   renderer-prose), and §7 contradicts §10's "a cockpit feature that cannot be
-   written this way is a grammar gap" on the single most-consumed artifact.
-2. **Curation-disclosure arithmetic** — "Showing 9 of 41 catalogued dimensions —
-   the other 32 were never assessed, not rejected" (DAT-622/671: silence converts
-   to false abstention). Load-bearing serving semantics; no clause.
-3. **Alias confirmation gate** — confirmed → "group by canonical only";
-   unconfirmed → "do NOT merge". A serving rule keyed to adjudication state; no
-   clause.
-4. **look_values grounding loop** — serves engine-internal column ids so a tool
-   can be called; ids are §1.2(5)-banned surrogate identity.
-5. Relation schemas for everything in §3.5 are unspecified (spec-flagged), so
-   whether e.g. fan-out caution (`introduces_duplicates`) is reachable is open.
-
-Verdict: **SEMANTICS UNDEFINED** (serving clause list is a sketch by the spec's
-own flag) + **INFORMATION LOST** (instructional prose unproducible from the log).
+- **DROPPED BY DESIGN — and it is the biggest bet in the language.** The
+  nine-block served context has no grammar backing; whether agents write
+  glossql directly, use skills over these reads, or need a curated layer is
+  exactly the experiment the simplification runs.
+- The running system's fieldwork is the benchmark the experiment must meet:
+  byte-identical cached context prefix per session (DAT-660), curation
+  disclosure so silence doesn't convert to false abstention (DAT-622/671),
+  alias confirmation gates.
+- Nothing to fix in the grammar; everything to learn in the experiment. If the
+  experiment fails, the lesson returns as skills or as a read-side construct —
+  not as this fixture's old `DECLARE SERVING`.

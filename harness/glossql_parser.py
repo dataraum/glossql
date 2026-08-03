@@ -1,22 +1,15 @@
-"""Disposable §9.1 harness: statement-level glossql parser.
+"""Disposable §9.1 harness: statement-level parser for the simplified glossql.
 
-Follows grammar.ebnf: statement forms are enforced strictly, clause payloads are
-typed per clause (string / ident / number / balanced parens / expression span).
-Embedded substrate SQL (DECLARE VIEW bodies, GLOSS queries, reading statements)
-is consumed as opaque balanced spans, not parsed.
-
-Known limitations, which are themselves findings about the spec:
-- U1: provenance `BY` after an opaque SQL body is ambiguous with GROUP BY /
-  ORDER BY; VIEW bodies are therefore parsed from the end (last BY + actor
-  class). A reserved delimiter would remove this.
-- U5 (new, found while building this): the spec has no reserved-word rule.
-  Clause heads (IN, AS, FROM, WHERE, UNIT, ...) are legal inside transported
-  expressions, so unparenthesized expression spans that contain them
-  mis-delimit. Fixtures avoid the collision; the grammar cannot, as specified.
+Follows grammar.ebnf (2026-08-03). Statement forms are enforced strictly; JSON
+payloads (aspect schemas, gloss bodies, ACCEPTS/RETURNS) are captured as single
+tokens and validated with json.loads. Substrate SQL (recipes, views, SELECT
+bodies, DELETE) is consumed opaquely — except GLOSSARY(...) and ATTEST(...)
+calls, whose argument shapes are validated wherever they appear.
 """
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 
@@ -27,33 +20,21 @@ TOKEN_RE = re.compile(
       | (?P<dqident>"(?:[^"]|"")*")
       | (?P<num>\d+(?:\.\d+)?)
       | (?P<ident>[A-Za-z_][A-Za-z0-9_$]*)
-      | (?P<assign>:=)
+      | (?P<relop><->|->)
+      | (?P<fatarrow>=>)
       | (?P<punct>.)
     """,
     re.VERBOSE | re.DOTALL,
 )
 
-ACTOR_CLASSES = {"USER", "AGENT", "DETECTOR", "SEED", "CALIBRATION"}
-NAMED_CLASSES = {
-    "SOURCE", "TABLE", "VIEW", "CONCEPT", "CONVENTION", "METRIC",
-    "VALIDATION", "ASPECT", "HIERARCHY", "SERVING",
-}
-POLICY_KINDS = {"readiness", "contract", "interpretation"}
-# First tokens that can open a clause; used to terminate expression spans.
-CLAUSE_HEADS = {
-    "KIND", "DESCRIPTION", "INDICATORS", "EXCLUDE", "UNIT", "ORDERING",
-    "STATEMENT", "AS", "PARAMETER", "ON", "OVER", "TOLERANCE", "SEVERITY",
-    "GUIDANCE", "OUTCOME", "CONVENTIONS", "DIRECTIONS", "VALUES",
-    "TERMINAL", "ARGUMENTS", "OPTIONS", "DERIVED", "THRESHOLDS", "WARNING",
-    "FROM", "CONNECTION", "VIA", "IN",
-    "LEVELS", "WHERE", "BANDS", "WEIGHT", "OVERALL", "BLOCK", "PREFER",
-    "DIMENSION", "RESTRICT", "INCLUDE", "CARDINALITY", "REJECTED",
-}
+ASPECT_KINDS = {"MEASUREMENT", "FACT", "QUERY"}
+DECL_CLASSES = {"SOURCE", "RECIPE", "DATASET", "RELATIONSHIP", "ASPECT",
+                "FUNCTION", "WITNESS"}
 
 
 @dataclass
 class Tok:
-    kind: str  # str | num | ident | assign | punct
+    kind: str  # str | num | ident | relop | fatarrow | json | punct
     text: str
 
     def up(self) -> str:
@@ -64,13 +45,44 @@ class ParseError(Exception):
     pass
 
 
+def _capture_json(src: str, start: int) -> int:
+    """src[start] == '{'. Return end index of the balanced JSON object,
+    respecting double-quoted strings with backslash escapes."""
+    depth, i, in_str = 0, start, False
+    while i < len(src):
+        c = src[i]
+        if in_str:
+            if c == "\\":
+                i += 1
+            elif c == '"':
+                in_str = False
+        elif c == '"':
+            in_str = True
+        elif c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return i + 1
+        i += 1
+    raise ParseError("unbalanced { in JSON payload")
+
+
 def tokenize(src: str) -> list[Tok]:
     toks: list[Tok] = []
-    for m in TOKEN_RE.finditer(src):
+    pos = 0
+    while pos < len(src):
+        m = TOKEN_RE.match(src, pos)
         kind = m.lastgroup
+        if kind == "punct" and m.group() == "{":
+            end = _capture_json(src, pos)
+            toks.append(Tok("json", src[pos:end]))
+            pos = end
+            continue
+        pos = m.end()
         if kind in ("ws", "comment"):
             continue
-        if kind == "dqident":  # sprint 4 fork B: quoted identifier — never a keyword
+        if kind == "dqident":  # quoted identifier — never a keyword
             kind = "ident"
         toks.append(Tok(kind, m.group()))
     return toks
@@ -108,6 +120,10 @@ class P:
         t = self.peek(ahead)
         return t is not None and t.kind == "ident" and t.up() == kw
 
+    def at_punct(self, ch: str, ahead: int = 0) -> bool:
+        t = self.peek(ahead)
+        return t is not None and t.kind == "punct" and t.text == ch
+
     def take(self) -> Tok:
         t = self.peek()
         if t is None:
@@ -143,297 +159,169 @@ class P:
             raise ParseError(f"expected number, got {t.text!r}")
         return t.text
 
+    def json_payload(self, what: str = "JSON payload") -> None:
+        t = self.take()
+        if t.kind != "json":
+            raise ParseError(f"expected {what} {{...}}, got {t.text!r}")
+        try:
+            json.loads(t.text)
+        except json.JSONDecodeError as e:
+            raise ParseError(f"invalid JSON in {what}: {e}") from None
+
     def done(self) -> bool:
         return self.i >= len(self.toks)
 
-    def at_provenance(self) -> bool:
-        if not self.at_kw("BY"):
-            return False
-        nxt = self.peek(1)
-        return nxt is not None and nxt.kind == "ident" and nxt.up() in ACTOR_CLASSES
-
-    def balanced_parens(self) -> None:
-        self.expect_punct("(")
-        depth = 1
-        while depth:
-            t = self.take()
-            if t.kind == "punct" and t.text == "(":
-                depth += 1
-            elif t.kind == "punct" and t.text == ")":
-                depth -= 1
-
-    def qualified(self) -> str:
-        name = self.ident("subject")
-        if self.peek() and self.peek().kind == "punct" and self.peek().text == ".":
-            self.take()
-            name += "." + self.ident("column")
-        return name
-
-    def value(self) -> None:
-        t = self.peek()
-        if t is None:
-            raise ParseError("expected value")
-        if t.kind in ("str", "num"):
-            self.take()
-        elif t.kind == "punct" and t.text == "(":
-            self.balanced_parens()
-        elif t.kind == "ident":
-            self.qualified()
-        else:
-            raise ParseError(f"expected value, got {t.text!r}")
-
-    def expr_span(self, stop_extra: set[str] = frozenset()) -> int:
-        """Opaque expression: consume until a clause head / provenance / end.
-        Leading parenthesized groups and function calls are consumed atomically."""
-        consumed = 0
-        while not self.done():
-            if self.at_provenance():
-                break
-            t = self.peek()
-            if t.kind == "ident" and (t.up() in CLAUSE_HEADS or t.up() in stop_extra):
-                break
-            if t.kind == "punct" and t.text == "(":
-                self.balanced_parens()
-            else:
-                self.take()
-            consumed += 1
-        if consumed == 0:
-            raise ParseError("expected expression")
-        return consumed
-
-    # -- provenance -------------------------------------------------------
-    def provenance(self) -> None:
-        self.expect_kw("BY")
-        t = self.take()
-        if not (t.kind == "ident" and t.up() in ACTOR_CLASSES):
-            raise ParseError(f"expected actor class, got {t.text!r}")
-        actor_class = t.up()
-        t = self.take()
-        if t.kind not in ("ident", "str"):
-            raise ParseError(f"expected actor name, got {t.text!r}")
-        if actor_class == "DETECTOR" and self.at_kw("WITNESS"):  # sprint 1 fork B
-            self.take()
-            self.ident("witness name")
-        if self.at_kw("CONFIDENCE"):
-            self.take()
-            self.number()
-        if self.at_kw("EVIDENCE"):
-            self.take()
-            self.string("evidence ref")
+    def end(self) -> None:
         if not self.done():
-            raise ParseError(f"trailing tokens after provenance: {self.peek().text!r}")
+            raise ParseError(f"trailing tokens: {self.peek().text!r}")
 
-    # -- clause machinery -------------------------------------------------
-    def clause(self) -> None:
-        kw = self.take()
-        if kw.kind != "ident":
-            raise ParseError(f"expected clause keyword, got {kw.text!r}")
-        k = kw.up()
-        if k in ("DESCRIPTION", "STATEMENT", "GUIDANCE", "OUTCOME"):
-            self.string(f"{k} payload")
-        elif k == "KIND" or k == "SEVERITY" or k == "PREFER" or k == "CONNECTION":
-            self.ident(f"{k} payload")
-        elif k in ("INDICATORS", "EXCLUDE", "OVER", "DIRECTIONS", "VALUES",
-                   "INCLUDE", "LEVELS", "BANDS", "TERMINAL", "ARGUMENTS",
-                   "CONVENTIONS", "THRESHOLDS"):
-            self.balanced_parens()
-        elif k == "ORDERING":
-            if self.peek() and self.peek().kind == "punct" and self.peek().text == "(":
-                self.balanced_parens()
-            else:
-                self.ident("ORDERING payload")
-        elif k == "UNIT":
-            if self.at_kw("FROM"):
-                self.take()
-                self.ident("concept")
-            else:
-                self.string("unit literal")
-        elif k == "TOLERANCE":
-            self.number()
-        elif k == "ON":
-            self.expect_kw("CYCLES")
-            self.balanced_parens()
-        elif k == "PARAMETER":  # sprint 6 fork B
-            self.ident("parameter name")
-            if self.at_kw("DEFAULT"):
-                self.take()
-                self.value()
-            if self.at_kw("OPTIONS"):
-                self.take()
-                self.balanced_parens()
-            if self.at_kw("DERIVED"):
-                self.take()
-                self.expect_kw("BY")
-                self.ident("derivation mechanism")
-        elif k == "AS":
-            if self.peek() and self.peek().kind == "str":
-                self.take()  # transported recipe body
-            else:
-                self.expr_span()
-        elif k == "FROM":
+    # -- shared shapes ----------------------------------------------------
+    def dotted(self, what: str, most: int = 3) -> int:
+        """name{.name} up to `most` segments; returns segment count."""
+        self.ident(what)
+        n = 1
+        while n < most and self.at_punct("."):
+            self.take()
+            self.ident(f"{what} segment")
+            n += 1
+        return n
+
+    def column_path(self) -> None:
+        n = self.dotted("column path", most=3)
+        if n < 2:
+            raise ParseError("column path needs at least table.column")
+
+    def subject(self) -> None:
+        n = self.dotted("subject", most=3)
+        if self.peek() and self.peek().kind == "relop":
+            if n < 2:
+                raise ParseError("pair path needs table.column on the left")
+            self.take()
+            self.column_path()
+
+    def pairs(self) -> None:
+        self.expect_punct("(")
+        while True:
+            self.ident("key")
+            self.expect_punct(":")
             t = self.take()
-            if t.kind not in ("ident", "str"):
-                raise ParseError(f"expected FROM payload, got {t.text!r}")
-        elif k == "VIA":
-            self.string("VIA payload")
-        elif k == "IN":
-            self.ident("relation")
-        elif k == "WHERE":
-            self.expr_span()
-        elif k == "DIMENSION":
-            self.expect_kw("BUDGET")
-            self.number()
-        elif k == "WARNING":
-            self.expect_kw("MARGIN")
-            self.number()
-        elif k == "RESTRICT":
-            for w in ("JOINS", "TO", "DECLARED", "RELATIONSHIPS"):
-                self.expect_kw(w)
-        elif k == "OVERALL":
-            self.expect_kw("THRESHOLD")
-            self.number()
-        elif k == "BLOCK":
-            self.expect_kw("ON")
-            self.balanced_parens()
-        elif k == "WEIGHT":
-            self.ident("aspect")
-            self.expect_kw("FOR")
-            self.ident("intent")
-            self.balanced_parens()
-        else:
-            raise ParseError(f"unknown clause {kw.text!r}")
+            if t.kind not in ("ident", "str", "num"):
+                raise ParseError(f"expected value after ':', got {t.text!r}")
+            if self.at_punct(")"):
+                self.take()
+                return
+            self.expect_punct(",")
 
-    def clauses_then_provenance(self) -> None:
-        while not self.done() and not self.at_provenance():
-            self.clause()
-        self.provenance()
+    def named_arg(self) -> None:
+        self.ident("argument name")
+        t = self.take()
+        if t.kind != "fatarrow":
+            raise ParseError(f"expected =>, got {t.text!r}")
+        t = self.take()
+        if t.kind not in ("ident", "str", "num"):
+            raise ParseError(f"expected argument value, got {t.text!r}")
+
+    def opaque_to_end(self, what: str) -> None:
+        if self.done():
+            raise ParseError(f"expected {what}")
+        while not self.done():
+            self.take()
 
     # -- declarations -----------------------------------------------------
-    def named_decl(self, cls: str) -> None:
-        self.ident(f"{cls} name")
-        if cls == "VIEW":
-            self.view_body_then_provenance()
-            return
-        self.clauses_then_provenance()
-
-    def view_body_then_provenance(self) -> None:
-        self.expect_kw("AS")
-        # U1: scan from the end for the trailing provenance clause.
-        j = len(self.toks) - 1
-        while j > self.i:
-            t = self.toks[j]
-            nxt = self.toks[j + 1] if j + 1 < len(self.toks) else None
-            if (t.kind == "ident" and t.up() == "BY" and nxt is not None
-                    and nxt.kind == "ident" and nxt.up() in ACTOR_CLASSES):
-                break
-            j -= 1
-        else:
-            raise ParseError("VIEW body has no trailing provenance")
-        if j <= self.i:
-            raise ParseError("empty VIEW body")
-        self.i = j
-        self.provenance()
-
-    def relationship_decl(self) -> None:
-        if self.at_kw("DISJOINT"):
-            self.take()
-            self.balanced_parens()
-            self.provenance()
-            return
-        self.rel_operand()
-        if self.at_kw("REFERENCES"):
-            self.take()
-            self.rel_operand()
-            while self.at_kw("CARDINALITY") or self.at_kw("REJECTED"):
-                if self.take().up() == "CARDINALITY":
-                    self.ident("cardinality")
-            self.provenance()
-        elif self.at_kw("PART"):
-            self.take()
-            self.expect_kw("OF")
-            self.ident("whole concept")
-            self.provenance()
-        elif self.at_kw("RECONCILES"):
-            self.take()
-            self.expect_kw("WITH")
-            self.ident("reconciling concept")  # bare concept rhs — sprint 9
-            if self.at_kw("TOLERANCE"):
-                self.take()
-                self.number()
-            self.provenance()
-        else:
-            t = self.peek()
-            got = t.text if t else "end of statement"
-            raise ParseError(f"expected REFERENCES / PART OF / RECONCILES WITH, got {got!r}")
-
-    def rel_operand(self) -> None:
-        self.ident("relationship operand")
-        t = self.peek()
-        if t and t.kind == "punct" and t.text == ".":
-            self.take()
-            self.ident("column")
-        elif t and t.kind == "punct" and t.text == "(":
-            self.balanced_parens()
-
-    def grounding_decl(self) -> None:
-        self.ident("concept")
-        self.expect_kw("IN")
-        self.ident("relation")
-        if self.at_kw("REJECTED"):  # sprint 10: negative grounding
-            self.take()
-            self.provenance()
-            return
-        self.expect_kw("AS")
-        self.expr_span()
-        if self.at_kw("WHERE"):
-            self.take()
-            self.expr_span()
-        self.provenance()
-
-    def reliability_decl(self) -> None:
+    def declaration(self) -> None:
         t = self.take()
-        if not (t.kind == "ident" and t.up() in ACTOR_CLASSES):
-            raise ParseError(f"expected actor class, got {t.text!r}")
-        actor_class = t.up()
+        cls = t.up() if t.kind == "ident" else None
+        if cls not in DECL_CLASSES:
+            raise ParseError(f"unknown declaration class {t.text!r}")
+        getattr(self, f"decl_{cls.lower()}")()
+
+    def decl_source(self) -> None:
+        self.ident("source name")
+        self.expect_kw("SET")
+        self.pairs()
+        self.end()
+
+    def decl_recipe(self) -> None:
+        self.ident("recipe name")
+        self.expect_kw("ON")
+        self.ident("dataset name")
+        self.expect_kw("FROM")
+        self.ident("source name")
+        self.expect_kw("AS")
+        self.opaque_to_end("recipe SQL body")
+
+    def decl_dataset(self) -> None:
+        self.ident("dataset name")
+        self.expect_kw("SET")
+        self.pairs()
+        self.end()
+
+    def decl_relationship(self) -> None:
+        self.column_path()
         t = self.take()
-        if t.kind not in ("ident", "str"):
-            raise ParseError(f"expected actor name, got {t.text!r}")
-        if actor_class == "DETECTOR" and self.at_kw("WITNESS"):  # sprint 1 fork B
-            self.take()
-            self.ident("witness name")
+        if t.kind != "relop":
+            raise ParseError(f"expected -> or <->, got {t.text!r}")
+        self.column_path()
+        self.end()
+
+    def decl_aspect(self) -> None:
+        self.ident("aspect name")
+        self.expect_kw("WITH")
+        self.json_payload("aspect schema")
+        self.expect_kw("AS")
+        t = self.take()
+        if not (t.kind == "ident" and t.up() in ASPECT_KINDS):
+            raise ParseError(f"expected MEASUREMENT | FACT | QUERY, got {t.text!r}")
+        self.end()
+
+    def decl_function(self) -> None:
+        self.ident("function name")
         self.expect_kw("FOR")
-        self.ident("aspect")
-        self.number()
-        self.provenance()
-
-    def policy_decl(self) -> None:
-        kind = self.ident("policy kind")
-        if kind not in POLICY_KINDS:
-            raise ParseError(f"unknown policy kind {kind!r}")
-        if (self.peek() and self.peek().kind == "ident"
-                and not self.at_kw("FOR") and not self.at_provenance()
-                and self.peek().up() not in CLAUSE_HEADS):
-            self.take()  # policy name (contract form)
-        if self.at_kw("FOR"):
+        self.ident("dataset name or GLOBAL")
+        self.expect_kw("FROM")
+        self.string("script path")
+        if self.at_kw("ACCEPTS"):
             self.take()
-            self.ident("policy key")
-        self.clauses_then_provenance()
+            if self.peek() and self.peek().kind == "json":
+                self.json_payload("ACCEPTS schema")
+            else:  # schema pointer: name#/segment/segment (placeholder syntax)
+                self.ident("schema name")
+                self.expect_punct("#")
+                if not self.at_punct("/"):
+                    raise ParseError("expected JSON pointer after '#'")
+                while self.at_punct("/"):
+                    self.take()
+                    t = self.take()
+                    if t.kind not in ("ident", "num"):
+                        raise ParseError(f"expected pointer segment, got {t.text!r}")
+        self.expect_kw("RETURNS")
+        self.json_payload("RETURNS schema")
+        self.end()
 
-    def application(self, head: str, provenance_required: bool = True) -> None:
+    def decl_witness(self) -> None:
+        self.ident("witness name")
+        self.expect_kw("ON")
+        self.ident("aspect name")
+        self.expect_kw("BY")
         self.expect_punct("(")
-        if self.at_kw("WORKSPACE"):
-            self.take()
-        else:
-            self.qualified()
-        while self.peek() and self.peek().kind == "punct" and self.peek().text == ",":
-            self.take()
-            self.ident("argument name")
+        while True:
             t = self.take()
-            if not (t.kind == "assign"):
-                raise ParseError(f"expected :=, got {t.text!r}")
-            self.value()
-        self.expect_punct(")")
-        self.provenance()
+            speaker = t.up() if t.kind == "ident" else None
+            if speaker == "FUNCTION":
+                self.ident("function name")
+            elif speaker not in ("AGENT", "HUMAN"):
+                raise ParseError(f"expected FUNCTION <fn> | AGENT | HUMAN, got {t.text!r}")
+            if self.at_punct(")"):
+                self.take()
+                break
+            self.expect_punct(",")
+        if self.at_kw("DETECTOR"):
+            self.take()
+            self.ident("detector function name")
+        if self.at_kw("THRESHOLD"):
+            self.take()
+            self.number()
+        self.end()
 
     # -- statements -------------------------------------------------------
     def statement(self) -> None:
@@ -444,104 +332,72 @@ class P:
         if head == "DECLARE":
             self.take()
             self.declaration()
-        elif head == "WITNESS":
+        elif head == "USE":
             self.take()
-            self.ident("aspect")
-            self.application("WITNESS")
-        elif head == "RETRACT":
-            self.take()
-            self.ident("aspect")
-            self.application("RETRACT")
-        elif head == "OBSERVE":
-            self.take()
-            self.observation()
+            self.ident("dataset name")
+            self.end()
         elif head == "GLOSS":
             self.take()
             self.gloss()
-        elif head == "AT":
-            self.take()
-            self.string("timestamp")
-            if self.at_kw("GLOSS"):
-                self.take()
-                self.gloss()
-            else:
-                self.passthrough()
         else:
-            self.passthrough()  # substrate SQL (SELECT ... FROM CONTEXT(...) etc.)
-
-    def declaration(self) -> None:
-        t = self.take()
-        if t.kind != "ident":
-            raise ParseError(f"expected class or aspect after DECLARE, got {t.text!r}")
-        cls = t.up()
-        if cls == "CYCLE":
-            self.expect_kw("FAMILY")
-            self.named_decl("CYCLE FAMILY")
-        elif cls in NAMED_CLASSES:
-            self.named_decl(cls)
-        elif cls == "RELATIONSHIP":
-            self.relationship_decl()
-        elif cls == "GROUNDING":
-            self.grounding_decl()
-        elif cls == "RELIABILITY":
-            self.reliability_decl()
-        elif cls == "POLICY":
-            self.policy_decl()
-        elif self.peek() and self.peek().kind == "punct" and self.peek().text == "(":
-            self.application(t.text)  # aspect application
-        else:
-            raise ParseError(f"unknown declaration class {t.text!r}")
-
-    def observation(self) -> None:
-        self.ident("measurement id")
-        while self.peek() and self.peek().kind == "punct" and self.peek().text == ",":
-            self.take()
-            self.ident("measurement id")
-        if self.at_kw("ON"):
-            self.take()
-            if self.peek() and self.peek().kind == "punct" and self.peek().text == "(":
-                self.balanced_parens()
-            else:
-                self.qualified()
-        if self.peek() and self.peek().kind == "ident" and not self.at_provenance():
-            self.take()  # OBSERVE validation <name>
-        self.provenance()  # required — sprint 5 fork A
+            self.substrate()  # SELECT, CREATE VIEW, DELETE, ... (host SQL)
 
     def gloss(self) -> None:
-        t = self.peek()
-        if t and t.kind == "punct" and t.text == "(":
-            self.balanced_parens()
-        elif t and t.kind == "ident" and t.up() in ACTOR_CLASSES:
-            self.take()  # actor form: pack export (GLOSS SEED finance AS PACK)
-            self.ident("actor name")
-        else:
-            self.qualified()
-        if self.at_kw("USING"):
-            self.take()
-            self.expect_kw("SERVING")
-            self.ident("serving policy")
-        if self.at_kw("AS"):
-            self.take()
-            self.expect_kw("PACK")
-        if not self.done():
-            raise ParseError(f"trailing tokens in GLOSS: {self.peek().text!r}")
+        self.ident("aspect name")
+        self.expect_kw("ON")
+        self.subject()
+        self.expect_kw("AS")
+        self.json_payload("gloss body")
+        self.end()
 
-    def passthrough(self) -> None:
+    def substrate(self) -> None:
+        """Opaque host SQL, but GLOSSARY(...) / ATTEST(...) calls are strict."""
+        if self.done():
+            raise ParseError("empty statement")
         while not self.done():
+            if self.at_kw("GLOSSARY") and self.at_punct("(", 1):
+                self.take()
+                self.take()
+                self.subject()
+                while self.at_punct(","):
+                    self.take()
+                    self.named_arg()
+                self.expect_punct(")")
+            elif self.at_kw("ATTEST") and self.at_punct("(", 1):
+                self.take()
+                self.take()
+                self.attest_arg()
+                self.expect_punct(")")
+            else:
+                self.take()
+
+    def attest_arg(self) -> None:
+        """subject.aspect — the aspect is the final dotted segment."""
+        n = self.dotted("attest subject", most=4)
+        if self.peek() and self.peek().kind == "relop":
             self.take()
+            # right side of the pair path plus the trailing aspect segment
+            if self.dotted("attest pair right", most=4) < 3:
+                raise ParseError("ATTEST on a pair path needs table.column.aspect "
+                                 "on the right")
+        elif n < 2:
+            raise ParseError("ATTEST argument needs subject.aspect")
 
 
 def parse_statement(toks: list[Tok]) -> None:
     p = P(toks)
     p.statement()
-    if not p.done():
-        raise ParseError(f"trailing tokens: {p.peek().text!r}")
+    p.end()
 
 
 def check_source(src: str) -> list[tuple[str, str | None]]:
     """Parse every statement in src. Returns [(statement_preview, error|None)]."""
     results = []
-    for stmt in split_statements(tokenize(src)):
+    try:
+        stmts = split_statements(tokenize(src))
+    except ParseError as e:
+        return [(src.strip()[:60], str(e))]
+    for stmt in stmts:
         preview = " ".join(t.text for t in stmt[:8])
         try:
             parse_statement(stmt)

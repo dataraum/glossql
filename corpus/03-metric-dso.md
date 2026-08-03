@@ -1,4 +1,4 @@
-# 03 · Metric `dso` — PARAMETER RESOLVED (sprint 6, fork B); losses + step-validation remain
+# 03 · Metric `dso` — TRANSCRIBES (metric = function script)
 
 Source: `dataraum-context/packages/dataraum-config/verticals/finance/metrics/working_capital/dso.yaml`
 (persisted per `metrics` / `metric_parameters` / `metric_derives_from`, engine schema.sql)
@@ -43,53 +43,48 @@ interpretation:
   - {min: 91, max: 999, label: CRITICAL,   description: Urgent intervention required}
 ```
 
-## Transcription — decided form (sprint 6, fork B)
+## Transcription
+
+A metric is a script in the function library. The parameter surface is
+`ACCEPTS`; the output contract is `RETURNS`; the concept inputs are the
+script's business (it reads the groundings via the glossary).
 
 ```glossql
-DECLARE METRIC dso
-  AS (accounts_receivable / revenue) * days_in_period
-  UNIT 'days'
-  PARAMETER days_in_period DEFAULT 30 OPTIONS (30, 90, 365) DERIVED BY period_grain
-  BY SEED finance;
+DECLARE FUNCTION dso FOR fin FROM 'functions/dso.py'
+  ACCEPTS {
+    "type": "object",
+    "properties": {
+      "days_in_period": {"type": "integer", "default": 30, "enum": [30, 90, 365]}
+    }
+  }
+  RETURNS {
+    "type": "object",
+    "required": ["value"],
+    "properties": {
+      "value": {"type": "number"},
+      "unit": {"const": "days"},
+      "interpretation": {"enum": ["EXCELLENT", "GOOD", "CONCERNING", "POOR", "CRITICAL"]}
+    }
+  };
 
-DECLARE POLICY interpretation FOR dso
-  BANDS (excellent < 31, good < 46, concerning < 61, poor < 91, critical)
-  BY SEED finance;
+SELECT dso(days_in_period => 90) FROM fin;
 ```
-
-## Gap — display/browsing metadata still has no home
-
-```glossql-gap
-DECLARE METRIC dso
-  DISPLAY NAME 'Days Sales Outstanding'
-  CATEGORY working_capital
-  AS (accounts_receivable / revenue) * days_in_period
-  BY SEED finance;
-```
-
-(The invented clauses sit *before* `AS` deliberately: under the reserved-word
-rule, unreserved words after an expression clause are legal expression content
-— which also means every future clause keyword must join the reserved list the
-moment it is introduced.)
 
 ## Findings
 
-- Expression, unit, dependency DAG: clean — concept-space resolution covers the
-  concepts and the parameter; the level-1/2 DAG derives from the AST.
-- **RESOLVED (was GRAMMAR GAP) — `PARAMETER` clause.** Sprint 6 fork B:
-  `DEFAULT` literal types the parameter (no TYPE clause), `OPTIONS` is the
-  closed value set, `DERIVED BY` names a spec-defined mechanism (today:
-  `period_grain`). The sketch's `GRAIN month DEFAULT last_complete` is gone —
-  both halves were fiction.
-- **GRAMMAR GAP + INFORMATION LOST — interpretation.** `BANDS` can encode the
-  boundaries (after an unstated inclusive-range → strict-< translation) but not
-  the per-range `description` prose served to agents today.
-- **INFORMATION LOST:** display name, category, tags, `decimal_places`,
-  `output.type`.
-- **SEMANTICS UNDEFINED — step-level validation.** `0 <= value <= 365` on the
-  metric's output: `DECLARE VALIDATION … KIND constraint OVER (…)` takes
-  concepts; whether a metric name is admissible in OVER, and what
-  range-check-on-output means under the KIND vocabulary, is unspecified.
-- The extract axis `statement: balance_sheet | income_statement` — DECIDED
-  (sprint 2, fork A): `PART OF` structure, not a grounding key member; the
-  extract's `aggregation:` folds into the metric expression. See fixture 07.
+- **TRANSCRIBES as a script.** The declarative expression, dependency DAG,
+  parameter clause, step-level validation, and interpretation ranges all move
+  into `functions/dso.py` — swappable code, not grammar. This is the accepted
+  trade: analytical logic leaves the declarative layer.
+- The old track's unresolved display-metadata gap (name, category, tags,
+  decimal_places) closes by relocation, not by a clause: display metadata is
+  script-side or RETURNS-schema annotation. Nothing left for the grammar to
+  carry.
+- `derivation: period_grain` (parameter derived from another producer) is the
+  `ACCEPTS [schema]#[json_pointer]` form — pointer syntax still a placeholder:
+
+```glossql
+DECLARE FUNCTION dso_auto FOR fin FROM 'functions/dso.py'
+  ACCEPTS period_grain#/properties/days
+  RETURNS {"type": "object", "properties": {"value": {"type": "number"}}};
+```

@@ -1,4 +1,4 @@
-# 07 · Grounding / `sql_snippets` — key RESOLVED (sprint 2, fork A); two losses remain
+# 07 · Grounding / `sql_snippets` — TRANSCRIBES (QUERY gloss, standard grounding schema)
 
 Source: `sql_snippets` (engine schema.sql), semantic key:
 
@@ -15,38 +15,38 @@ concept per run (`grounding_collision.py`). `provenance` on healthy rows carries
 carry `failure_mode ∈ (execution_failed, verifier_rejected, provenance_invalid,
 disjoint_collision)`.
 
-## Transcription — decided key: (concept); row-level reading
+## Transcription
+
+A grounding is a gloss of a QUERY aspect (fixture 01 declares `revenue`,
+likewise `accounts_receivable`). The body validates against the **standard
+grounding schema** — fixed, like the attest schema: `sql` required,
+`assumptions[]` optional. Assumptions ride inside the grounding.
 
 ```glossql
-DECLARE RELATIONSHIP accounts_receivable PART OF balance_sheet BY SEED finance;
-
-DECLARE GROUNDING accounts_receivable IN journal_lines_enriched
-  AS debit_amount - credit_amount
-  WHERE account_type = 'asset'
-  BY AGENT grapher CONFIDENCE 0.9;
-
-DECLARE METRIC dso
-  AS 90 * avg(accounts_receivable) / sum(revenue)
-  UNIT 'days'
-  BY SEED finance;
+GLOSS accounts_receivable ON fin.journal_lines_enriched AS {
+  "sql": "SELECT debit_amount - credit_amount FROM journal_lines_enriched WHERE account_type = 'asset'",
+  "assumptions": [
+    {"dimension": "sign", "assumption": "ledger stores debits positive",
+     "basis": "column_stats", "confidence": 0.9},
+    {"dimension": "scope", "assumption": "asset accounts only",
+     "basis": "chart_of_accounts", "confidence": 0.95}
+  ]
+};
 ```
 
 ## Findings
 
-- **Supersession key — RESOLVED (fork A).** Key is the concept; one active
-  grounding per concept per workspace; re-grounding supersedes (correction is
-  addressable). The statement axis is `PART OF` structure; a differently-
-  filtered reading is its own concept (`reconciled_count`); aggregation is
-  owned by the metric expression — the spec's double ownership is repaired.
-  DISJOINT concepts with byte-identical grounding bodies are rejected at
-  admission (the collision guard, moved to declaration time). grammar.ebnf U3
-  is closed — the parameter member is gone, constants derive from `PARAMETER`
-  declarations.
-- **INFORMATION LOST — per-assumption records** (open). `assumptions[]` feed
-  the DAT-631 weakest-grounding confidence gate; statement-level CONFIDENCE is
-  one number and §3.0 makes it non-adjudicating metadata while today's gate is
-  a consumer mechanism. Sprint candidate.
-- **INFORMATION LOST — retained failures** (open). `disjoint_collision` etc.
-  are negative knowledge that stops re-authoring rejected groundings.
-  RELATIONSHIP has `REJECTED`; GROUNDING has no negative form. Sprint
-  candidate.
+- **TRANSCRIBES.** The old track's `DECLARE GROUNDING … IN … AS … WHERE …`
+  construct with its own key debate collapses into the uniform gloss;
+  supersession is (subject, aspect, actor kind).
+- **Coexistence, decided:** two QUERY glosses of the same aspect on different
+  tables may coexist — two ways to calculate revenue arriving at the same
+  number is the correct answer, not a conflict. Whether they reconcile is a
+  witness's job (a detector runs both and returns band + score).
+- The old per-assumption confidence gate (DAT-631) is a detector's business:
+  assumptions are in the body, readable by any function.
+- **DROPPED BY DESIGN — retained failures.** `disjoint_collision` and friends
+  were negative knowledge against re-authoring. Functions are deterministic —
+  a rejected candidate is simply not declared; candidate memory, where wanted,
+  is a `relationship_candidates`-style MEASUREMENT aspect (the function's
+  cached output is glossary-visible without ever being declared).

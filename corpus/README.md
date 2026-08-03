@@ -1,8 +1,8 @@
 # glossql transcription corpus
 
 Each file pairs a **real artifact** from `../dataraum-context` (quoted, with path)
-with its glossql transcription attempt per SPEC.md §3. These are test fixtures —
-the §9.1 evidence base — not design docs.
+with its glossql transcription per SPEC.md. These are test fixtures — the §9.1
+evidence base — not design docs.
 
 Block tags, enforced by `harness/check.py`:
 
@@ -11,20 +11,24 @@ Block tags, enforced by `harness/check.py`:
   to parse. When the grammar gains the form, the checker flags "gap closed" and
   the tag flips to ` ```glossql `.
 
-Verdict vocabulary (§9.1 buckets, refined): TRANSCRIBES CLEANLY · GRAMMAR GAP ·
-SEMANTICS UNDEFINED · INFORMATION LOST. One fixture may carry several, per field.
+Verdict vocabulary: TRANSCRIBES · GRAMMAR GAP · SEMANTICS UNDEFINED ·
+INFORMATION LOST · DROPPED BY DESIGN (a deliberate cut — the record names what
+was dropped and where it went). One fixture may carry several, per field.
 
-Sources snapshot 2026-07-30. Full analysis: `reports/2026-07-30-adversarial-review.md`.
+Sources snapshot 2026-07-30; transcriptions re-done 2026-08-03 against the
+simplified language (see `reports/2026-08-03-simplification.md`).
 
 | # | fixture | verdict (dominant) |
 |---|---|---|
-| 01 | concept `revenue` | TRANSCRIBES CLEANLY |
-| 02 | convention `sign_natural_balance` | groups RESOLVED (sprint 9); targets deferred |
-| 03 | metric `dso` | PARAMETER RESOLVED (sprint 6, fork B) |
-| 04 | validation `trial_balance` | envelope + OVER RESOLVED (sprints 7, 9) |
-| 05 | cycle `accounts_receivable` | RESOLVED (sprint 3, fork B) |
-| 06 | claim witnesses + reliabilities | RESOLVED (sprint 1, fork B) |
-| 07 | grounding / sql_snippets | key RESOLVED (sprint 2, fork A) |
-| 08 | teach payloads (8 types) | mixed |
-| 09 | answer-agent served context | serving semantics RESOLVED (sprint 10); prose = renderer config |
-| 10 | remaining §2.1 rows (coverage completion) | TRANSCRIBE CLEANLY |
+| 01 | concept `revenue` | TRANSCRIBES (concept = QUERY aspect) · pack envelope DROPPED |
+| 02 | convention `sign_natural_balance` | TRANSCRIBES (in-blob, incl. `targets`) |
+| 03 | metric `dso` | TRANSCRIBES (metric = function script) |
+| 04 | validation `trial_balance` | TRANSCRIBES (aspect + witness, no dedicated construct) |
+| 05 | cycle `accounts_receivable` | TRANSCRIBES (in-blob) |
+| 06 | witnesses + reliabilities | slots TRANSCRIBE · calibration DROPPED |
+| 07 | grounding / `sql_snippets` | TRANSCRIBES (standard grounding schema) |
+| 08 | teach payloads | TRANSCRIBES (teach = re-gloss) |
+| 09 | answer-agent served context | DROPPED BY DESIGN (the agent experiment) |
+| 10 | remaining engine artifacts | TRANSCRIBES (coverage completion) |
+| 11 | flow: add source | TRANSCRIBES (no flow construct; orchestration app-side) |
+| 12 | flow: begin session | TRANSCRIBES (measure → read → declare → attest) |

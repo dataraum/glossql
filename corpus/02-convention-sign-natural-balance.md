@@ -1,4 +1,4 @@
-# 02 · Convention `sign_natural_balance` — concept_groups RESOLVED (sprint 9); targets deferred
+# 02 · Convention `sign_natural_balance` — TRANSCRIBES (in-blob)
 
 Source: `dataraum-context/packages/dataraum-config/verticals/finance/ontology.yaml`
 
@@ -14,39 +14,52 @@ Source: `dataraum-context/packages/dataraum-config/verticals/finance/ontology.ya
                    accounts_receivable, inventory, current_assets, cash]
 ```
 
-## Transcription — decided form (sprint 9): groups are concepts
+## Transcription
+
+One FACT aspect on the dataset; conventions are rows in an array-typed blob.
+Authored prose stays opaque; the groups the prose refers to are data beside it.
 
 ```glossql
-DECLARE CONCEPT credit_normal KIND group BY SEED finance;
-DECLARE RELATIONSHIP revenue PART OF credit_normal BY SEED finance;
-DECLARE RELATIONSHIP accounts_payable PART OF credit_normal BY SEED finance;
-DECLARE RELATIONSHIP equity PART OF credit_normal BY SEED finance;
-DECLARE CONCEPT debit_normal KIND group BY SEED finance;
-DECLARE RELATIONSHIP accounts_receivable PART OF debit_normal BY SEED finance;
-DECLARE RELATIONSHIP cash PART OF debit_normal BY SEED finance;
+DECLARE ASPECT conventions WITH {
+  "type": "object",
+  "properties": {
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "statement"],
+        "properties": {
+          "id": {"type": "string"},
+          "statement": {"type": "string"},
+          "targets": {"type": "array", "items": {"type": "string"}},
+          "groups": {"type": "object"}
+        }
+      }
+    }
+  }
+} AS FACT;
 
-DECLARE CONVENTION sign_natural_balance
-  STATEMENT 'Express every monetary measure in its natural-balance direction:
-    credit_normal concepts as credits, debit_normal as debits — never
-    normalize only one side of a comparison.'
-  BY SEED finance;
+GLOSS conventions ON fin AS {
+  "items": [{
+    "id": "sign_natural_balance",
+    "statement": "Express every monetary measure in its natural-balance direction: credit_normal concepts as credits, debit_normal as debits - never normalize only one side of a comparison.",
+    "targets": ["extraction", "qa"],
+    "groups": {
+      "credit_normal": ["revenue", "accounts_payable", "current_liabilities", "equity"],
+      "debit_normal": ["cost_of_goods_sold", "operating_expense", "depreciation",
+                       "tax", "accounts_receivable", "inventory", "current_assets", "cash"]
+    }
+  }]
+};
 ```
 
 ## Findings
 
-- **RESOLVED (sprint 9) — `concept_groups`.** Groups are declared concepts
-  (`KIND group`) with `PART OF` members: the machine-checked half lives in
-  concept space with ordinary supersession and the same declaration-time
-  membership guarantee the engine's lint provides today
-  (`concept_edge_store.py:78-90`, `ontology.py:103-118`); the prose refers to
-  groups by name and stays opaque — §1.2(4) holds.
-- **DEFERRED — `targets`** (`[extraction, qa]` consumer routing). Per-convention
-  serving scope; §3.4's `INCLUDE` selects the conventions *family* only. Lands
-  with the serving clause list (§3.4 flagged, fixture 09):
-
-```glossql-gap
-DECLARE CONVENTION sign_natural_balance
-  STATEMENT '…'
-  TARGETS (extraction, qa)
-  BY SEED finance;
-```
+- **TRANSCRIBES, multiplicity-in-blob.** The `targets` consumer routing that
+  the old spec deferred for two sprints lands trivially as a blob field —
+  consumers filter it themselves.
+- Lost vs. today: declaration-time membership checking of group members
+  (engine lint `concept_edge_store.py:78-90`); a dangling group member is
+  silent. If it matters, it is a witness's job, not admission's.
+- Supersession is per (subject, aspect, actor kind): editing one convention
+  re-glosses the whole blob. Accepted — the blob is the unit of authorship.

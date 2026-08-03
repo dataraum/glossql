@@ -1,4 +1,4 @@
-# 06 · Claim witnesses + reliabilities — witness CLEAN; per-witness reliability RESOLVED (sprint 1, fork B)
+# 06 · Claim witnesses + reliabilities — slots TRANSCRIBE · calibration DROPPED BY DESIGN
 
 Source: `claim_witnesses` (engine schema.sql):
 
@@ -15,7 +15,7 @@ CREATE TABLE claim_witnesses (
 );
 ```
 
-Source: `dataraum-config/entropy/reliabilities.yaml` — reliability is calibrated
+Source: `dataraum-config/entropy/reliabilities.yaml` — reliability calibrated
 **per witness within a measurement**, not per detector:
 
 ```yaml
@@ -32,46 +32,54 @@ witnesses:
 Plus per-measurement calibration provenance: `calibrated: true/false`,
 corpus_version, estimator, per_class_accuracy, brier, sample sizes, dates.
 
-## Transcription — the witness statement (clean)
+## Transcription
+
+The slot model replaces distributions-with-weights: per (subject, aspect) one
+current value per speaker — the function's cached output, the agent's gloss,
+the human's gloss. The detector adjudicates across slots and returns band +
+score; ATTEST serves it.
 
 ```glossql
-WITNESS behavior(orders.amount, stock := 0.11, flow := 0.89)
-  BY DETECTOR temporal_behavior
-  EVIDENCE 'obs://run-342/temporal_behavior/orders.amount';
+DECLARE ASPECT behavior WITH {
+  "type": "object",
+  "properties": {"value": {"enum": ["stock", "flow"]}}
+} AS FACT;
 
-DECLARE RELIABILITY DETECTOR temporal_behavior FOR behavior 0.838
-  BY CALIBRATION '2026-06-10';
+DECLARE FUNCTION temporal_behavior FOR GLOBAL FROM 'functions/temporal_behavior.py'
+  RETURNS {"type": "object", "properties": {"value": {"enum": ["stock", "flow"]},
+           "evidence": {"type": "string"}}};
+
+DECLARE FUNCTION behavior_entropy FOR GLOBAL FROM 'functions/behavior_entropy.py'
+  RETURNS {
+    "type": "object",
+    "required": ["subject", "aspect", "witness", "band", "score", "computed_at"],
+    "properties": {
+      "subject": {"type": "string"}, "aspect": {"type": "string"},
+      "witness": {"type": "string"},
+      "band": {"enum": ["green", "yellow", "orange", "red"]},
+      "score": {"type": "number", "minimum": 0, "maximum": 1},
+      "computed_at": {"type": "string"}
+    }
+  };
+
+DECLARE WITNESS behavior_w ON behavior BY (FUNCTION temporal_behavior, AGENT, HUMAN)
+  DETECTOR behavior_entropy THRESHOLD 0.7;
+
+SELECT * FROM ATTEST(orders.amount.behavior);
 ```
 
-## Per-witness reliability — decided 2026-07-30 (sprint 1, fork B)
-
-```glossql
-WITNESS null_token(orders.amount, token := 'TBD', is_null := 0.91, is_value := 0.09)
-  BY DETECTOR null_semantics WITNESS null_vocabulary
-  EVIDENCE 'obs://run-342/null_semantics/orders.amount';
-
-DECLARE RELIABILITY DETECTOR null_semantics WITNESS null_vocabulary
-  FOR null_token 0.944 BY CALIBRATION '2026-06-09';
-```
+`claim_witnesses.distribution` becomes the value function's cached JSON output
+(detail reachable by function SELECT); `run_id` is cache bookkeeping.
 
 ## Findings
 
-- Witness statement: **TRANSCRIBES CLEANLY** — target→subject,
-  claim_field→(aspect, argument), distribution→labelled args, run_id opaque in
-  the EVIDENCE ref, all as §3.3 intends.
-- **RESOLVED (was GRAMMAR GAP) — witness_id collapsed into detector_id.** The
-  real reliability key is (measurement, witness); one detector pools several
-  witnesses at different calibrated weights (null_semantics: three). Fork B
-  (2026-07-30): the DETECTOR actor takes an optional `WITNESS name` member;
-  reliability is keyed (detector, witness, aspect); bare `DETECTOR x` is
-  shorthand for `DETECTOR x WITNESS x` (single-witness detector), which keeps
-  every existing example valid. `claim_witnesses.witness_id` now has a
-  counterpart. → `reports/sprint-1-reliability-forks.md`.
-- **INFORMATION LOST — calibration provenance.** `BY CALIBRATION '2026-07'`
-  carries a name; the calibrated-vs-placeholder flag (consumed today via
-  `ReliabilityConfig.calibrated_for`), corpus id, estimator, per-class accuracy
-  have nowhere to go.
-- **SEMANTICS UNDEFINED — placeholder priors.** Uncalibrated detectors run at
-  placeholder weights today; §3.3 defers undeclared producers to "the
-  reliability policy", which has no statement form (§3.4's WEIGHT is a sketch
-  inside POLICY readiness).
+- **Slots TRANSCRIBE.** target→subject, claim_field→aspect, the detector's
+  verdict→(band, score). A human re-gloss supersedes the human slot; a
+  contested state is a red/orange band, not a flag.
+- **DROPPED BY DESIGN — the calibration theater.** Per-witness calibrated
+  reliabilities, calibration provenance (corpus id, estimator, Brier),
+  placeholder priors, pooling math: all of it is the DETECTOR function's
+  internal logic — swappable code, not grammar.
+- What the log loses: adjudication is no longer reproducible from statements
+  alone — it is reproducible from statements + the detector script. Accepted
+  as part of functions-as-scripts.

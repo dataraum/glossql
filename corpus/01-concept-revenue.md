@@ -1,4 +1,4 @@
-# 01 · Concept `revenue` — TRANSCRIBES CLEANLY
+# 01 · Concept `revenue` — TRANSCRIBES (concept = QUERY aspect)
 
 Source: `dataraum-context/packages/dataraum-config/verticals/finance/ontology.yaml`
 
@@ -16,30 +16,39 @@ Pack envelope around it (same file): `name: financial_reporting`,
 
 ## Transcription
 
+Each concept is its own aspect; the ontology entry rides the `WITH` schema as
+annotations. `AS QUERY` makes its glosses groundings (fixture 07).
+
 ```glossql
-DECLARE CONCEPT revenue
-  KIND measure
-  DESCRIPTION 'Income from sales or services'
-  INDICATORS ('revenue', 'sales', 'income', 'turnover', 'receipts')
-  EXCLUDE ('cost', 'expense')
-  UNIT FROM currency
-  BY SEED finance;
+DECLARE ASPECT revenue WITH {
+  "title": "revenue",
+  "description": "Income from sales or services",
+  "x-kind": "measure",
+  "x-indicators": ["revenue", "sales", "income", "turnover", "receipts"],
+  "x-exclude": ["cost", "expense"],
+  "x-unit-from": "currency"
+} AS QUERY;
 ```
 
 The `compositions:` block in the same file (`whole: current_assets`,
-`parts: [cash, accounts_receivable, inventory]`) decomposes into edges:
+`parts: [cash, accounts_receivable, inventory]`) goes in-blob on the whole's
+aspect — multiplicity lives inside the schema, never in extra statements:
 
 ```glossql
-DECLARE RELATIONSHIP cash PART OF current_assets BY SEED finance;
-DECLARE RELATIONSHIP accounts_receivable PART OF current_assets BY SEED finance;
-DECLARE RELATIONSHIP inventory PART OF current_assets BY SEED finance;
+DECLARE ASPECT current_assets WITH {
+  "title": "current_assets",
+  "x-kind": "measure",
+  "x-parts": ["cash", "accounts_receivable", "inventory"]
+} AS QUERY;
 ```
 
 ## Findings
 
-- Concept row: clean 1:1 clause mapping.
-- **INFORMATION LOST — pack envelope.** `vertical_envelopes.version` ("1.0.0")
-  and the pack description have no statement form; `BY SEED finance` carries the
-  seed name only. §6 reserves versioning — deliberate, but drops a stored field.
-- The `PART OF` statements were skeleton-underivable in §3.0 as written; covered
-  by `relationship_decl` [REPAIR] in grammar.ebnf.
+- Concept row: clean — one declaration, supersession per concept, roster = the
+  list of declared aspects.
+- In-blob composition drops the declaration-time membership check the engine's
+  lint provides today (`concept_edge_store.py:78-90`): a dangling part name is
+  silent. Accepted with the in-blob decision; a witness can check it.
+- **DROPPED BY DESIGN — pack envelope.** `financial_reporting`, `version:
+  "1.0.0"`: portability is postponed entirely; a vertical is a folder of
+  scripts and aspect declarations, ported by copying.

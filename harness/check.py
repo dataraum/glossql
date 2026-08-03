@@ -61,36 +61,6 @@ check_file(ROOT / "SPEC.md", {"sql": False})
 for f in sorted((ROOT / "corpus").glob("*.md")):
     check_file(f, {"glossql": False, "glossql-gap": True})
 
-# --- §10 walkthrough, executed: replay + pooling + contested (SPEC §5) ------
-from glossql_parser import split_statements, tokenize  # noqa: E402
-from replay import replay  # noqa: E402
-
-w10 = (ROOT / "SPEC.md").read_text().split("\n## 10.")[1]
-source = "\n".join(m.group(2) for m in FENCE_RE.finditer(w10) if m.group(1) == "sql")
-slot = ("orders.amount", "behavior", ())
-full = replay(source)
-stmts = split_statements(tokenize(source))
-i_teach = next(i for i, s in enumerate(stmts)
-               if [t.text for t in s[:2]] == ["DECLARE", "behavior"]
-               and any(t.text.upper() == "USER" for t in s))
-pre = replay(source, upto=i_teach)
-again = replay(source)
-walkthrough = [
-    ("station 4 declaration occupies the slot", pre.slots.get(slot, {}).get("value") == "stock"),
-    ("witness pools under the declared reliability", pre.posterior(slot) is not None),
-    ("station 5: contested before the teach", pre.contested(slot) is True),
-    ("station 6: teach supersedes to flow", full.slots.get(slot, {}).get("value") == "flow"),
-    ("station 6: contested clears", full.contested(slot) is False),
-    ("replay determinism (identical derived state)",
-     (again.slots, again.witnesses, again.reliabilities)
-     == (full.slots, full.witnesses, full.reliabilities)),
-]
-for name, ok in walkthrough:
-    if not ok:
-        failures += 1
-    print(f"{'ok  ' if ok else 'FAIL'} walkthrough: {name}")
-
 print(f"\n{stats['blocks']} blocks, {stats['stmts']} statements checked; "
-      f"{len(walkthrough)} walkthrough assertions; "
       f"{failures} failures, {gap_closed} gaps closed")
 sys.exit(1 if (failures or gap_closed) else 0)

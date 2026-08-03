@@ -1,64 +1,64 @@
-# 08 · Teach payloads (8 types) — 3 CLEAN · 2 spec-admitted GAPS · 1 unadmitted GAP
+# 08 · Teach payloads (8 types) — TRANSCRIBE (teach = re-gloss on a human connection)
 
 Source: `dataraum-context/packages/cockpit/src/tools/teach.validation.ts` —
 TYPE_SCHEMAS roster: `type_pattern, null_value, unit, relationship, hierarchy,
 validation, cycle, metric` (all Zod-validated; a 9th direct-read type
 `expected_dependency` lives outside the registry, `core/overlay.py:49-55`).
 
-## Clean transcriptions
+## Transcription
 
-`relationship` teach `{action: confirm|reject|add, from_column_id, to_column_id}`:
-
-```glossql
-DECLARE RELATIONSHIP orders.customer_id REFERENCES customers.id
-  CARDINALITY many_to_one BY USER analyst;
-DECLARE RELATIONSHIP orders.customer_id REFERENCES customers.id
-  REJECTED BY USER analyst;
-```
+There is no teach construct. A teach is an ordinary statement on a connection
+whose actor is a human; supersession by (subject, aspect, actor kind) does the
+rest — the human's gloss supersedes the human's, and the detector sees both
+the human and agent slots.
 
 `unit` teach `{table, column, unit}`:
 
 ```glossql
-DECLARE unit(orders.amount, value := 'EUR') BY USER analyst;
+GLOSS unit ON orders.amount AS {"value": "EUR"};
+```
+
+`relationship` teach `{action: confirm|add, from_column_id, to_column_id}`:
+
+```glossql
+DECLARE RELATIONSHIP orders.customer_id -> customers.id;
 ```
 
 `hierarchy` teach, `add` action:
 
 ```glossql
-DECLARE HIERARCHY geo IN customers
-  LEVELS (country > region > city) KIND drilldown BY USER analyst;
+GLOSS hierarchy ON customers AS {
+  "levels": ["country", "region", "city"], "kind": "drilldown"
+};
 ```
 
-## Gap — hierarchy `reject` (unadmitted): no negative form outside RELATIONSHIP
-
-```glossql-gap
-DECLARE HIERARCHY geo IN customers REJECTED BY USER analyst;
-```
-
-## Spec-admitted gaps (§8.3) — workspace-scoped vocabulary teaches
-
-`type_pattern` payload (an AGENT_AUTOAPPLY type — the constrained-decoding
-surface §2.5 claims):
-
-```ts
-{name: 'eu_date', pattern: '^\\d{2}\\.\\d{2}\\.\\d{4}$', inferred_type: 'DATE',
- semantic_type?, detected_unit?, case_sensitive?, standardization_expr?  /* SQL */}
-```
-
-Nearest expressible form is an *undeclared* aspect application — it parses, but
-no ASPECT declaration exists, the subject is the workspace (vocabulary, not a
-column fact), and `standardization_expr` is a transported SQL body:
+`type_pattern` and `null_value` — the workspace-scoped vocabulary teaches the
+old spec wrestled with (§8.3) — land as dataset-scoped FACT glosses, which is
+their real scope:
 
 ```glossql
-DECLARE type_pattern(workspace, name := 'eu_date',
-  pattern := '^\d{2}\.\d{2}\.\d{4}$', inferred_type := 'DATE',
-  standardization := 'strptime(value, ''%d.%m.%Y'')') BY USER analyst;
+GLOSS type_patterns ON fin AS {
+  "items": [{
+    "name": "eu_date",
+    "pattern": "^\\d{2}\\.\\d{2}\\.\\d{4}$",
+    "inferred_type": "DATE",
+    "standardization": "strptime(value, '%d.%m.%Y')"
+  }]
+};
 ```
 
-Classification: **SEMANTICS UNDEFINED** (parses; nothing defines workspace-scoped
-vocabulary aspects — §8.3 owns this). Same for `null_value`: the real teach is
-workspace-scoped with a `category` axis; §3.2's `null_token(orders.amount, …)`
-sketch is column-scoped.
+`validation` / `cycle` / `metric` teaches are fixtures 04/05/03 authored on a
+human connection. A relationship *reject* teach has no statement: rejected
+does not exist — it is simply not declared (fixture 07's candidate-memory
+note).
 
-`validation` / `cycle` / `metric` teaches are fixtures 04/05/03 with `BY USER` —
-they inherit those verdicts.
+## Findings
+
+- **TRANSCRIBES — teach dissolves.** All eight types are covered by GLOSS,
+  DECLARE RELATIONSHIP, or the fixtures they compose; the dedicated teach
+  vocabulary, its Zod registry, and the §8.3 scope mismatch all disappear.
+- The `standardization` SQL string rides inside the JSON body — authored
+  content, opaque to the grammar, executable by whichever function applies the
+  pattern.
+- A removal teach is `DELETE FROM glossary WHERE ...` — the glossary is an
+  ordinary queryable relation.

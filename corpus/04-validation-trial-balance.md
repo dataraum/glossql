@@ -1,4 +1,4 @@
-# 04 · Validation `trial_balance` — envelope RESOLVED (sprint 7); OVER RESOLVED (sprint 9)
+# 04 · Validation `trial_balance` — TRANSCRIBES (aspect + witness, no dedicated construct)
 
 Source: `validations` table (engine schema.sql) — fields: validation_id, name,
 description, category, severity, check_type ∈ (aggregate|balance|comparison|
@@ -22,33 +22,64 @@ expected_outcome: >
   Total debits must equal total credits across all account types. …
 ```
 
-## Transcription — decided envelope (sprint 7, fork A)
+## Transcription
+
+The authored expectation is a FACT gloss; the check is a function; the witness
+binds them; ATTEST is the verdict surface. No validation construct exists.
 
 ```glossql
-DECLARE VALIDATION trial_balance
-  KIND balance
-  ON CYCLES (journal_entry_cycle, accounts_receivable, accounts_payable)
-  OVER (debit_normal, credit_normal)
-  CONVENTIONS (sign_natural_balance)
-  TOLERANCE 0.01
-  SEVERITY critical
-  GUIDANCE 'Join the trial balance table with the chart of accounts …'
-  OUTCOME 'Total debits must equal total credits across all account types.'
-  BY SEED finance;
+DECLARE ASPECT trial_balance WITH {
+  "type": "object",
+  "required": ["outcome"],
+  "properties": {
+    "tolerance": {"type": "number"},
+    "severity": {"enum": ["critical", "warning", "info"]},
+    "outcome": {"type": "string"},
+    "guidance": {"type": "string"},
+    "cycles": {"type": "array", "items": {"type": "string"}},
+    "conventions": {"type": "array", "items": {"type": "string"}}
+  }
+} AS FACT;
+
+GLOSS trial_balance ON fin AS {
+  "tolerance": 0.01,
+  "severity": "critical",
+  "outcome": "Total debits must equal total credits across all account types.",
+  "guidance": "Join the trial balance table with the chart of accounts before summing by account type.",
+  "cycles": ["journal_entry_cycle", "accounts_receivable", "accounts_payable"],
+  "conventions": ["sign_natural_balance"]
+};
+
+DECLARE FUNCTION trial_balance_check FOR fin FROM 'functions/trial_balance.py'
+  RETURNS {
+    "type": "object",
+    "required": ["subject", "aspect", "witness", "band", "score", "computed_at"],
+    "properties": {
+      "subject": {"type": "string"},
+      "aspect": {"type": "string"},
+      "witness": {"type": "string"},
+      "band": {"enum": ["green", "yellow", "orange", "red"]},
+      "score": {"type": "number", "minimum": 0, "maximum": 1},
+      "computed_at": {"type": "string", "format": "date-time"}
+    }
+  };
+
+DECLARE WITNESS tb ON trial_balance BY (FUNCTION trial_balance_check, HUMAN)
+  DETECTOR trial_balance_check;
+
+SELECT * FROM ATTEST(fin.trial_balance);
 ```
 
 ## Findings
 
-- **RESOLVED (sprint 7, fork A):** `ON CYCLES` is a list, absent = universal;
-  `CONVENTIONS` carries the validation→convention dependency, membership-
-  checked like `OVER` (the load-bearing pull direction — `validation_phase.py`
-  errors on unresolved ids); `OUTCOME` is the second prose slot, kept separate
-  from `GUIDANCE` as the binder consumes them.
-- **RESOLVED (sprint 9) — OVER's family operands.** Account-type families are
-  declared group concepts (`KIND group`, `PART OF` members — fixture 02);
-  `OVER (debit_normal, credit_normal)` lists exactly what the check reads, and
-  the membership contract stands.
-- **INFORMATION LOST (accepted):** category, tags — browsing metadata; revisit
-  as generic aspects if it ever earns a mechanism.
-- `check_type: expected_formula` + `{table, column, formula}`: §8.3-admitted gap
-  (expectation teaches have no statement form).
+- **TRANSCRIBES — the strongest confirmation in the corpus.** The old spec
+  needed `DECLARE VALIDATION` with six clauses (KIND / ON CYCLES / OVER /
+  CONVENTIONS / TOLERANCE / SEVERITY / GUIDANCE / OUTCOME); here the same
+  artifact is an aspect, a gloss, a function, and a witness — all
+  general-purpose constructs.
+- The check reads its own expectation (tolerance, cycles) from the glossary —
+  the function implicitly receives its subject; the gloss is data.
+- `trial_balance_check` doubles as value function and detector: legal because
+  its RETURNS conforms to the standard attest schema.
+- **INFORMATION LOST (accepted):** category, tags, version — browsing
+  metadata, same relocation as fixture 03.

@@ -1,154 +1,144 @@
-(* glossql grammar — machine-readable source of truth for syntax.
-   Status: aligned with SPEC.md §3.0 as of sprint 9 (2026-07-30) — the
-   productions reconstructed during review are now folded into the
-   spec's skeleton. Clause details are sketch-level where the spec says so;
-   statement forms are normative.
-   Token level (identifiers, strings with '' escaping, numbers, -- comments,
-   keyword case-insensitivity) is inherited from the substrate SQL dialect.
+(* glossql grammar — the simplified language, 2026-08-03.
+   Machine-readable source of truth for syntax; SPEC.md carries the semantics.
 
-   Reserved words (sprint 4 fork B, 2026-07-30): clause-head keywords are
-   reserved inside glossql statement bodies; colliding identifiers are
-   double-quoted ("unit"). Transported SQL strings are unaffected.
+   Lexical conventions (SQL host):
+   - name:    [A-Za-z_][A-Za-z0-9_]*  or double-quoted "name" (never a keyword)
+   - string:  single-quoted, '' escapes a quote
+   - number:  decimal literal
+   - json:    a balanced JSON object literal { ... }, valid per RFC 8259;
+              JSON strings are double-quoted with backslash escapes
+   - keywords are case-insensitive; statements end with ";"
 
-   Known unresolved syntax issues (tracked, not hidden):
-   - U1: VIEW bodies are bare SQL containing BY (GROUP BY / ORDER BY); the
-         trailing provenance is found from the end (last BY + actor class) —
-         specified behavior, kept so §3.2's join-admission check sees the AST.
-   - U2: aspect-application arguments vs claim-space labels share one surface;
-         split by the aspect's declaration (ARGUMENTS vs VALUES) — the parse
-         stays catalog-dependent.
-   - U3: RESOLVED sprint 2 — the grounding key is (concept); no parameter
-         member exists.
-   - U4: GLOSS subject resolution spans concept and data namespaces.
-   - U5: RESOLVED sprint 4 — reserved clause heads (fork B above).             *)
+   Substrate SQL is opaque to this grammar: glossql adds statements and table
+   functions to a SQL host (recipes, views, SELECT bodies, DELETE FROM glossary
+   are host SQL), it does not re-specify SQL. The actor (agent_id | human_id)
+   rides the connection — there is no BY-actor clause anywhere; the engine
+   stamps writer and actor kind on every statement. *)
 
-statement    = writing | reading ;
+script            = { statement, ";" } ;
 
-(* ------------------------------------------------------------------ writing *)
+statement         = declaration
+                  | use
+                  | gloss
+                  | extract
+                  | substrate_sql ;          (* SELECT, CREATE VIEW, DELETE, ... *)
 
-writing      = declaration | witness | observation | lifecycle ;
+declaration       = "DECLARE", ( source_decl
+                               | recipe_decl
+                               | dataset_decl
+                               | relationship_decl
+                               | aspect_decl
+                               | function_decl
+                               | witness_decl ) ;
 
-declaration  = named_decl | keyed_decl | aspect_appl ;
+(* -- sources ------------------------------------------------------------ *)
 
-(* --- named classes: DECLARE <CLASS> <name> clauses provenance --- *)
-named_decl   = "DECLARE", named_class, name, { clause }, provenance, ";" ;
-named_class  = "SOURCE" | "TABLE" | "VIEW" | "CONCEPT" | "CONVENTION"
-             | "METRIC" | "VALIDATION" | "CYCLE", "FAMILY"
-             | "ASPECT" | "HIERARCHY" | "SERVING" ;
+source_decl       = "SOURCE", name, "SET", "(", pair, { ",", pair }, ")" ;
+pair              = name, ":", ( name | string | number ) ;
+                    (* keys today: type (relational_db|parquet|csv|json),
+                       location (url/path, no credentials), via (reference to
+                       engine-held secrets — secrets never appear in statements) *)
 
-(* --- keyed classes: identity is the key, not a name --- *)
-keyed_decl   = relationship_decl | grounding_decl | reliability_decl | policy_decl ;
+recipe_decl       = "RECIPE", name, "ON", name, "FROM", name, "AS", sql ;
+                    (* RECIPE r ON dataset FROM source AS <sql> — the sql runs
+                       at the source, in the source's dialect; the result lands
+                       as table r in the dataset *)
 
-relationship_decl
-             = "DECLARE", "RELATIONSHIP",
-               ( pair, [ "CARDINALITY", ident ], [ "REJECTED" ]       (* data space *)
-               | name, "PART", "OF", name                             (* concept space *)
-               | name, "RECONCILES", "WITH", name, [ "TOLERANCE", number ]
-               | "DISJOINT", "(", name, { ",", name }, ")"
-               ), provenance, ";" ;
-               (* RECONCILES rhs is a bare concept (sprint 9): derived
-                  quantities earn a declared concept first, then reconcile
-                  pairwise. Feeds the `reconciliation` measurement; KIND
-                  balance validations stay distinct. *)
+(* -- datasets ----------------------------------------------------------- *)
 
-grounding_decl
-             = "DECLARE", "GROUNDING", name, "IN", name,
-               ( "AS", expr, [ "WHERE", expr ] | "REJECTED" ),
-               provenance, ";" ;
-               (* key: (concept) — one active grounding per concept; the
-                  expression is row-level (metrics own aggregation).
-                  Sprint 2 fork A, 2026-07-30. *)
+dataset_decl      = "DATASET", name, "SET", "(", pair, { ",", pair }, ")" ;
+                    (* keys today: purpose *)
 
-reliability_decl 
-             = "DECLARE", "RELIABILITY", actor, "FOR", name, number,
-               provenance, ";" ;
-               (* key: (detector, witness, aspect) — sprint 1 fork B, 2026-07-30.
-                  Bare DETECTOR x is shorthand for WITNESS x (single-witness). *)
+use               = "USE", name ;
+                    (* unprefixed paths resolve against the USE'd dataset *)
 
-policy_decl      
-             = "DECLARE", "POLICY", policy_kind, [ name ], [ "FOR", name ],
-               { clause }, provenance, ";" ;
-policy_kind  = "readiness" | "contract" | "interpretation" ;
-               (* three key shapes: singleton (readiness), named (contract),
-                  keyed FOR a metric (interpretation) *)
+(* -- relationships ------------------------------------------------------ *)
 
-(* --- aspect applications and witnesses: one claim slot each --- *)
-aspect_appl  = "DECLARE", ident, "(", subject, { ",", arg_pair }, ")",
-               provenance, ";" ;
-witness      = "WITNESS", ident, "(", subject, { ",", arg_pair }, ")",
-               provenance, ";" ;
-arg_pair     = ident, ":=", value ;                                   (* issue U2 *)
+relationship_decl = "RELATIONSHIP", column_path, rel_op, column_path ;
+rel_op            = "->"                     (* many-to-one, the FK direction *)
+                  | "<->" ;                  (* one-to-one *)
+column_path       = [ name, "." ], name, ".", name ;   (* [dataset.]table.column *)
 
-(* --- observation --- *)
-observation  = "OBSERVE", ident, { ",", ident },                      
-               [ "ON", ( subject | subject_tuple ) ], [ name ],
-               provenance, ";" ;
-               (* provenance required — sprint 5 fork A, 2026-07-30:
-                  orchestration code writes BY AGENT <workflow>.
-                  `OBSERVE validation receivables_roll_forward`: measurement id
-                  followed by a declared name.
-                  `OBSERVE overlap ON (a.x, b.y)`: a column tuple, NOT a §3.0
-                  pair — no REFERENCES. *)
-subject_tuple= "(", qualified, { ",", qualified }, ")" ;
+(* -- subjects ----------------------------------------------------------- *)
 
-(* --- lifecycle --- *)
-lifecycle    = "RETRACT", ident, "(", subject, { ",", arg_pair }, ")",
-               provenance, ";" ;
+subject           = path
+                  | pair_path ;
+path              = name, [ ".", name, [ ".", name ] ] ;
+                    (* dataset | dataset.table | dataset.table.column;
+                       views count as tables; unprefixed resolves via USE *)
+pair_path         = column_path, rel_op, column_path ;
+                    (* a declared relationship, addressed by its pair path *)
 
-(* --- shared --- *)
-provenance   = "BY", actor, [ "CONFIDENCE", number ], [ "EVIDENCE", string ] ;
-actor        = "DETECTOR", ( ident | string ), [ "WITNESS", ident ]   (* sprint 1 fork B *)
-             | other_class, ( ident | string ) ;
-               (* string form is real: BY CALIBRATION '2026-07'. A detector pools
-                  one or more witnesses; reliability is declared per witness.
-                  Bare DETECTOR x ≡ DETECTOR x WITNESS x. *)
-other_class  = "USER" | "AGENT" | "SEED" | "CALIBRATION" ;
+(* -- glossary ----------------------------------------------------------- *)
 
-subject      = "workspace" | qualified | pair | name ;
-qualified    = ident, [ ".", ident ] ;                                (* table | table.column *)
-pair         = qualified, "REFERENCES", qualified
-             | ident, "(", ident, { ",", ident }, ")",
-               "REFERENCES", ident, "(", ident, { ",", ident }, ")" ;
+aspect_decl       = "ASPECT", name, "WITH", json, "AS", aspect_kind ;
+aspect_kind       = "MEASUREMENT"            (* never glossed; value = bound
+                                                function's cached JSON output *)
+                  | "FACT"                   (* authored assertion; WITH schema
+                                                validates the gloss body *)
+                  | "QUERY" ;                (* SQL-grounded; glosses validate
+                                                against the standard grounding
+                                                schema; WITH schema carries the
+                                                ontology entry *)
 
-(* Clauses: keyword + payload. Statement forms are normative; clause payloads
-   are sketch-level, parsed as keyword-delimited spans. Known clause keywords: *)
-clause       = clause_kw, clause_payload ;
-clause_kw    = "KIND" | "DESCRIPTION" | "INDICATORS" | "EXCLUDE"
-             | "UNIT" | "UNIT FROM" | "ORDERING" | "STATEMENT" | "AS"
-             | "PARAMETER" | "ON CYCLES" | "OVER" | "CONVENTIONS"
-             | "TOLERANCE" | "SEVERITY" | "THRESHOLDS" | "WARNING MARGIN"
-             | "GUIDANCE" | "OUTCOME" | "DIRECTIONS" | "VALUES" | "TERMINAL"
-             | "ARGUMENTS" | "FROM" | "CONNECTION"
-             | "VIA" | "IN" | "LEVELS" | "WHERE" | "BANDS" | "WEIGHT"
-             | "OVERALL THRESHOLD" | "BLOCK ON" | "PREFER"
-             | "DIMENSION BUDGET" | "RESTRICT JOINS TO DECLARED RELATIONSHIPS"
-             | "INCLUDE" ;
-               (* VALUES lists may be ordered (a < b < c); TERMINAL marks
-                  absorbing labels; ARGUMENTS declares per-instance argument
-                  names — sprint 3 fork B, 2026-07-30.
-                  PARAMETER (sprint 6 fork B) = "PARAMETER", name,
-                  ["DEFAULT", value], ["OPTIONS", "(", ... , ")"],
-                  ["DERIVED", "BY", mechanism] — no TYPE clause, the DEFAULT
-                  literal types the parameter; mechanisms are spec-defined
-                  (today: period_grain).
-                  Validation envelope (sprint 7 fork A): ON CYCLES lists cycle
-                  concepts, absent = universal; CONVENTIONS is membership-
-                  checked against declared conventions; OUTCOME is the second
-                  prose slot (what passing means). *)
-clause_payload = ? balanced token span up to the next clause_kw or provenance ? ;
+gloss             = "GLOSS", name, "ON", subject, "AS", json ;
+                    (* body admission by declared kind:
+                       FACT -> the aspect's WITH schema,
+                       QUERY -> the standard grounding schema,
+                       MEASUREMENT -> rejected.
+                       supersession key: (subject, aspect, actor kind) *)
 
-expr         = ? substrate-SQL expression; balanced token span ? ;
+(* -- functions ---------------------------------------------------------- *)
 
-value        = ident | number | string | "(", ident | number, { ",", ident | number }, ")" ;
-name         = ident ;
+function_decl     = "FUNCTION", name, "FOR", ( name | "GLOBAL" ),
+                    "FROM", string,
+                    [ "ACCEPTS", ( json | schema_pointer ) ],
+                    "RETURNS", json ;
+                    (* FROM names the script; every function implicitly receives
+                       its subject and the subject's SQL schema; RETURNS is a
+                       JSON Schema — results are cached, caching is
+                       implementation *)
+schema_pointer    = name, "#", json_pointer ;
+                    (* a single value out of another producer's schema;
+                       syntax is a placeholder pending confirmation *)
+json_pointer      = { "/", pointer_segment }- ;
+pointer_segment   = name | number ;
 
-(* ------------------------------------------------------------------ reading *)
+extract           = "SELECT", call, { ",", call }, "FROM", subject,
+                    [ "SEQUENTIAL" | "PARALLEL" ], [ "REFRESH" ] ;
+call              = name, "(", [ named_arg, { ",", named_arg } ], ")" ;
+named_arg         = name, "=>", ( name | string | number | "true" | "false" ) ;
+                    (* first run computes and caches; later selects read the
+                       cache; REFRESH re-runs. Functions never write the
+                       glossary. *)
 
-reading      = [ "AT", string ], ( gloss | sql_query ) ;
-gloss        = "GLOSS", ( subject | actor | "(", sql_query, ")" ),
-               [ "USING", "SERVING", name ], [ "AS", "PACK" ], ";" ;
-               (* actor form is the pack export: GLOSS SEED finance AS PACK —
-                  the pack boundary is the provenance boundary (sprint 10) *)
-sql_query    = ? substrate SQL statement, passed through; context relations
-                 (CONTEXT, DECLARATIONS, READINESS, MEASUREMENTS, METRIC, WHY,
-                 GROUNDINGS, PROFILE, OBSERVATIONS) are table functions in it ? ;
+(* -- witnesses ---------------------------------------------------------- *)
+
+witness_decl      = "WITNESS", name, "ON", name,
+                    "BY", "(", speaker, { ",", speaker }, ")",
+                    [ "DETECTOR", name ],
+                    [ "THRESHOLD", number ] ;
+speaker           = "FUNCTION", name         (* fills the measurement slot *)
+                  | "AGENT"                  (* admits agent glosses *)
+                  | "HUMAN" ;                (* admits human glosses *)
+                    (* declared per aspect, dataset-wide; one current value per
+                       (subject, aspect) per speaker. DETECTOR names a function
+                       whose RETURNS conforms to the standard attest schema;
+                       THRESHOLD is the entropy cutoff in 0..1 *)
+
+(* -- reading (table functions in substrate SQL) ------------------------- *)
+
+glossary_read     = "GLOSSARY", "(", subject, [ ",", named_arg ], ")" ;
+                    (* collapsed default: one row per (subject, aspect) —
+                       (subject, aspect, value, band, score); value collapsed by
+                       the witness's detector, NULL when the slot is empty or
+                       entropy exceeds the threshold.
+                       all => true: one row per (subject, aspect, kind, witness)
+                       — (subject, aspect, kind, witness, actor, body,
+                       written_at) *)
+
+attest_read       = "ATTEST", "(", ( path | pair_path ), ".", name, ")" ;
+                    (* argument is subject.aspect; standard attest schema:
+                       (subject, aspect, witness, band, score, computed_at);
+                       band: green|yellow|orange|red, score: 0..1.
+                       sweeps are WHERE clauses over this relation *)
