@@ -13,7 +13,7 @@ test. Grammar changes still follow the corpus-first process below.
 assumption files, no per-topic notes. Open questions live in SPEC.md §9 and
 get folded into the body when decided, not appended as history.
 
-Five non-prose artifacts are first-class — fixtures and machinery, not
+Four non-prose artifacts are first-class — fixtures and machinery, not
 documents:
 
 - `grammar.ebnf` — the machine-readable grammar; the source of truth for syntax.
@@ -21,17 +21,20 @@ documents:
   (` ```glossql ` must parse; ` ```glossql-gap ` documents a gap and must
   fail). Fixtures 11–12 model the system's operational flows as statement
   sequences.
-- `harness/` — the §9.1 machinery (parser + checker). Stays until the Rust
-  corpus suite fully replaces it, then retires.
-- `server/` — the Rust PoC server (Cargo workspace: `parser`, `catalog`,
-  `glossary`, `scripts`, `import`, `serverd`). `parser` is the Rust port of
-  the harness parser; the corpus is its acceptance suite.
+- `crates/` — the Rust PoC server, a Cargo workspace at the repo root.
+  Directories unprefixed, package names `glossql-*`. Planned map (a crate is
+  created only when it has real content): `parser` (GlossqlParser wrapping
+  DataFusion's DFParser; the corpus is its acceptance suite) · `glossary`
+  (sqlx store, supersession, admission) · `catalog` (iceberg-rust behind the
+  Catalog trait) · `scripts` (rhai + arrow kernels) · `import` (ADBC,
+  CSV/parquet) · `session` (SessionContext assembly, GLOSSARY/ATTEST UDTFs,
+  statement router) · `serverd` (Flight SQL + MCP shim).
 - `reports/` — pivot records, review verdicts, and evaluation records.
 
-**Standing invariant:** `python3 harness/check.py` AND
-`cargo test -p parser` (from `server/`) pass — every ```sql block in SPEC.md
-parses, every corpus fixture behaves as tagged, in both parsers. A grammar
-edit that breaks either doesn't land.
+**Standing invariant:** `cargo test -p glossql-parser` passes — every
+```sql block in SPEC.md parses, every corpus fixture behaves as tagged. A
+grammar edit that breaks it doesn't land. (The Python harness retired
+2026-08-03 when this suite replaced it.)
 
 **Ideation before prose:** no idea enters SPEC.md until it has survived a
 corpus test — write competing statement forms for the same real artifact,

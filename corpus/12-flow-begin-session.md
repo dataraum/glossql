@@ -26,16 +26,16 @@ relationship statement:
 ```glossql
 USE fin;
 
-DECLARE ASPECT relationship_candidates WITH {
+DECLARE ASPECT relationship_candidates WITH $${
   "type": "object",
   "properties": {"candidates": {"type": "array",
     "items": {"type": "object",
       "properties": {"from": {"type": "string"}, "to": {"type": "string"},
                      "cardinality": {"type": "string"},
                      "overlap": {"type": "number"}}}}}
-} AS MEASUREMENT;
+}$$ AS MEASUREMENT;
 DECLARE FUNCTION detect_relationships FOR GLOBAL FROM 'functions/relationships.py'
-  RETURNS {"type": "object", "properties": {"candidates": {"type": "array"}}};
+  RETURNS $${"type": "object", "properties": {"candidates": {"type": "array"}}}$$;
 DECLARE WITNESS rel_candidates_w ON relationship_candidates
   BY (FUNCTION detect_relationships);
 
@@ -65,13 +65,13 @@ CREATE VIEW orders_enriched AS
   SELECT o.order_id, o.line_no, o.amount, c.region, c.segment
   FROM orders o JOIN customers c ON o.customer_id = c.id;
 
-GLOSS entity ON orders AS {
+GLOSS entity ON orders AS $${
   "value": "sales order", "role": "fact",
   "grain": ["order_id", "line_no"], "time_axis": "order_date"
-};
-GLOSS dimension ON orders.channel AS {"priority": 0.8, "context": "primary go-to-market split"};
-GLOSS hierarchy ON customers AS {"levels": ["country", "region", "city"], "kind": "drilldown"};
-GLOSS meaning ON orders_enriched AS {"value": "orders with customer region and segment"};
+}$$;
+GLOSS dimension ON orders.channel AS $${"priority": 0.8, "context": "primary go-to-market split"}$$;
+GLOSS hierarchy ON customers AS $${"levels": ["country", "region", "city"], "kind": "drilldown"}$$;
+GLOSS meaning ON orders_enriched AS $${"value": "orders with customer region and segment"}$$;
 ```
 
 Cross-fact reconciliation and drivers are measurements with witnesses; the
@@ -79,13 +79,13 @@ grain check that today drops a bad join is a detector returning a red band on
 the view's subject:
 
 ```glossql
-DECLARE ASPECT reconciliation WITH {
+DECLARE ASPECT reconciliation WITH $${
   "type": "object",
   "properties": {"pairs": {"type": "array"}, "max_delta": {"type": "number"}}
-} AS MEASUREMENT;
+}$$ AS MEASUREMENT;
 DECLARE FUNCTION reconcile_aggregates FOR fin FROM 'functions/reconcile.py'
-  RETURNS {"type": "object",
-    "properties": {"pairs": {"type": "array"}, "max_delta": {"type": "number"}}};
+  RETURNS $${"type": "object",
+    "properties": {"pairs": {"type": "array"}, "max_delta": {"type": "number"}}}$$;
 DECLARE WITNESS reconciliation_w ON reconciliation
   BY (FUNCTION reconcile_aggregates) DETECTOR reconcile_bands THRESHOLD 0.5;
 
@@ -93,7 +93,7 @@ SELECT reconcile_aggregates() FROM fin;
 SELECT subject, band FROM ATTEST(fin.reconciliation) WHERE band = 'red';
 
 DECLARE FUNCTION drivers FOR fin FROM 'functions/drivers.py'
-  RETURNS {"type": "object", "properties": {"rankings": {"type": "array"}}};
+  RETURNS $${"type": "object", "properties": {"rankings": {"type": "array"}}}$$;
 SELECT drivers() FROM fin.orders;
 ```
 
@@ -108,7 +108,7 @@ SELECT drivers() FROM fin.orders;
   Nothing in the flow needed a fourth kind.
 - What stays app-side: the cascade trigger, retries and rollback, the
   silent-accept keeper lift, snapshot heads. All versioning surfaces in the
-  grammar collapse to cache + REFRESH + supersession keys.
+  grammar collapse to cache + cache-row deletion + supersession keys.
 - The downstream context assembly for answer agents (ten-block served
   context) is fixture 09's dropped territory — the experiment: skills over
   `GLOSSARY()` / `ATTEST()` reads instead of a serving layer.

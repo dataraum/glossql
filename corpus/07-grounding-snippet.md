@@ -23,7 +23,7 @@ grounding schema** — fixed, like the attest schema: `sql` required,
 `assumptions[]` optional. Assumptions ride inside the grounding.
 
 ```glossql
-GLOSS accounts_receivable ON fin.journal_lines_enriched AS {
+GLOSS accounts_receivable ON fin.journal_lines_enriched AS $${
   "sql": "SELECT debit_amount - credit_amount FROM journal_lines_enriched WHERE account_type = 'asset'",
   "assumptions": [
     {"dimension": "sign", "assumption": "ledger stores debits positive",
@@ -31,7 +31,7 @@ GLOSS accounts_receivable ON fin.journal_lines_enriched AS {
     {"dimension": "scope", "assumption": "asset accounts only",
      "basis": "chart_of_accounts", "confidence": 0.95}
   ]
-};
+}$$;
 ```
 
 ## Findings

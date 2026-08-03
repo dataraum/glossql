@@ -67,7 +67,7 @@ DECLARE SOURCE crm SET (type: relational_db, location: 'postgres://crm.internal/
   statements, so they never enter the log.
 
 ```sql
-DECLARE RECIPE segments ON fin FROM crm AS SELECT id, segment FROM customer_segments;
+DECLARE RECIPE segments ON fin FROM crm AS $$SELECT id, segment FROM customer_segments$$;
 ```
 
 The recipe SQL runs **at the source, in the source's dialect**; the result
@@ -128,22 +128,22 @@ to a subject with a JSON body. There are no fact names: the aspect is the key.
 ### 5.1 Aspects
 
 ```sql
-DECLARE ASPECT unit WITH {
+DECLARE ASPECT unit WITH $${
   "type": "object",
   "properties": {"value": {"type": "string"}, "source_column": {"type": "string"}}
-} AS FACT;
+}$$ AS FACT;
 
-DECLARE ASPECT revenue WITH {
+DECLARE ASPECT revenue WITH $${
   "title": "revenue",
   "description": "Income from sales or services",
   "x-kind": "measure",
   "x-indicators": ["revenue", "sales", "income", "turnover", "receipts"]
-} AS QUERY;
+}$$ AS QUERY;
 
-DECLARE ASPECT min_max WITH {
+DECLARE ASPECT min_max WITH $${
   "type": "object",
   "properties": {"min": {}, "max": {}}
-} AS MEASUREMENT;
+}$$ AS MEASUREMENT;
 ```
 
 The kind fixes the aspect's role:
@@ -166,20 +166,22 @@ statements or slots.
 
 ### 5.2 Glosses
 
-One uniform statement; every body is JSON:
+One uniform statement; every body is JSON. Bodies are dollar-quoted
+(`$$ … $$`, postgres-style; `$tag$ … $tag$` if the body itself contains
+`$$`), so the JSON document rides verbatim — no escaping, ever:
 
 ```sql
-GLOSS unit ON orders.amount AS {"value": "EUR", "source_column": "currency_code"};
+GLOSS unit ON orders.amount AS $${"value": "EUR", "source_column": "currency_code"}$$;
 
-GLOSS revenue ON fin.journal_lines AS {
+GLOSS revenue ON fin.journal_lines AS $${
   "sql": "SELECT debit_amount - credit_amount FROM journal_lines WHERE account_type = 'revenue'",
   "assumptions": [
     {"dimension": "sign", "assumption": "ledger stores debits positive",
      "basis": "column_stats", "confidence": 0.9}
   ]
-};
+}$$;
 
-GLOSS fk_note ON orders.customer_id -> customers.id AS {"value": "2% orphaned rows"};
+GLOSS fk_note ON orders.customer_id -> customers.id AS $${"value": "2% orphaned rows"}$$;
 ```
 
 - You cannot gloss an aspect that was not declared. Admission validates the
@@ -253,22 +255,22 @@ ported by copying the script.
 
 ```sql
 DECLARE FUNCTION dso FOR fin FROM 'functions/dso.py'
-  ACCEPTS {
+  ACCEPTS $${
     "type": "object",
     "properties": {"days_in_period": {"type": "integer", "default": 30, "enum": [30, 90, 365]}}
-  }
-  RETURNS {
+  }$$
+  RETURNS $${
     "type": "object",
     "required": ["value"],
     "properties": {"value": {"type": "number"}, "unit": {"const": "days"}}
-  };
+  }$$;
 ```
 
 - `FOR` scopes the function to a dataset, or `GLOBAL`.
 - `FROM` names the script.
 - `ACCEPTS` is the input contract: a JSON Schema, or a pointer to a single
-  value inside another producer's schema — `ACCEPTS period_grain#/properties/days`.
-  Arguments are passed by name.
+  value inside another producer's schema — `ACCEPTS 'period_grain#/properties/days'`,
+  a string holding `producer#/json/pointer`. Arguments are passed by name.
 - `RETURNS` is a JSON Schema; functions return JSON per it. How results are
   cached is implementation.
 - Every function implicitly receives its subject and the subject's SQL schema.
@@ -279,14 +281,16 @@ Extraction:
 
 ```sql
 SELECT dso(days_in_period => 90) FROM fin;
-SELECT profile_min_max() FROM orders REFRESH;
+SELECT profile_min_max() FROM orders;
 ```
 
-The first run computes and caches; later selects read the cache; `REFRESH`
-re-runs. Whether multi-function extraction fans out or runs one call after
-another is the caller's choice — send one statement with many calls, or many
-statements; the grammar carries no ordering surface. Functions never write
-the glossary; their results live in the cache.
+The first run computes and caches; later selects read the cache. Re-running
+is removal, not a modifier: the cache is an ordinary relation, like the
+glossary — DELETE the cached rows and select again. Whether multi-function
+extraction fans out or runs one call after another is the caller's choice —
+send one statement with many calls, or many statements; the grammar carries
+no ordering surface. Functions never write the glossary; their results live
+in the cache.
 
 ## 7. Witnesses
 
@@ -326,7 +330,7 @@ SELECT subject, band FROM ATTEST(fin.trial_balance) WHERE band = 'red';
 The **standard attest schema** is fixed:
 `(subject, aspect, witness, band, score, computed_at)` — `band` in
 `green | yellow | orange | red`, `score` the disagreement/entropy in 0..1.
-Same cache/REFRESH semantics as function SELECT; detail lives in the value
+Same cache semantics as function SELECT; detail lives in the value
 function's own cached output, reachable by SELECT. Sweeps ("all contested
 behavior columns") are WHERE clauses over the attest relation, never a
 special form.
@@ -356,7 +360,9 @@ reads as nonexistence). Closes by corpus test against the real served context
 
 PoC notes: batch visibility comes from (long-running) transactions — the
 running system's run_id + snapshot-head pointer is the verbose version of
-the same guarantee · actor transport rides the connection, DuckDB-style.
+the same guarantee · actor transport rides the connection, DuckDB-style ·
+the cache is an ordinary relation like `glossary`; its name and schema are
+fixed when the store lands.
 
 Deferred, not under discussion: access rights · portability · persistence
 backend and engine mapping.

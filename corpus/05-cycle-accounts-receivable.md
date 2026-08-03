@@ -31,7 +31,7 @@ native order; rendering conventions already ride the schema, so `x-order` /
 status column.
 
 ```glossql
-DECLARE ASPECT ar_stage WITH {
+DECLARE ASPECT ar_stage WITH $${
   "type": "object",
   "properties": {
     "mappings": {
@@ -48,31 +48,31 @@ DECLARE ASPECT ar_stage WITH {
   },
   "x-order": ["created", "sent", "due", "paid"],
   "x-terminal": ["paid"]
-} AS FACT;
+}$$ AS FACT;
 
-GLOSS ar_stage ON invoices.status AS {
+GLOSS ar_stage ON invoices.status AS $${
   "mappings": [
     {"token": "delivered", "stage": "sent"},
     {"token": "paid", "stage": "paid"}
   ]
-};
+}$$;
 ```
 
 The family and its directions are dataset-level facts:
 
 ```glossql
-DECLARE ASPECT cycles WITH {
+DECLARE ASPECT cycles WITH $${
   "type": "object",
   "properties": {
     "families": {"type": "object"}
   }
-} AS FACT;
+}$$ AS FACT;
 
-GLOSS cycles ON fin AS {
+GLOSS cycles ON fin AS $${
   "families": {
     "settlement": {"incoming": "accounts_receivable", "outgoing": "accounts_payable"}
   }
-};
+}$$;
 ```
 
 ## Findings

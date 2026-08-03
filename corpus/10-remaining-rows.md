@@ -8,7 +8,7 @@ table shape (engine `schema.sql`).
 ```glossql
 DECLARE SOURCE erp_export SET (type: parquet, location: 'lake/erp/*.parquet');
 DECLARE SOURCE crm SET (type: relational_db, location: 'postgres://crm.internal/prod', via: crm_prod);
-DECLARE RECIPE segments ON fin FROM crm AS SELECT id, segment FROM customer_segments;
+DECLARE RECIPE segments ON fin FROM crm AS $$SELECT id, segment FROM customer_segments$$;
 ```
 
 `via:` references engine-held credentials — secrets never appear in
@@ -18,18 +18,18 @@ statements. `recipe_hash` needs no clause: statement identity is content hash
 ## Column + table annotations (`semantic_annotations`, `column_concepts`, `table_entities`)
 
 ```glossql
-GLOSS meaning ON orders.amount AS {"value": "gross invoiced amount per order line"};
-GLOSS behavior ON orders.amount AS {"value": "flow"};
-GLOSS unit ON orders.amount AS {"value": "EUR", "source_column": "currency_code"};
-GLOSS stored_sign ON journal_lines.amount AS {"value": "ledger_signed"};
-GLOSS type ON orders.amount AS {"value": "DECIMAL(12,2)"};
+GLOSS meaning ON orders.amount AS $${"value": "gross invoiced amount per order line"}$$;
+GLOSS behavior ON orders.amount AS $${"value": "flow"}$$;
+GLOSS unit ON orders.amount AS $${"value": "EUR", "source_column": "currency_code"}$$;
+GLOSS stored_sign ON journal_lines.amount AS $${"value": "ledger_signed"}$$;
+GLOSS type ON orders.amount AS $${"value": "DECIMAL(12,2)"}$$;
 
-GLOSS entity ON orders AS {
+GLOSS entity ON orders AS $${
   "value": "sales order", "role": "fact",
   "grain": ["order_id", "line_no"],
   "time_axis": "order_date",
   "identity": ["order_id"]
-};
+}$$;
 ```
 
 (Each aspect above was declared once with `DECLARE ASPECT … AS FACT`; agent
@@ -54,9 +54,9 @@ DECLARE RELATIONSHIP txn_keyed.account_key -> coa.account_key;
 ## Dimensions, hierarchies, calendar (`slice_definitions`, `dimension_hierarchies`, `workspace_calendar`)
 
 ```glossql
-GLOSS dimension ON orders.channel AS {"priority": 0.8, "context": "primary go-to-market split"};
-GLOSS hierarchy ON customers AS {"levels": ["country", "region", "city"], "kind": "drilldown"};
-GLOSS calendar ON fin AS {"fiscal_year_starts": "april"};
+GLOSS dimension ON orders.channel AS $${"priority": 0.8, "context": "primary go-to-market split"}$$;
+GLOSS hierarchy ON customers AS $${"levels": ["country", "region", "city"], "kind": "drilldown"}$$;
+GLOSS calendar ON fin AS $${"fiscal_year_starts": "april"}$$;
 ```
 
 ## Statistics / profiling (`column_statistics`, `relationship_candidates`)
@@ -65,11 +65,11 @@ Measurements are never glossed — a MEASUREMENT aspect binds a function via a
 witness and fills from its cache:
 
 ```glossql
-DECLARE ASPECT min_max WITH {
+DECLARE ASPECT min_max WITH $${
   "type": "object", "properties": {"min": {}, "max": {}}
-} AS MEASUREMENT;
+}$$ AS MEASUREMENT;
 DECLARE FUNCTION profile_min_max FOR GLOBAL FROM 'functions/profile.py'
-  RETURNS {"type": "object", "properties": {"min": {}, "max": {}}};
+  RETURNS $${"type": "object", "properties": {"min": {}, "max": {}}}$$;
 DECLARE WITNESS min_max_w ON min_max BY (FUNCTION profile_min_max);
 
 SELECT profile_min_max() FROM fin.orders;
@@ -82,7 +82,7 @@ SELECT * FROM GLOSSARY(fin.orders.amount);
 CREATE VIEW orders_enriched AS
   SELECT o.order_id, o.line_no, o.amount, c.region, c.segment
   FROM orders o JOIN customers c ON o.customer_id = c.id;
-GLOSS meaning ON orders_enriched AS {"value": "orders with customer region and segment"};
+GLOSS meaning ON orders_enriched AS $${"value": "orders with customer region and segment"}$$;
 ```
 
 Views are glossable like tables; exposed columns are the select list.

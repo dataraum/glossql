@@ -20,14 +20,14 @@ Each concept is its own aspect; the ontology entry rides the `WITH` schema as
 annotations. `AS QUERY` makes its glosses groundings (fixture 07).
 
 ```glossql
-DECLARE ASPECT revenue WITH {
+DECLARE ASPECT revenue WITH $${
   "title": "revenue",
   "description": "Income from sales or services",
   "x-kind": "measure",
   "x-indicators": ["revenue", "sales", "income", "turnover", "receipts"],
   "x-exclude": ["cost", "expense"],
   "x-unit-from": "currency"
-} AS QUERY;
+}$$ AS QUERY;
 ```
 
 The `compositions:` block in the same file (`whole: current_assets`,
@@ -35,11 +35,11 @@ The `compositions:` block in the same file (`whole: current_assets`,
 aspect — multiplicity lives inside the schema, never in extra statements:
 
 ```glossql
-DECLARE ASPECT current_assets WITH {
+DECLARE ASPECT current_assets WITH $${
   "title": "current_assets",
   "x-kind": "measure",
   "x-parts": ["cash", "accounts_receivable", "inventory"]
-} AS QUERY;
+}$$ AS QUERY;
 ```
 
 ## Findings

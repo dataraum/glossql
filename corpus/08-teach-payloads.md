@@ -15,7 +15,7 @@ the human and agent slots.
 `unit` teach `{table, column, unit}`:
 
 ```glossql
-GLOSS unit ON orders.amount AS {"value": "EUR"};
+GLOSS unit ON orders.amount AS $${"value": "EUR"}$$;
 ```
 
 `relationship` teach `{action: confirm|add, from_column_id, to_column_id}`:
@@ -27,9 +27,9 @@ DECLARE RELATIONSHIP orders.customer_id -> customers.id;
 `hierarchy` teach, `add` action:
 
 ```glossql
-GLOSS hierarchy ON customers AS {
+GLOSS hierarchy ON customers AS $${
   "levels": ["country", "region", "city"], "kind": "drilldown"
-};
+}$$;
 ```
 
 `type_pattern` and `null_value` — the workspace-scoped vocabulary teaches the
@@ -37,14 +37,14 @@ old spec wrestled with (§8.3) — land as dataset-scoped FACT glosses, which is
 their real scope:
 
 ```glossql
-GLOSS type_patterns ON fin AS {
+GLOSS type_patterns ON fin AS $${
   "items": [{
     "name": "eu_date",
     "pattern": "^\\d{2}\\.\\d{2}\\.\\d{4}$",
     "inferred_type": "DATE",
     "standardization": "strptime(value, '%d.%m.%Y')"
   }]
-};
+}$$;
 ```
 
 `validation` / `cycle` / `metric` teaches are fixtures 04/05/03 authored on a

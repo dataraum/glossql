@@ -28,7 +28,7 @@ The authored expectation is a FACT gloss; the check is a function; the witness
 binds them; ATTEST is the verdict surface. No validation construct exists.
 
 ```glossql
-DECLARE ASPECT trial_balance WITH {
+DECLARE ASPECT trial_balance WITH $${
   "type": "object",
   "required": ["outcome"],
   "properties": {
@@ -39,19 +39,19 @@ DECLARE ASPECT trial_balance WITH {
     "cycles": {"type": "array", "items": {"type": "string"}},
     "conventions": {"type": "array", "items": {"type": "string"}}
   }
-} AS FACT;
+}$$ AS FACT;
 
-GLOSS trial_balance ON fin AS {
+GLOSS trial_balance ON fin AS $${
   "tolerance": 0.01,
   "severity": "critical",
   "outcome": "Total debits must equal total credits across all account types.",
   "guidance": "Join the trial balance table with the chart of accounts before summing by account type.",
   "cycles": ["journal_entry_cycle", "accounts_receivable", "accounts_payable"],
   "conventions": ["sign_natural_balance"]
-};
+}$$;
 
 DECLARE FUNCTION trial_balance_check FOR fin FROM 'functions/trial_balance.py'
-  RETURNS {
+  RETURNS $${
     "type": "object",
     "required": ["subject", "aspect", "witness", "band", "score", "computed_at"],
     "properties": {
@@ -62,7 +62,7 @@ DECLARE FUNCTION trial_balance_check FOR fin FROM 'functions/trial_balance.py'
       "score": {"type": "number", "minimum": 0, "maximum": 1},
       "computed_at": {"type": "string", "format": "date-time"}
     }
-  };
+  }$$;
 
 DECLARE WITNESS tb ON trial_balance BY (FUNCTION trial_balance_check, HUMAN)
   DETECTOR trial_balance_check;

@@ -51,13 +51,13 @@ script's business (it reads the groundings via the glossary).
 
 ```glossql
 DECLARE FUNCTION dso FOR fin FROM 'functions/dso.py'
-  ACCEPTS {
+  ACCEPTS $${
     "type": "object",
     "properties": {
       "days_in_period": {"type": "integer", "default": 30, "enum": [30, 90, 365]}
     }
-  }
-  RETURNS {
+  }$$
+  RETURNS $${
     "type": "object",
     "required": ["value"],
     "properties": {
@@ -65,7 +65,7 @@ DECLARE FUNCTION dso FOR fin FROM 'functions/dso.py'
       "unit": {"const": "days"},
       "interpretation": {"enum": ["EXCELLENT", "GOOD", "CONCERNING", "POOR", "CRITICAL"]}
     }
-  };
+  }$$;
 
 SELECT dso(days_in_period => 90) FROM fin;
 ```
@@ -85,6 +85,6 @@ SELECT dso(days_in_period => 90) FROM fin;
 
 ```glossql
 DECLARE FUNCTION dso_auto FOR fin FROM 'functions/dso.py'
-  ACCEPTS period_grain#/properties/days
-  RETURNS {"type": "object", "properties": {"value": {"type": "number"}}};
+  ACCEPTS 'period_grain#/properties/days'
+  RETURNS $${"type": "object", "properties": {"value": {"type": "number"}}}$$;
 ```

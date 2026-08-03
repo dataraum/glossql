@@ -4,7 +4,8 @@ Each file pairs a **real artifact** from `../dataraum-context` (quoted, with pat
 with its glossql transcription per SPEC.md. These are test fixtures — the §9.1
 evidence base — not design docs.
 
-Block tags, enforced by `harness/check.py`:
+Block tags, enforced by the corpus suite in `crates/parser`
+(`cargo test -p glossql-parser`):
 
 - ` ```glossql ` — must parse under `grammar.ebnf`. A failure is a regression.
 - ` ```glossql-gap ` — invented syntax documenting a grammar gap; must **fail**

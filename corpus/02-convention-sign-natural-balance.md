@@ -20,7 +20,7 @@ One FACT aspect on the dataset; conventions are rows in an array-typed blob.
 Authored prose stays opaque; the groups the prose refers to are data beside it.
 
 ```glossql
-DECLARE ASPECT conventions WITH {
+DECLARE ASPECT conventions WITH $${
   "type": "object",
   "properties": {
     "items": {
@@ -37,9 +37,9 @@ DECLARE ASPECT conventions WITH {
       }
     }
   }
-} AS FACT;
+}$$ AS FACT;
 
-GLOSS conventions ON fin AS {
+GLOSS conventions ON fin AS $${
   "items": [{
     "id": "sign_natural_balance",
     "statement": "Express every monetary measure in its natural-balance direction: credit_normal concepts as credits, debit_normal as debits - never normalize only one side of a comparison.",
@@ -50,7 +50,7 @@ GLOSS conventions ON fin AS {
                        "tax", "accounts_receivable", "inventory", "current_assets", "cash"]
     }
   }]
-};
+}$$;
 ```
 
 ## Findings

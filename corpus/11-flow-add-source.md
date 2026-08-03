@@ -30,7 +30,7 @@ Human registers the source; recipes land the tables:
 ```glossql
 USE fin;
 DECLARE SOURCE erp_export SET (type: parquet, location: 'lake/erp/*.parquet');
-DECLARE RECIPE orders ON fin FROM erp_export AS SELECT * FROM read_parquet('orders/*.parquet');
+DECLARE RECIPE orders ON fin FROM erp_export AS $$SELECT * FROM read_parquet('orders/*.parquet')$$;
 ```
 
 Framing the vertical is replaying the vertical folder's declarations —
@@ -40,25 +40,25 @@ The deterministic profile plane — declared once (vertical/global), fanned out
 per table:
 
 ```glossql
-DECLARE ASPECT column_profile WITH {
+DECLARE ASPECT column_profile WITH $${
   "type": "object",
   "properties": {"null_ratio": {}, "distinct": {}, "min": {}, "max": {},
                  "top_values": {"type": "array"}}
-} AS MEASUREMENT;
+}$$ AS MEASUREMENT;
 DECLARE FUNCTION profile FOR GLOBAL FROM 'functions/profile.py'
-  RETURNS {"type": "object",
+  RETURNS $${"type": "object",
     "properties": {"null_ratio": {}, "distinct": {}, "min": {}, "max": {},
-                   "top_values": {"type": "array"}}};
+                   "top_values": {"type": "array"}}}$$;
 DECLARE WITNESS column_profile_w ON column_profile BY (FUNCTION profile);
 
-DECLARE ASPECT type_candidates WITH {
+DECLARE ASPECT type_candidates WITH $${
   "type": "object",
   "properties": {"candidates": {"type": "array",
     "items": {"type": "object",
       "properties": {"type": {"type": "string"}, "confidence": {"type": "number"}}}}}
-} AS MEASUREMENT;
+}$$ AS MEASUREMENT;
 DECLARE FUNCTION infer_types FOR GLOBAL FROM 'functions/infer_types.py'
-  RETURNS {"type": "object", "properties": {"candidates": {"type": "array"}}};
+  RETURNS $${"type": "object", "properties": {"candidates": {"type": "array"}}}$$;
 DECLARE WITNESS type_candidates_w ON type_candidates BY (FUNCTION infer_types);
 
 SELECT profile(), infer_types() FROM fin.orders;
@@ -70,10 +70,10 @@ connection, reading the measurements first); the typed table is a view:
 ```glossql
 SELECT * FROM GLOSSARY(fin.orders.amount);
 
-GLOSS type ON orders.amount AS {"value": "DECIMAL(12,2)"};
-GLOSS meaning ON orders.amount AS {"value": "gross invoiced amount per order line"};
-GLOSS behavior ON orders.amount AS {"value": "flow"};
-GLOSS unit ON orders.amount AS {"value": "EUR", "source_column": "currency_code"};
+GLOSS type ON orders.amount AS $${"value": "DECIMAL(12,2)"}$$;
+GLOSS meaning ON orders.amount AS $${"value": "gross invoiced amount per order line"}$$;
+GLOSS behavior ON orders.amount AS $${"value": "flow"}$$;
+GLOSS unit ON orders.amount AS $${"value": "EUR", "source_column": "currency_code"}$$;
 
 CREATE VIEW orders_typed AS
   SELECT CAST(order_id AS BIGINT) AS order_id,
@@ -105,8 +105,9 @@ that the grammar knows about.
 - Quarantine tables and cast-failure routing are the typed view's business
   (script/SQL), not statements.
 - `run_id` versioning and the promote/head flip are the cache and
-  supersession mechanics — implementation by ground rule; `REFRESH` is the
-  only surface.
+  supersession mechanics — implementation by ground rule; the only surface
+  is deleting cached rows to force recomputation (REFRESH was dropped
+  2026-08-03 with the sqlparser respell).
 - The vertical binding (`workspace_settings.active_vertical`) is replaying a
   folder (fixture 01) — confirmed against the real frame step, which writes
   seed rows exactly like a replay would.

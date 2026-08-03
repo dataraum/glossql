@@ -5,15 +5,21 @@
    - name:    [A-Za-z_][A-Za-z0-9_]*  or double-quoted "name" (never a keyword)
    - string:  single-quoted, '' escapes a quote
    - number:  decimal literal
-   - json:    a balanced JSON object literal { ... }, valid per RFC 8259;
-              JSON strings are double-quoted with backslash escapes
+   - dollar:  a dollar-quoted verbatim region, postgres-style — $$ ... $$, or
+              $tag$ ... $tag$ when the content itself contains "$$"; nothing
+              inside is escaped, the content rides byte-exact
+   - json:    a dollar region whose content is a JSON object per RFC 8259
    - keywords are case-insensitive; statements end with ";"
 
+   Every statement lexes with the stock sqlparser tokenizer on the postgres
+   dialect ("<->" is one token there); the respell that made this hold is
+   recorded in reports/2026-08-03-sqlparser-respell.md.
+
    Substrate SQL is opaque to this grammar: glossql adds statements and table
-   functions to a SQL host (recipes, views, SELECT bodies, DELETE FROM glossary
-   are host SQL), it does not re-specify SQL. The actor (agent_id | human_id)
-   rides the connection — there is no BY-actor clause anywhere; the engine
-   stamps writer and actor kind on every statement. *)
+   functions to a SQL host (views, SELECT bodies, DELETE FROM glossary and
+   the cache are host SQL), it does not re-specify SQL. The actor
+   (agent_id | human_id) rides the connection — there is no BY-actor clause
+   anywhere; the engine stamps writer and actor kind on every statement. *)
 
 script            = { statement, ";" } ;
 
@@ -39,10 +45,12 @@ pair              = name, ":", ( name | string | number ) ;
                        location (url/path, no credentials), via (reference to
                        engine-held secrets — secrets never appear in statements) *)
 
-recipe_decl       = "RECIPE", name, "ON", name, "FROM", name, "AS", sql ;
-                    (* RECIPE r ON dataset FROM source AS <sql> — the sql runs
-                       at the source, in the source's dialect; the result lands
-                       as table r in the dataset *)
+recipe_decl       = "RECIPE", name, "ON", name, "FROM", name, "AS", dollar ;
+                    (* RECIPE r ON dataset FROM source AS $$ <sql> $$ — the
+                       sql runs at the source, in the source's dialect;
+                       dollar-quoted so foreign-dialect text never meets the
+                       host tokenizer; the result lands as table r in the
+                       dataset *)
 
 (* -- datasets ----------------------------------------------------------- *)
 
@@ -98,17 +106,17 @@ function_decl     = "FUNCTION", name, "FOR", ( name | "GLOBAL" ),
                        its subject and the subject's SQL schema; RETURNS is a
                        JSON Schema — results are cached, caching is
                        implementation *)
-schema_pointer    = name, "#", json_pointer ;
-                    (* a single value out of another producer's schema *)
-json_pointer      = { "/", pointer_segment }- ;
-pointer_segment   = name | number ;
+schema_pointer    = string ;
+                    (* 'producer#/json/pointer' — a single value out of
+                       another producer's schema *)
 
-extract           = "SELECT", call, { ",", call }, "FROM", subject,
-                    [ "REFRESH" ] ;
+extract           = "SELECT", call, { ",", call }, "FROM", subject ;
 call              = name, "(", [ named_arg, { ",", named_arg } ], ")" ;
 named_arg         = name, "=>", ( name | string | number | "true" | "false" ) ;
                     (* first run computes and caches; later selects read the
-                       cache; REFRESH re-runs. Functions never write the
+                       cache; re-running = deleting the cached rows (ordinary
+                       SQL, like glossary removal) and selecting again —
+                       REFRESH dropped 2026-08-03. Functions never write the
                        glossary. *)
 
 (* -- witnesses ---------------------------------------------------------- *)
@@ -140,4 +148,5 @@ attest_read       = "ATTEST", "(", ( path | pair_path ), ".", name, ")" ;
                     (* argument is subject.aspect; standard attest schema:
                        (subject, aspect, witness, band, score, computed_at);
                        band: green|yellow|orange|red, score: 0..1.
-                       sweeps are WHERE clauses over this relation *)
+                       sweeps are WHERE clauses over this relation, never a
+                       special form *)

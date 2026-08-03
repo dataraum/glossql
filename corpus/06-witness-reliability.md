@@ -40,17 +40,17 @@ the human's gloss. The detector adjudicates across slots and returns band +
 score; ATTEST serves it.
 
 ```glossql
-DECLARE ASPECT behavior WITH {
+DECLARE ASPECT behavior WITH $${
   "type": "object",
   "properties": {"value": {"enum": ["stock", "flow"]}}
-} AS FACT;
+}$$ AS FACT;
 
 DECLARE FUNCTION temporal_behavior FOR GLOBAL FROM 'functions/temporal_behavior.py'
-  RETURNS {"type": "object", "properties": {"value": {"enum": ["stock", "flow"]},
-           "evidence": {"type": "string"}}};
+  RETURNS $${"type": "object", "properties": {"value": {"enum": ["stock", "flow"]},
+           "evidence": {"type": "string"}}}$$;
 
 DECLARE FUNCTION behavior_entropy FOR GLOBAL FROM 'functions/behavior_entropy.py'
-  RETURNS {
+  RETURNS $${
     "type": "object",
     "required": ["subject", "aspect", "witness", "band", "score", "computed_at"],
     "properties": {
@@ -60,7 +60,7 @@ DECLARE FUNCTION behavior_entropy FOR GLOBAL FROM 'functions/behavior_entropy.py
       "score": {"type": "number", "minimum": 0, "maximum": 1},
       "computed_at": {"type": "string"}
     }
-  };
+  }$$;
 
 DECLARE WITNESS behavior_w ON behavior BY (FUNCTION temporal_behavior, AGENT, HUMAN)
   DETECTOR behavior_entropy THRESHOLD 0.7;
