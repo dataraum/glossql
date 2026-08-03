@@ -57,24 +57,53 @@ built-in DataFusion integration, but the same absence of cross-table
 transactions, and a second table protocol alongside the parquet + Iceberg
 line already named. Fallback if append-only Iceberg bites; not the plan.
 
-### The plan: session = transaction
+### The plan (converged same day, after review with the project lead)
 
-1. Every workspace table — raw, typed, quarantine, glossary — is an Iceberg
-   table; per-table atomicity, history, and time travel come from snapshots.
-2. A session opens by pinning: resolve every table once, serve all reads
-   through static providers at the pinned snapshots. Long-running sessions
-   read a consistent world by construction.
-3. Session writes buffer as appends. Session end commits each touched
-   table's transaction, then flips one **workspace manifest** — a single
-   small file naming (table → snapshot id) — as the atomic cross-table
-   visibility point. Readers enter through the manifest, so a half-committed
-   session is never visible.
-4. Growth path: the manifest does locally what the REST catalog's
-   multi-table commit does remotely; when iceberg-rust exposes that endpoint
-   the manifest can retire without changing the session model.
+- **Iceberg, baked in.** iceberg-rust as an in-process library behind its
+  `Catalog` trait. The glossql server is the only Iceberg client in the
+  system — every agent speaks statements over a connection — so a catalog
+  server would have exactly one consumer. The `sql` catalog (SQLite file in
+  the workspace; Postgres by connection string) runs in-process; a REST
+  catalog (e.g. Lakekeeper) is the same trait later — configuration, not
+  architecture. Ownership checked: iceberg-rust is Apache-governed with a
+  broad committer base; Lakekeeper is a consumer/contributor ("based on
+  apache/iceberg-rust"), not the owner. Ref/branch changes travel as
+  ordinary `TableUpdate` ops in the commit protocol (Lakekeeper's commit
+  path applies `SetSnapshotRef`), so branch semantics are client-side — no
+  server anywhere needs to "support branches."
+- **Publication = Write–Audit–Publish, implemented post-PoC.** The grammar
+  has no transaction surface (sessions ride the connection, like actor), so
+  postponing costs nothing at the language level. The server keeps a
+  publication seam behind the session boundary:
+  - PoC: direct commits to main, **typed flipped first** — typed is the only
+    table downstream reads, so mid-session states are benign; raw and
+    quarantine are provenance.
+  - Post-PoC: session = branch. Write raw/typed to the branch; the audit is
+    the measurement/witness phase reading the branch across connections;
+    publish is a fast-forward of main. Client gaps are thin and tracked:
+    apache/iceberg-rust PR 2709 (`ManageSnapshotsAction` — create/rename/
+    replace/fast-forward branches; open, active, unreviewed) plus
+    parameterizing the append target ref
+    (`transaction/snapshot.rs:540` hardcodes `MAIN_BRANCH`). Carried on a
+    fork via `[patch.crates-io]` until upstream lands them.
+- **Glossary and declarations: relational — not parquet, not K/V.** Small
+  JSON rows; supersession reads are windowed SQL a K/V store would force us
+  to reimplement. SQLite in the workspace, Postgres by connection string.
+  From day one, gloss and measurement rows carry the data snapshot id they
+  were computed against — provenance and staleness need it anyway, and it
+  stitches the two ACID domains by reference: readers join glossary rows to
+  the snapshot they see, so cross-domain atomicity degrades to referential
+  consistency rather than depending on flip timing.
+- **Not chosen.** The DuckLake shape (all metadata in one SQL database) —
+  evaluated including `datafusion-contrib/datafusion-ducklake` (real, alpha,
+  per-table commits, DuckLake compatibility goals that are not ours): good
+  inspiration for the commit-time model, wrong substrate to build on. A
+  DuckDB extension (PEG parser + ducklake) would have the strongest raw
+  transaction story but reopens both stack-eval discriminators — grammar on
+  a pre-release parser, scripts back in the muddle.
 
-This replaces run-id-per-row plus head-flip verbosity with standard
-machinery: snapshots are the versions, the manifest is the head.
+Snapshots are the versions; refs are the heads; nothing version-shaped
+lives in rows or query text.
 
 ## Rhai boundary: shared, measured
 
