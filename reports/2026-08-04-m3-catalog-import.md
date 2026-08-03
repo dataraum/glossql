@@ -115,10 +115,13 @@ form.
   table is briefly absent. Benign under the single writer; a true atomic
   REPLACE is an overwrite transaction 0.10.1 does not ship — the WAP
   column again.
-- **One staging name.** Materialization stages batches as
-  `__glossql_staged` in the session context. Statements execute serially
-  per session, so no collision exists today; the Flight layer (M5) must
-  keep one-connection-serial semantics or the name grows a nonce.
+- **One staging name — M5 must fix this.** Materialization stages batches
+  as `__glossql_staged` in the session context. Statements execute serially
+  per session, so no collision exists today — but the Flight layer cannot
+  guarantee statement order (project lead, 2026-08-04), so this is not a
+  keep-it-serial option: at M5 the staging name takes a per-materialization
+  suffix, and any other serial-execution assumption in the session gets the
+  same review.
 - **json is the least-tested import path.** It shares the csv code but has
   no test of its own, and nested json fails loudly at the all-VARCHAR cast
   rather than landing. The verdict waits for a real json artifact in the
