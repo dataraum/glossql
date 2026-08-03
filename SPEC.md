@@ -185,9 +185,30 @@ GLOSS fk_note ON orders.customer_id -> customers.id AS {"value": "2% orphaned ro
   body by the aspect's kind: FACT → the aspect's `WITH` schema, QUERY → the
   standard grounding schema, MEASUREMENT → rejected.
 - The **standard grounding schema** is fixed, like the attest schema (§7.2):
-  `sql` (string, required), `assumptions[]` (optional; objects with
-  `dimension`, `assumption`, `basis`, `confidence`). Exact field list is an
-  open editorial call (§9).
+
+```json
+{
+  "type": "object",
+  "required": ["sql"],
+  "additionalProperties": false,
+  "properties": {
+    "sql": {"type": "string"},
+    "assumptions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["assumption"],
+        "properties": {
+          "dimension": {"type": "string"},
+          "assumption": {"type": "string"},
+          "basis": {"type": "string"},
+          "confidence": {"type": "number", "minimum": 0, "maximum": 1}
+        }
+      }
+    }
+  }
+}
+```
 - **Supersession key: (subject, aspect, actor kind).** A human re-gloss
   supersedes the human's value; an agent's supersedes the agent's. The slots
   stay separate; a witness adjudicates across them (§7).
@@ -321,33 +342,14 @@ running system's two operational flows as statement sequences.
 
 ## 9. Open
 
-One open call: the field list of the standard grounding schema — the single
-fixed schema every QUERY gloss body validates against (§5.2). Working sketch,
-pending confirmation that it is complete:
-
-```json
-{
-  "type": "object",
-  "required": ["sql"],
-  "additionalProperties": false,
-  "properties": {
-    "sql": {"type": "string"},
-    "assumptions": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "required": ["assumption"],
-        "properties": {
-          "dimension": {"type": "string"},
-          "assumption": {"type": "string"},
-          "basis": {"type": "string"},
-          "confidence": {"type": "number", "minimum": 0, "maximum": 1}
-        }
-      }
-    }
-  }
-}
-```
+One open question, raised by fixture 09's disclosure benchmark: the collapsed
+`GLOSSARY()` read (§5.3). NULL may be too simple — it conflates three states
+a reading agent must distinguish: **never assessed** (no witness ran),
+**contested** (entropy above threshold), **gated** (awaiting human
+confirmation). Related: whether the read enumerates the declared-aspect grid
+(so "never assessed" is a visible row) or serves only existing rows (absence
+reads as nonexistence). Closes by corpus test against the real served context
+(fixture 09), not by argument.
 
 PoC notes: batch visibility comes from (long-running) transactions — the
 running system's run_id + snapshot-head pointer is the verbose version of
