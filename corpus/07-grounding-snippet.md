@@ -7,7 +7,7 @@ CONSTRAINT uq_snippet_semantic_key UNIQUE (snippet_type, standard_field,
   statement, aggregation, predicate, schema_mapping_id, parameter_value)
 ```
 
-Verified 2026-07-30: `schema_mapping_id` ≈ workspace (DAT-506); `parameter_value`
+Verified 2026-07-30: `schema_mapping_id` ≈ workspace; `parameter_value`
 is constants-only (not groundings); the statement axis has exactly two values in
 the finance vertical; relation is not a key member; grounding is one extract per
 concept per run (`grounding_collision.py`). `provenance` on healthy rows carries
@@ -43,7 +43,7 @@ GLOSS accounts_receivable ON fin.journal_lines_enriched AS {
   tables may coexist — two ways to calculate revenue arriving at the same
   number is the correct answer, not a conflict. Whether they reconcile is a
   witness's job (a detector runs both and returns band + score).
-- The old per-assumption confidence gate (DAT-631) is a detector's business:
+- The old track's weakest-assumption confidence gate is a detector's business:
   assumptions are in the body, readable by any function.
 - **DROPPED BY DESIGN — retained failures.** `disjoint_collision` and friends
   were negative knowledge against re-authoring. Functions are deterministic —

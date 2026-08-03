@@ -99,8 +99,7 @@ function_decl     = "FUNCTION", name, "FOR", ( name | "GLOBAL" ),
                        JSON Schema — results are cached, caching is
                        implementation *)
 schema_pointer    = name, "#", json_pointer ;
-                    (* a single value out of another producer's schema;
-                       syntax is a placeholder pending confirmation *)
+                    (* a single value out of another producer's schema *)
 json_pointer      = { "/", pointer_segment }- ;
 pointer_segment   = name | number ;
 

@@ -245,8 +245,8 @@ DECLARE FUNCTION dso FOR fin FROM 'functions/dso.py'
 - `FOR` scopes the function to a dataset, or `GLOBAL`.
 - `FROM` names the script.
 - `ACCEPTS` is the input contract: a JSON Schema, or a pointer to a single
-  value inside another producer's schema — `ACCEPTS period_grain#/properties/days`
-  (pointer syntax is a placeholder, §9). Arguments are passed by name.
+  value inside another producer's schema — `ACCEPTS period_grain#/properties/days`.
+  Arguments are passed by name.
 - `RETURNS` is a JSON Schema; functions return JSON per it. How results are
   cached is implementation.
 - Every function implicitly receives its subject and the subject's SQL schema.
@@ -321,12 +321,37 @@ running system's two operational flows as statement sequences.
 
 ## 9. Open
 
-Unconfirmed editorial calls:
+One open call: the field list of the standard grounding schema — the single
+fixed schema every QUERY gloss body validates against (§5.2). Working sketch,
+pending confirmation that it is complete:
 
-- the standard grounding schema's exact fields — `{sql required, assumptions[]
-  optional}` is the working sketch (§5.2)
-- the `ACCEPTS` pointer syntax — `[schema]#[json_pointer]` is a placeholder (§6)
+```json
+{
+  "type": "object",
+  "required": ["sql"],
+  "additionalProperties": false,
+  "properties": {
+    "sql": {"type": "string"},
+    "assumptions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["assumption"],
+        "properties": {
+          "dimension": {"type": "string"},
+          "assumption": {"type": "string"},
+          "basis": {"type": "string"},
+          "confidence": {"type": "number", "minimum": 0, "maximum": 1}
+        }
+      }
+    }
+  }
+}
+```
 
-Postponed by decision: actor transport mechanics (DuckDB-style, possibly in
-front of the engine) · cell-level access rights · cross-workspace portability
-· persistence backend and engine mapping (do not decide in passing).
+PoC notes: batch visibility comes from (long-running) transactions — the
+running system's run_id + snapshot-head pointer is the verbose version of
+the same guarantee · actor transport rides the connection, DuckDB-style.
+
+Deferred, not under discussion: access rights · portability · persistence
+backend and engine mapping.

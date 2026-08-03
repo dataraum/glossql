@@ -61,8 +61,10 @@ green (every ```glossql block parses). Verdicts:
   trivially in-blob.
 - **06:** slots transcribe; calibration dropped (above).
 - **09:** dropped by design — the biggest bet: whether agents work from
-  GLOSSARY/ATTEST reads + skills without a curated serving layer. The running
-  system's DAT-660/622/671 fieldwork is the benchmark.
+  GLOSSARY/ATTEST reads + skills without a curated serving layer. The
+  benchmark is the running system's serving behavior: context stable enough
+  to cache as a prompt prefix, curation cuts disclosed instead of silent,
+  confirmation state respected.
 - Old-track gaps that closed by relocation rather than by grammar: display
   metadata (03), workspace-scoped vocabulary teaches (08), per-assumption
   records (07 — assumptions now ride inside the grounding body).

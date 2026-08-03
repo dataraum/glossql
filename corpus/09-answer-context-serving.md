@@ -1,20 +1,30 @@
 # 09 · Answer-agent served context — DROPPED BY DESIGN (the agent experiment)
 
 Source: `dataraum-context/packages/cockpit/src/tools/query-context.ts` (+
-`query.ts:813-848`). Nine blocks served, byte-identical per session as a cached
-prompt prefix (DAT-660): schema (prefer-enriched), dimensions, relationships,
-entities, drivers, grain, vocabulary, conventions, business_concepts. ~40% of
-every block is engineer-authored instructional prose; curation disclosure
-("Showing 9 of 41 catalogued dimensions…") and alias confirmation gates are
-load-bearing serving semantics (DAT-622/671).
+`query.ts:813-848`). When the answer agent gets a question, the cockpit
+assembles nine context blocks — schema (preferring enriched views),
+dimensions, relationships, entities, drivers, grain, vocabulary, conventions,
+business concepts — and serves them as one fixed text: the same bytes every
+time within a session, so the model provider caches them as a prompt prefix.
+
+Three properties of that serving are load-bearing today:
+
+1. **~40% of the text is hand-written instruction**, not data — "ground every
+   join on a pair listed here, otherwise abstain", "(additive) is a flow:
+   SUM it".
+2. **Curation is disclosed** — "showing 9 of 41 catalogued dimensions; the
+   other 32 were never assessed, not rejected". Without the disclosure an
+   agent reads absence as nonexistence and abstains for the wrong reason.
+3. **Unconfirmed knowledge is gated** — an unconfirmed alias hierarchy is
+   served with "do NOT merge these columns"; once a human confirms it, the
+   instruction flips to "group by canonical only".
 
 ## Transcription
 
 None — deliberately. The language has no serving construct: reading is
-`GLOSSARY()` / `ATTEST()` and plain SQL; context assembly is an agent skill,
-not grammar. The old track's `DECLARE SERVING` policy (PREFER / DIMENSION
-BUDGET / RESTRICT JOINS / INCLUDE) and its disclosure guarantees are gone with
-the serving document.
+`GLOSSARY()` / `ATTEST()` plus plain SQL, and context assembly is an agent
+skill, not grammar. The old track's `DECLARE SERVING` policy is gone with the
+serving document.
 
 ```glossql
 SELECT * FROM GLOSSARY(fin.orders);
@@ -25,13 +35,16 @@ SELECT subject, band FROM ATTEST(fin.trial_balance) WHERE band = 'red';
 ## Findings
 
 - **DROPPED BY DESIGN — and it is the biggest bet in the language.** The
-  nine-block served context has no grammar backing; whether agents write
-  glossql directly, use skills over these reads, or need a curated layer is
-  exactly the experiment the simplification runs.
-- The running system's fieldwork is the benchmark the experiment must meet:
-  byte-identical cached context prefix per session (DAT-660), curation
-  disclosure so silence doesn't convert to false abstention (DAT-622/671),
-  alias confirmation gates.
-- Nothing to fix in the grammar; everything to learn in the experiment. If the
-  experiment fails, the lesson returns as skills or as a read-side construct —
-  not as this fixture's old `DECLARE SERVING`.
+  served context is the running system's most-consumed artifact; the bet is
+  that agents can compose their own context from the reads above, guided by
+  skills, without a curated serving layer.
+- The three properties are the benchmark the experiment must meet: context
+  stable enough to cache, curation cuts made visible, confirmation state
+  respected. In the new model their natural homes are: caching → the reads
+  are cacheable relations; disclosure → `GLOSSARY()` returns NULL rows
+  rather than omitting subjects; confirmation state → the band from
+  `ATTEST()`. Whether agents actually use them that way is what the
+  experiment tests.
+- Nothing to fix in the grammar; everything to learn in the experiment. If it
+  fails, the lesson returns as hardened skills or a read-side construct — the
+  read surface itself does not change.
