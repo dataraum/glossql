@@ -46,7 +46,7 @@ fn glossary_read_with_named_arg_is_substrate() {
 fn attest_on_one_to_one_pair_path_parses_as_substrate() {
     // Needs the postgres dialect: `<->` is a single TwoWayArrow token there.
     assert!(matches!(
-        single("SELECT * FROM ATTEST(invoices.order_id <-> orders.id.fk_note);"),
+        single("SELECT * FROM ATTEST(invoices.order_id <-> orders.id::fk_note);"),
         Statement::Substrate(_)
     ));
 }
@@ -116,9 +116,20 @@ fn recipe_tail_must_be_dollar_quoted() {
 }
 
 #[test]
-fn accepts_pointer_must_carry_producer_and_pointer() {
-    let e = error("DECLARE FUNCTION f FOR fin FROM 's.py' ACCEPTS 'no_hash_here' RETURNS $${}$$;");
-    assert!(e.contains("producer#/json/pointer"), "{e}");
+fn accepts_is_a_parenthesized_aspect_list() {
+    let e = error("DECLARE FUNCTION f FOR fin FROM 's.rhai' ACCEPTS typing_config RETURNS $${}$$;");
+    assert!(e.contains("("), "{e}");
+}
+
+#[test]
+fn calls_with_arguments_are_not_extractions() {
+    // Settings are context, never call arguments: an argument-carrying call
+    // is not an extraction — it falls through to substrate SQL, where
+    // planning rejects it loudly.
+    assert!(matches!(
+        single("SELECT dso(days_in_period => 90) FROM fin;"),
+        Statement::Substrate(_)
+    ));
 }
 
 // -- rejections the grammar fixes ----------------------------------------

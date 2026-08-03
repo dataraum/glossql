@@ -34,7 +34,7 @@ DECLARE ASPECT relationship_candidates WITH $${
                      "cardinality": {"type": "string"},
                      "overlap": {"type": "number"}}}}}
 }$$ AS MEASUREMENT;
-DECLARE FUNCTION detect_relationships FOR GLOBAL FROM 'functions/relationships.py'
+DECLARE FUNCTION detect_relationships FOR GLOBAL FROM 'functions/relationships.rhai'
   RETURNS $${"type": "object", "properties": {"candidates": {"type": "array"}}}$$;
 DECLARE WITNESS rel_candidates_w ON relationship_candidates
   BY (FUNCTION detect_relationships);
@@ -83,16 +83,16 @@ DECLARE ASPECT reconciliation WITH $${
   "type": "object",
   "properties": {"pairs": {"type": "array"}, "max_delta": {"type": "number"}}
 }$$ AS MEASUREMENT;
-DECLARE FUNCTION reconcile_aggregates FOR fin FROM 'functions/reconcile.py'
+DECLARE FUNCTION reconcile_aggregates FOR fin FROM 'functions/reconcile.rhai'
   RETURNS $${"type": "object",
     "properties": {"pairs": {"type": "array"}, "max_delta": {"type": "number"}}}$$;
 DECLARE WITNESS reconciliation_w ON reconciliation
   BY (FUNCTION reconcile_aggregates) DETECTOR reconcile_bands THRESHOLD 0.5;
 
 SELECT reconcile_aggregates() FROM fin;
-SELECT subject, band FROM ATTEST(fin.reconciliation) WHERE band = 'red';
+SELECT subject, band FROM ATTEST(fin::reconciliation) WHERE band = 'red';
 
-DECLARE FUNCTION drivers FOR fin FROM 'functions/drivers.py'
+DECLARE FUNCTION drivers FOR fin FROM 'functions/drivers.rhai'
   RETURNS $${"type": "object", "properties": {"rankings": {"type": "array"}}}$$;
 SELECT drivers() FROM fin.orders;
 ```

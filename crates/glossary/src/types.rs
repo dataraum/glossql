@@ -1,0 +1,141 @@
+//! Row and actor types served by the store.
+
+use serde_json::Value;
+
+pub type Result<T> = std::result::Result<T, Error>;
+
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("unknown {what} `{name}` — declare it first")]
+    Unknown { what: &'static str, name: String },
+    #[error("aspect `{0}` is MEASUREMENT — measurements are computed by functions, never glossed")]
+    MeasurementGloss(String),
+    #[error("body rejected by the {which} schema: {detail}")]
+    BodyRejected { which: String, detail: String },
+    #[error("no witness on aspect `{aspect}` admits {kind} glosses")]
+    SpeakerNotAdmitted { aspect: String, kind: ActorKind },
+    #[error("aspect `{name}`: WITH is not a usable JSON Schema: {detail}")]
+    BadAspectSchema { name: String, detail: String },
+    #[error(
+        "aspect `{name}` has {glosses} gloss(es) — delete them before re-declaring it differently"
+    )]
+    AspectInUse { name: String, glosses: i64 },
+    #[error("witness on MEASUREMENT aspect `{0}` must be BY (FUNCTION fn) only")]
+    MeasurementWitnessSpeakers(String),
+    #[error(
+        "function `{function}` is not eligible as detector — its RETURNS must carry the attest shape (band, score)"
+    )]
+    DetectorNotEligible { function: String },
+    #[error("statement targets `{0}` — only the glossary and cache relations accept forwarded SQL")]
+    ForwardRejected(String),
+    #[error("stored JSON is corrupt: {0}")]
+    Corrupt(String),
+    #[error(transparent)]
+    Db(#[from] sqlx::Error),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActorKind {
+    Agent,
+    Human,
+}
+
+impl ActorKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ActorKind::Agent => "agent",
+            ActorKind::Human => "human",
+        }
+    }
+}
+
+impl std::fmt::Display for ActorKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// The connection's actor (SPEC.md §1): every write is stamped with it; there
+/// is no BY clause anywhere.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Actor {
+    pub kind: ActorKind,
+    pub id: String,
+}
+
+/// One row of `GLOSSARY(subject, all => true)` (SPEC.md §5.3): one current
+/// value per (subject, aspect, kind, witness), precedence the reader's
+/// business. `kind` is the aspect's kind (fact | query | measurement); who
+/// spoke is `actor` (an actor id, or the function name for the measurement
+/// slot) under `witness`.
+#[derive(Debug, Clone)]
+pub struct RawRow {
+    pub subject: String,
+    pub aspect: String,
+    pub kind: String,
+    pub witness: Option<String>,
+    pub actor: String,
+    pub body: String,
+    pub written_at: String,
+}
+
+/// One row of the collapsed `GLOSSARY(subject)` read (SPEC.md §5.3). Until
+/// detectors run (M4), `value` follows the minimal honest policy: exactly one
+/// current slot value serves it, anything contested serves NULL; `band` and
+/// `score` stay NULL. Provisional pending the fixture-09 corpus test (§9).
+#[derive(Debug, Clone)]
+pub struct CollapsedRow {
+    pub subject: String,
+    pub aspect: String,
+    pub value: Option<String>,
+    pub band: Option<String>,
+    pub score: Option<f64>,
+}
+
+/// One row of `ATTEST(...)` — the fixed attest shape (SPEC.md §7.2).
+#[derive(Debug, Clone)]
+pub struct AttestRow {
+    pub subject: String,
+    pub aspect: String,
+    pub witness: String,
+    pub band: String,
+    pub score: f64,
+    pub computed_at: String,
+}
+
+/// A cached extraction result (SPEC.md §6): one row per (subject,
+/// function); re-running is `DELETE FROM cache WHERE …` and selecting again.
+#[derive(Debug, Clone)]
+pub struct CacheRow {
+    pub subject: String,
+    pub function: String,
+    pub body: String,
+    pub computed_at: String,
+}
+
+/// A declared function (SPEC.md §6), as the session's extraction executor
+/// needs it.
+#[derive(Debug, Clone)]
+pub struct FunctionRow {
+    pub name: String,
+    /// `None` = GLOBAL.
+    pub scope_dataset: Option<String>,
+    pub script: String,
+    /// `ACCEPTS (aspect, …)` — the aspects whose current values the server
+    /// hands the script as its context document.
+    pub accepts: Vec<String>,
+    pub returns: Value,
+}
+
+/// A declared witness (SPEC.md §7.1).
+#[derive(Debug, Clone)]
+pub struct WitnessRow {
+    pub name: String,
+    pub aspect: String,
+    /// Function speakers by name; the two non-function speakers are flags.
+    pub function_speakers: Vec<String>,
+    pub admits_agent: bool,
+    pub admits_human: bool,
+    pub detector: Option<String>,
+    pub threshold: Option<f64>,
+}

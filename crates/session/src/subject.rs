@@ -1,0 +1,87 @@
+//! Subject resolution (SPEC.md §4): statements may spell subjects with or
+//! without the dataset prefix; the store holds them dataset-relative. The
+//! rules here turn spelled segments into (dataset, relative subject), using
+//! the declared datasets and the `USE`'d one.
+
+use glossql_glossary::{Scope, Store};
+
+use crate::session::SessionError;
+
+/// A resolved subject: the dataset it belongs to and the store's canonical
+/// relative spelling (`fin` itself, `orders`, `orders.amount`,
+/// `orders.customer_id -> customers.id`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Resolved {
+    pub dataset: String,
+    pub subject: String,
+}
+
+impl Resolved {
+    /// The read scope this subject spans: naming the dataset itself sweeps
+    /// it; anything else is the subject and its descendants.
+    pub fn scope(&self) -> Scope {
+        if self.subject == self.dataset {
+            Scope::Dataset
+        } else {
+            Scope::Subject(self.subject.clone())
+        }
+    }
+}
+
+/// Resolve a 1–3 segment path. `use_dataset` is the session's `USE` state.
+pub async fn resolve_path(
+    store: &Store,
+    use_dataset: Option<&str>,
+    segments: &[String],
+) -> Result<Resolved, SessionError> {
+    let relative = |subject: String| -> Result<Resolved, SessionError> {
+        let dataset = use_dataset.ok_or(SessionError::NoDataset)?;
+        Ok(Resolved {
+            dataset: dataset.to_string(),
+            subject,
+        })
+    };
+    match segments {
+        [one] => {
+            if store.dataset_exists(one).await? {
+                Ok(Resolved {
+                    dataset: one.clone(),
+                    subject: one.clone(),
+                })
+            } else {
+                relative(one.clone())
+            }
+        }
+        [first, rest @ ..] if store.dataset_exists(first).await? => Ok(Resolved {
+            dataset: first.clone(),
+            subject: rest.join("."),
+        }),
+        [_, _] => relative(segments.join(".")),
+        _ => Err(SessionError::BadSubject(format!(
+            "`{}` — up to dataset.table.column, and `{}` is not a declared dataset",
+            segments.join("."),
+            segments[0]
+        ))),
+    }
+}
+
+/// Resolve one endpoint of a pair path: `[dataset.]table.column`.
+pub async fn resolve_endpoint(
+    store: &Store,
+    use_dataset: Option<&str>,
+    segments: &[String],
+) -> Result<Resolved, SessionError> {
+    let resolved = resolve_path(store, use_dataset, segments).await?;
+    if !resolved.subject.contains('.') || resolved.subject == resolved.dataset {
+        return Err(SessionError::BadSubject(format!(
+            "relationship endpoint `{}` must be table.column",
+            segments.join(".")
+        )));
+    }
+    Ok(resolved)
+}
+
+/// Join two resolved endpoints into the canonical pair-path subject.
+pub fn pair_subject(left: &Resolved, op: &str, right: &Resolved) -> String {
+    format!("{} {op} {}", left.subject, right.subject)
+}

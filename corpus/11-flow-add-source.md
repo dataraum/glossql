@@ -45,7 +45,7 @@ DECLARE ASPECT column_profile WITH $${
   "properties": {"null_ratio": {}, "distinct": {}, "min": {}, "max": {},
                  "top_values": {"type": "array"}}
 }$$ AS MEASUREMENT;
-DECLARE FUNCTION profile FOR GLOBAL FROM 'functions/profile.py'
+DECLARE FUNCTION profile FOR GLOBAL FROM 'functions/profile.rhai'
   RETURNS $${"type": "object",
     "properties": {"null_ratio": {}, "distinct": {}, "min": {}, "max": {},
                    "top_values": {"type": "array"}}}$$;
@@ -57,7 +57,7 @@ DECLARE ASPECT type_candidates WITH $${
     "items": {"type": "object",
       "properties": {"type": {"type": "string"}, "confidence": {"type": "number"}}}}}
 }$$ AS MEASUREMENT;
-DECLARE FUNCTION infer_types FOR GLOBAL FROM 'functions/infer_types.py'
+DECLARE FUNCTION infer_types FOR GLOBAL FROM 'functions/infer_types.rhai'
   RETURNS $${"type": "object", "properties": {"candidates": {"type": "array"}}}$$;
 DECLARE WITNESS type_candidates_w ON type_candidates BY (FUNCTION infer_types);
 
@@ -87,8 +87,8 @@ contested aspects, bands read back; the auto-ground loop is an agent skill
 sweeping the attest relation and re-glossing where it may:
 
 ```glossql
-SELECT * FROM ATTEST(fin.behavior);
-SELECT subject, band, score FROM ATTEST(fin.type_agreement) WHERE band = 'red';
+SELECT * FROM ATTEST(fin::behavior);
+SELECT subject, band, score FROM ATTEST(fin::type_agreement) WHERE band = 'red';
 ```
 
 A human closes what the agent could not — the same statements on a human

@@ -1,12 +1,20 @@
 [workspace]
 resolver = "3"
-members = ["crates/parser"]
+members = ["crates/parser", "crates/glossary", "crates/session"]
 
 [workspace.package]
 edition = "2024"
 
 [workspace.dependencies]
-datafusion-sql = "54.1"
-datafusion-common = "54.1"
+# 53.1 is the newest datafusion supported by iceberg-datafusion (0.10.1 pins
+# ^53.1); the whole workspace moves in lockstep or trait impls stop lining up.
+datafusion = { version = "53.1", default-features = false }
+datafusion-sql = "53.1"
+datafusion-common = "53.1"
+datafusion-functions-json = "0.53"
 serde_json = "1"
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "sqlite"] }
+jsonschema = { version = "0.49", default-features = false }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+thiserror = "2"
 insta = "1"

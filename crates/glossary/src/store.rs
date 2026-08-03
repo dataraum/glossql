@@ -1,0 +1,833 @@
+//! The sqlx-backed store. One SQLite file per workspace (`:memory:` in
+//! tests); Postgres later is a connection string, so every query here stays
+//! in portable SQL. Admission (SPEC.md §5.2, §7.1) happens on the write
+//! paths; supersession is the `NOT EXISTS` read predicate, never an update.
+
+use serde_json::Value;
+use sqlx::AssertSqlSafe;
+use sqlx::Row as _;
+use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
+
+use glossql_parser::{
+    AspectDecl, AspectKind, DatasetDecl, FunctionDecl, FunctionScope, JsonBody, RecipeDecl,
+    SourceDecl, Speaker, WitnessDecl,
+};
+
+use crate::schemas::{grounding_schema, returns_carries_attest_shape};
+use crate::types::{
+    Actor, ActorKind, AttestRow, CacheRow, CollapsedRow, Error, FunctionRow, RawRow, Result,
+    WitnessRow,
+};
+
+/// What a read sweeps over (SPEC.md §5.3, §7.2): the whole dataset, or a
+/// subject and everything under it (columns of a table, relationships rooted
+/// at it).
+#[derive(Debug, Clone)]
+pub enum Scope {
+    Dataset,
+    Subject(String),
+}
+
+impl Scope {
+    /// Predicate over a `subject` column: exact, descendant (`s.…`), or a
+    /// pair path the subject participates in — from either side (`s -> …`,
+    /// `s <-> …`, `… -> s`, `… -> s.…`). The far endpoint's own context is
+    /// never pulled in.
+    fn predicate(&self, column: &str) -> (String, Vec<String>) {
+        match self {
+            Scope::Dataset => ("1 = 1".into(), vec![]),
+            Scope::Subject(s) => (
+                format!(
+                    "({column} = ? OR {column} LIKE ? OR {column} LIKE ? \
+                      OR {column} LIKE ? OR {column} LIKE ?)"
+                ),
+                vec![
+                    s.clone(),
+                    format!("{s}.%"),
+                    format!("{s} %"),
+                    format!("%> {s}"),
+                    format!("%> {s}.%"),
+                ],
+            ),
+        }
+    }
+}
+
+const MIGRATION: &str = r#"
+CREATE TABLE IF NOT EXISTS sources (
+  name TEXT PRIMARY KEY,
+  settings TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS datasets (
+  name TEXT PRIMARY KEY,
+  settings TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS recipes (
+  dataset TEXT NOT NULL,
+  table_name TEXT NOT NULL,
+  source TEXT NOT NULL,
+  sql TEXT NOT NULL,
+  PRIMARY KEY (dataset, table_name)
+);
+CREATE TABLE IF NOT EXISTS relationships (
+  dataset TEXT NOT NULL,
+  left_path TEXT NOT NULL,
+  op TEXT NOT NULL,
+  right_path TEXT NOT NULL,
+  PRIMARY KEY (dataset, left_path, op, right_path)
+);
+CREATE TABLE IF NOT EXISTS aspects (
+  name TEXT PRIMARY KEY,
+  schema TEXT NOT NULL,
+  kind TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS functions (
+  name TEXT PRIMARY KEY,
+  scope_dataset TEXT,
+  script TEXT NOT NULL,
+  accepts TEXT,
+  returns TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS witnesses (
+  name TEXT PRIMARY KEY,
+  aspect TEXT NOT NULL,
+  speakers TEXT NOT NULL,
+  detector TEXT,
+  threshold REAL
+);
+CREATE TABLE IF NOT EXISTS glossary (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  dataset TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  aspect TEXT NOT NULL,
+  actor_kind TEXT NOT NULL,
+  actor_id TEXT NOT NULL,
+  body TEXT NOT NULL,
+  written_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+CREATE TABLE IF NOT EXISTS cache (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  dataset TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  function TEXT NOT NULL,
+  body TEXT NOT NULL,
+  computed_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+"#;
+
+#[derive(Debug, Clone)]
+pub struct Store {
+    pool: SqlitePool,
+}
+
+impl Store {
+    pub async fn open(url: &str) -> Result<Self> {
+        let pool = SqlitePoolOptions::new().connect(url).await?;
+        sqlx::raw_sql(MIGRATION).execute(&pool).await?;
+        Ok(Store { pool })
+    }
+
+    /// In-memory store. One connection, or every pool checkout would see a
+    /// different empty database.
+    pub async fn open_memory() -> Result<Self> {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await?;
+        sqlx::raw_sql(MIGRATION).execute(&pool).await?;
+        Ok(Store { pool })
+    }
+
+    // -- declarations ----------------------------------------------------
+
+    pub async fn declare_source(&self, decl: &SourceDecl) -> Result<()> {
+        sqlx::query("INSERT OR REPLACE INTO sources (name, settings) VALUES (?, ?)")
+            .bind(decl.name.value.as_str())
+            .bind(settings_json(&decl.settings))
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn declare_dataset(&self, decl: &DatasetDecl) -> Result<()> {
+        sqlx::query("INSERT OR REPLACE INTO datasets (name, settings) VALUES (?, ?)")
+            .bind(decl.name.value.as_str())
+            .bind(settings_json(&decl.settings))
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Statement identity is content: re-declaring an unchanged recipe
+    /// replaces it with itself (SPEC.md §3).
+    pub async fn declare_recipe(&self, decl: &RecipeDecl) -> Result<()> {
+        self.require("dataset", "datasets", decl.dataset.value.as_str())
+            .await?;
+        self.require("source", "sources", decl.source.value.as_str())
+            .await?;
+        sqlx::query(
+            "INSERT OR REPLACE INTO recipes (dataset, table_name, source, sql) VALUES (?, ?, ?, ?)",
+        )
+        .bind(decl.dataset.value.as_str())
+        .bind(decl.table.value.as_str())
+        .bind(decl.source.value.as_str())
+        .bind(decl.sql.as_str())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Endpoints arrive canonical (dataset-relative `table.column`); the
+    /// session resolves prefixes first.
+    pub async fn declare_relationship(
+        &self,
+        dataset: &str,
+        left: &str,
+        op: &str,
+        right: &str,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT OR REPLACE INTO relationships (dataset, left_path, op, right_path) \
+             VALUES (?, ?, ?, ?)",
+        )
+        .bind(dataset)
+        .bind(left)
+        .bind(op)
+        .bind(right)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Content-identical re-declaration is a no-op; changing an aspect while
+    /// glosses under it exist is refused — delete them first (SPEC.md §5.1).
+    pub async fn declare_aspect(&self, decl: &AspectDecl) -> Result<()> {
+        if let Err(e) = jsonschema::validator_for(&decl.schema.value) {
+            return Err(Error::BadAspectSchema {
+                name: decl.name.value.clone(),
+                detail: e.to_string(),
+            });
+        }
+        let name = decl.name.value.as_str();
+        if let Some((schema, kind)) = self.aspect(name).await? {
+            if schema == decl.schema.value && kind == kind_str(decl.kind) {
+                return Ok(());
+            }
+            let glosses: i64 = sqlx::query("SELECT count(*) AS n FROM glossary WHERE aspect = ?")
+                .bind(name)
+                .fetch_one(&self.pool)
+                .await?
+                .get("n");
+            if glosses > 0 {
+                return Err(Error::AspectInUse {
+                    name: name.into(),
+                    glosses,
+                });
+            }
+        }
+        sqlx::query("INSERT OR REPLACE INTO aspects (name, schema, kind) VALUES (?, ?, ?)")
+            .bind(decl.name.value.as_str())
+            .bind(decl.schema.raw.as_str())
+            .bind(kind_str(decl.kind))
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// `ACCEPTS` names declared aspects — the context the server assembles
+    /// for the script (SPEC.md §6); each must exist.
+    pub async fn declare_function(&self, decl: &FunctionDecl) -> Result<()> {
+        for aspect in &decl.accepts {
+            self.require("aspect", "aspects", aspect.value.as_str())
+                .await?;
+        }
+        let accepts = if decl.accepts.is_empty() {
+            None
+        } else {
+            let names: Vec<Value> = decl
+                .accepts
+                .iter()
+                .map(|a| Value::String(a.value.clone()))
+                .collect();
+            Some(Value::Array(names).to_string())
+        };
+        let scope = match &decl.scope {
+            FunctionScope::Dataset(d) => Some(d.value.clone()),
+            FunctionScope::Global => None,
+        };
+        sqlx::query(
+            "INSERT OR REPLACE INTO functions \
+             (name, scope_dataset, script, accepts, returns) \
+             VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(decl.name.value.as_str())
+        .bind(scope)
+        .bind(decl.script.as_str())
+        .bind(accepts)
+        .bind(decl.returns.raw.as_str())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn declare_witness(&self, decl: &WitnessDecl) -> Result<()> {
+        let aspect = decl.aspect.value.as_str();
+        let kind = self
+            .aspect(aspect)
+            .await?
+            .ok_or_else(|| Error::Unknown {
+                what: "aspect",
+                name: aspect.into(),
+            })?
+            .1;
+
+        let mut speakers = Vec::new();
+        let mut functions = Vec::new();
+        for s in &decl.speakers {
+            match s {
+                Speaker::Function(f) => {
+                    let name = f.value.clone();
+                    self.function(&name, None)
+                        .await?
+                        .ok_or_else(|| Error::Unknown {
+                            what: "function",
+                            name: name.clone(),
+                        })?;
+                    functions.push(name.clone());
+                    speakers.push(serde_json::json!({ "function": name }));
+                }
+                Speaker::Agent => speakers.push(Value::String("agent".into())),
+                Speaker::Human => speakers.push(Value::String("human".into())),
+            }
+        }
+        // A MEASUREMENT aspect is BY (FUNCTION fn) only (SPEC.md §7.1).
+        if kind == "measurement" && (functions.len() != 1 || speakers.len() != 1) {
+            return Err(Error::MeasurementWitnessSpeakers(aspect.into()));
+        }
+
+        if let Some(detector) = &decl.detector {
+            let name = detector.value.clone();
+            let f = self
+                .function(&name, None)
+                .await?
+                .ok_or_else(|| Error::Unknown {
+                    what: "function",
+                    name: name.clone(),
+                })?;
+            if !returns_carries_attest_shape(&f.returns) {
+                return Err(Error::DetectorNotEligible { function: name });
+            }
+        }
+        // THRESHOLD range is admission's job, not the grammar's.
+        let threshold = match &decl.threshold {
+            None => None,
+            Some(t) => {
+                let v: f64 = t
+                    .parse()
+                    .map_err(|_| Error::Corrupt(format!("threshold `{t}` is not a number")))?;
+                if !(0.0..=1.0).contains(&v) {
+                    return Err(Error::Corrupt(format!("threshold `{t}` is outside 0..1")));
+                }
+                Some(v)
+            }
+        };
+
+        sqlx::query(
+            "INSERT OR REPLACE INTO witnesses (name, aspect, speakers, detector, threshold) \
+             VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(decl.name.value.as_str())
+        .bind(aspect)
+        .bind(Value::Array(speakers).to_string())
+        .bind(decl.detector.as_ref().map(|d| d.value.clone()))
+        .bind(threshold)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    // -- glosses ---------------------------------------------------------
+
+    /// Admission by aspect kind (SPEC.md §5.2), then a plain insert; the
+    /// supersession key (subject, aspect, actor kind) is applied by reads.
+    pub async fn gloss(
+        &self,
+        dataset: &str,
+        actor: &Actor,
+        aspect: &str,
+        subject: &str,
+        body: &JsonBody,
+    ) -> Result<()> {
+        let (schema, kind) = self.aspect(aspect).await?.ok_or_else(|| Error::Unknown {
+            what: "aspect",
+            name: aspect.into(),
+        })?;
+        match kind.as_str() {
+            "measurement" => return Err(Error::MeasurementGloss(aspect.into())),
+            "fact" => validate(&schema, &body.value, format!("aspect `{aspect}` WITH"))?,
+            _query => validate(
+                &grounding_schema(),
+                &body.value,
+                "standard grounding".into(),
+            )?,
+        }
+        // Where a witness exists, its BY list is the speaker gate (§7.1).
+        let witnesses = self.witnesses_on(aspect).await?;
+        if !witnesses.is_empty() {
+            let admitted = witnesses.iter().any(|w| match actor.kind {
+                ActorKind::Agent => w.admits_agent,
+                ActorKind::Human => w.admits_human,
+            });
+            if !admitted {
+                return Err(Error::SpeakerNotAdmitted {
+                    aspect: aspect.into(),
+                    kind: actor.kind,
+                });
+            }
+        }
+        sqlx::query(
+            "INSERT INTO glossary (dataset, subject, aspect, actor_kind, actor_id, body) \
+             VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .bind(dataset)
+        .bind(subject)
+        .bind(aspect)
+        .bind(actor.kind.as_str())
+        .bind(actor.id.as_str())
+        .bind(body.raw.as_str())
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    // -- reads -----------------------------------------------------------
+
+    /// The raw read (SPEC.md §5.3): current gloss slots by supersession,
+    /// plus the measurement slot of every witness-bound function, served
+    /// from the cache. `kind` is the aspect's kind.
+    pub async fn raw_read(
+        &self,
+        dataset: &str,
+        scope: &Scope,
+        aspect: Option<&str>,
+    ) -> Result<Vec<RawRow>> {
+        let kinds = self.aspect_kinds().await?;
+        let kind_of = |aspect: &str| kinds.get(aspect).cloned().unwrap_or_default();
+
+        let (pred, binds) = scope.predicate("g.subject");
+        let aspect_clause = if aspect.is_some() {
+            "AND g.aspect = ? "
+        } else {
+            ""
+        };
+        let sql = format!(
+            "SELECT g.subject, g.aspect, g.actor_id, g.body, g.written_at \
+             FROM glossary g \
+             WHERE g.dataset = ? AND {pred} {aspect_clause}AND NOT EXISTS (\
+               SELECT 1 FROM glossary n \
+               WHERE n.dataset = g.dataset AND n.subject = g.subject \
+                 AND n.aspect = g.aspect AND n.actor_kind = g.actor_kind AND n.id > g.id) \
+             ORDER BY g.subject, g.aspect, g.actor_kind"
+        );
+        let mut q = sqlx::query(AssertSqlSafe(sql)).bind(dataset);
+        for b in &binds {
+            q = q.bind(b);
+        }
+        if let Some(a) = aspect {
+            q = q.bind(a);
+        }
+        let mut rows: Vec<RawRow> = q
+            .fetch_all(&self.pool)
+            .await?
+            .into_iter()
+            .map(|r| {
+                let aspect: String = r.get("aspect");
+                RawRow {
+                    subject: r.get("subject"),
+                    kind: kind_of(&aspect),
+                    aspect,
+                    witness: None,
+                    actor: r.get("actor_id"),
+                    body: r.get("body"),
+                    written_at: r.get("written_at"),
+                }
+            })
+            .collect();
+
+        for w in self.witnesses_all().await? {
+            if let Some(a) = aspect
+                && w.aspect != a
+            {
+                continue;
+            }
+            for f in &w.function_speakers {
+                for c in self.latest_cache(dataset, scope, f).await? {
+                    rows.push(RawRow {
+                        subject: c.subject,
+                        kind: kind_of(&w.aspect),
+                        aspect: w.aspect.clone(),
+                        witness: Some(w.name.clone()),
+                        actor: f.clone(),
+                        body: c.body,
+                        written_at: c.computed_at,
+                    });
+                }
+            }
+        }
+        // Stamp witness names onto gloss slots too, now that they are known.
+        let witnesses = self.witnesses_all().await?;
+        for row in &mut rows {
+            if row.witness.is_none()
+                && let Some(w) = witnesses.iter().find(|w| w.aspect == row.aspect)
+            {
+                row.witness = Some(w.name.clone());
+            }
+        }
+        rows.sort_by(|a, b| {
+            (&a.subject, &a.aspect, &a.actor).cmp(&(&b.subject, &b.aspect, &b.actor))
+        });
+        Ok(rows)
+    }
+
+    async fn aspect_kinds(&self) -> Result<std::collections::HashMap<String, String>> {
+        let rows = sqlx::query("SELECT name, kind FROM aspects")
+            .fetch_all(&self.pool)
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|r| (r.get("name"), r.get("kind")))
+            .collect())
+    }
+
+    /// The collapsed read (SPEC.md §5.3). Detectors land in M4; until then
+    /// the minimal honest policy: one current slot value → serve it, more
+    /// than one → NULL (unadjudicated is contested). Provisional pending the
+    /// fixture-09 corpus test (SPEC.md §9).
+    pub async fn collapsed_read(
+        &self,
+        dataset: &str,
+        scope: &Scope,
+        aspect: Option<&str>,
+    ) -> Result<Vec<CollapsedRow>> {
+        let raw = self.raw_read(dataset, scope, aspect).await?;
+        let mut grouped: std::collections::BTreeMap<(String, String), Vec<&RawRow>> =
+            std::collections::BTreeMap::new();
+        for row in &raw {
+            grouped
+                .entry((row.subject.clone(), row.aspect.clone()))
+                .or_default()
+                .push(row);
+        }
+        Ok(grouped
+            .into_iter()
+            .map(|((subject, aspect), slots)| CollapsedRow {
+                subject,
+                aspect,
+                value: match slots.as_slice() {
+                    [only] => Some(only.body.clone()),
+                    _ => None,
+                },
+                band: None,
+                score: None,
+            })
+            .collect())
+    }
+
+    /// `ATTEST(...)` (SPEC.md §7.2): detector outputs, served from the
+    /// detector function's cache rows in the fixed attest shape.
+    pub async fn attest_read(
+        &self,
+        dataset: &str,
+        scope: &Scope,
+        aspect: Option<&str>,
+    ) -> Result<Vec<AttestRow>> {
+        let mut rows = Vec::new();
+        for w in self.witnesses_all().await? {
+            if let Some(a) = aspect
+                && w.aspect != a
+            {
+                continue;
+            }
+            let Some(detector) = &w.detector else {
+                continue;
+            };
+            for c in self.latest_cache(dataset, scope, detector).await? {
+                let body: Value = serde_json::from_str(&c.body)
+                    .map_err(|e| Error::Corrupt(format!("attest body for `{detector}`: {e}")))?;
+                let band = body
+                    .pointer("/band")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| Error::Corrupt(format!("`{detector}` output has no band")))?;
+                let score = body
+                    .pointer("/score")
+                    .and_then(Value::as_f64)
+                    .ok_or_else(|| Error::Corrupt(format!("`{detector}` output has no score")))?;
+                rows.push(AttestRow {
+                    subject: c.subject,
+                    aspect: w.aspect.clone(),
+                    witness: w.name.clone(),
+                    band: band.into(),
+                    score,
+                    computed_at: c.computed_at,
+                });
+            }
+        }
+        rows.sort_by(|a, b| (&a.subject, &a.aspect).cmp(&(&b.subject, &b.aspect)));
+        Ok(rows)
+    }
+
+    // -- the cache -------------------------------------------------------
+
+    pub async fn cache_get(
+        &self,
+        dataset: &str,
+        subject: &str,
+        function: &str,
+    ) -> Result<Option<CacheRow>> {
+        let row = sqlx::query(
+            "SELECT subject, function, body, computed_at FROM cache \
+             WHERE dataset = ? AND subject = ? AND function = ? \
+             ORDER BY id DESC LIMIT 1",
+        )
+        .bind(dataset)
+        .bind(subject)
+        .bind(function)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(cache_row).transpose()
+    }
+
+    pub async fn cache_put(
+        &self,
+        dataset: &str,
+        subject: &str,
+        function: &str,
+        body: &str,
+    ) -> Result<()> {
+        sqlx::query("INSERT INTO cache (dataset, subject, function, body) VALUES (?, ?, ?, ?)")
+            .bind(dataset)
+            .bind(subject)
+            .bind(function)
+            .bind(body)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn latest_cache(
+        &self,
+        dataset: &str,
+        scope: &Scope,
+        function: &str,
+    ) -> Result<Vec<CacheRow>> {
+        let (pred, binds) = scope.predicate("c.subject");
+        let sql = format!(
+            "SELECT c.subject, c.function, c.body, c.computed_at FROM cache c \
+             WHERE c.dataset = ? AND c.function = ? AND {pred} AND NOT EXISTS (\
+               SELECT 1 FROM cache n \
+               WHERE n.dataset = c.dataset AND n.subject = c.subject \
+                 AND n.function = c.function AND n.id > c.id) \
+             ORDER BY c.subject"
+        );
+        let mut q = sqlx::query(AssertSqlSafe(sql)).bind(dataset).bind(function);
+        for b in &binds {
+            q = q.bind(b);
+        }
+        q.fetch_all(&self.pool)
+            .await?
+            .into_iter()
+            .map(cache_row)
+            .collect()
+    }
+
+    // -- SQL forwarded from the session ----------------------------------
+
+    /// `DELETE FROM glossary … / DELETE FROM cache …` — removal is SQL
+    /// (SPEC.md §5.2, §6). The session routes only these two relations here;
+    /// the target is re-checked because this executes verbatim.
+    pub async fn forward_delete(&self, target: &str, sql: &str) -> Result<u64> {
+        if target != "glossary" && target != "cache" {
+            return Err(Error::ForwardRejected(target.into()));
+        }
+        let done = sqlx::raw_sql(AssertSqlSafe(sql.to_string()))
+            .execute(&self.pool)
+            .await?;
+        Ok(done.rows_affected())
+    }
+
+    /// Full relation dump for substrate `SELECT`s over `glossary`/`cache`.
+    pub async fn relation_rows(&self, table: &str) -> Result<Vec<Vec<Option<String>>>> {
+        let sql = match table {
+            "glossary" => {
+                "SELECT dataset, subject, aspect, actor_kind, actor_id, body, written_at \
+                 FROM glossary ORDER BY id"
+            }
+            "cache" => {
+                "SELECT dataset, subject, function, body, computed_at \
+                 FROM cache ORDER BY id"
+            }
+            other => return Err(Error::ForwardRejected(other.into())),
+        };
+        let rows = sqlx::query(sql).fetch_all(&self.pool).await?;
+        Ok(rows
+            .into_iter()
+            .map(|r| {
+                (0..r.len())
+                    .map(|i| r.get::<Option<String>, _>(i))
+                    .collect()
+            })
+            .collect())
+    }
+
+    // -- lookups the session needs ---------------------------------------
+
+    pub async fn dataset_exists(&self, name: &str) -> Result<bool> {
+        Ok(sqlx::query("SELECT 1 FROM datasets WHERE name = ?")
+            .bind(name)
+            .fetch_optional(&self.pool)
+            .await?
+            .is_some())
+    }
+
+    pub async fn aspect(&self, name: &str) -> Result<Option<(Value, String)>> {
+        let Some(row) = sqlx::query("SELECT schema, kind FROM aspects WHERE name = ?")
+            .bind(name)
+            .fetch_optional(&self.pool)
+            .await?
+        else {
+            return Ok(None);
+        };
+        let schema: Value = serde_json::from_str(&row.get::<String, _>("schema"))
+            .map_err(|e| Error::Corrupt(format!("aspect `{name}` schema: {e}")))?;
+        Ok(Some((schema, row.get("kind"))))
+    }
+
+    /// Resolve a function visible from `dataset` (`FOR` scope or GLOBAL,
+    /// SPEC.md §6). `None` skips the visibility check.
+    pub async fn function(&self, name: &str, dataset: Option<&str>) -> Result<Option<FunctionRow>> {
+        let Some(row) = sqlx::query(
+            "SELECT name, scope_dataset, script, accepts, returns \
+             FROM functions WHERE name = ?",
+        )
+        .bind(name)
+        .fetch_optional(&self.pool)
+        .await?
+        else {
+            return Ok(None);
+        };
+        let scope_dataset: Option<String> = row.get("scope_dataset");
+        if let (Some(d), Some(scope)) = (dataset, &scope_dataset)
+            && scope != d
+        {
+            return Ok(None);
+        }
+        let returns: Value = serde_json::from_str(&row.get::<String, _>("returns"))
+            .map_err(|e| Error::Corrupt(format!("function `{name}` RETURNS: {e}")))?;
+        let accepts = match row.get::<Option<String>, _>("accepts") {
+            None => Vec::new(),
+            Some(text) => serde_json::from_str::<Vec<String>>(&text)
+                .map_err(|e| Error::Corrupt(format!("function `{name}` ACCEPTS: {e}")))?,
+        };
+        Ok(Some(FunctionRow {
+            name: row.get("name"),
+            scope_dataset,
+            script: row.get("script"),
+            accepts,
+            returns,
+        }))
+    }
+
+    pub async fn witnesses_on(&self, aspect: &str) -> Result<Vec<WitnessRow>> {
+        Ok(self
+            .witnesses_all()
+            .await?
+            .into_iter()
+            .filter(|w| w.aspect == aspect)
+            .collect())
+    }
+
+    pub async fn witnesses_all(&self) -> Result<Vec<WitnessRow>> {
+        let rows = sqlx::query(
+            "SELECT name, aspect, speakers, detector, threshold FROM witnesses ORDER BY name",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter()
+            .map(|r| {
+                let speakers: Value = serde_json::from_str(&r.get::<String, _>("speakers"))
+                    .map_err(|e| Error::Corrupt(format!("witness speakers: {e}")))?;
+                let list = speakers.as_array().cloned().unwrap_or_default();
+                Ok(WitnessRow {
+                    name: r.get("name"),
+                    aspect: r.get("aspect"),
+                    function_speakers: list
+                        .iter()
+                        .filter_map(|s| s.pointer("/function"))
+                        .filter_map(Value::as_str)
+                        .map(String::from)
+                        .collect(),
+                    admits_agent: list.iter().any(|s| s.as_str() == Some("agent")),
+                    admits_human: list.iter().any(|s| s.as_str() == Some("human")),
+                    detector: r.get("detector"),
+                    threshold: r.get("threshold"),
+                })
+            })
+            .collect()
+    }
+
+    async fn require(&self, what: &'static str, table: &str, name: &str) -> Result<()> {
+        let sql = format!("SELECT 1 FROM {table} WHERE name = ?");
+        if sqlx::query(AssertSqlSafe(sql))
+            .bind(name)
+            .fetch_optional(&self.pool)
+            .await?
+            .is_none()
+        {
+            return Err(Error::Unknown {
+                what,
+                name: name.into(),
+            });
+        }
+        Ok(())
+    }
+}
+
+fn settings_json(settings: &[glossql_parser::Setting]) -> String {
+    use glossql_parser::SettingValue;
+    let map: serde_json::Map<String, Value> = settings
+        .iter()
+        .map(|s| {
+            let v = match &s.value {
+                SettingValue::Name(n) => Value::String(n.value.clone()),
+                SettingValue::String(t) => Value::String(t.clone()),
+                SettingValue::Number(n) => {
+                    serde_json::from_str(n).unwrap_or_else(|_| Value::String(n.clone()))
+                }
+            };
+            (s.key.value.clone(), v)
+        })
+        .collect();
+    Value::Object(map).to_string()
+}
+
+fn kind_str(kind: AspectKind) -> &'static str {
+    match kind {
+        AspectKind::Measurement => "measurement",
+        AspectKind::Fact => "fact",
+        AspectKind::Query => "query",
+    }
+}
+
+fn validate(schema: &Value, instance: &Value, which: String) -> Result<()> {
+    crate::schemas::validate_instance(schema, instance)
+        .map_err(|detail| Error::BodyRejected { which, detail })
+}
+
+fn cache_row(r: sqlx::sqlite::SqliteRow) -> Result<CacheRow> {
+    Ok(CacheRow {
+        subject: r.get("subject"),
+        function: r.get("function"),
+        body: r.get("body"),
+        computed_at: r.get("computed_at"),
+    })
+}

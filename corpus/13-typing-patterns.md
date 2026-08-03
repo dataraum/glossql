@@ -90,5 +90,15 @@ GLOSS null_values ON fin AS $${"values": [
 - Whole-body supersession replaces the overlay's per-entry merge: the teach
   skill does read–amend–re-gloss. The human slot supersedes the base slot by
   the ordinary key; no merge machinery survives.
-- The typing function's contract is the consumer: it ACCEPTS the aspect's
-  schema, so the same JSON Schema governs the gloss and the script input.
+- The typing function is the consumer, by name — its declaration closes
+  the loop, and is the corpus evidence for the `ACCEPTS (aspect, …)` form:
+
+```glossql
+DECLARE FUNCTION infer_types FOR GLOBAL FROM 'functions/infer_types.rhai'
+  ACCEPTS (type_patterns, null_values)
+  RETURNS $${"type": "object"}$$;
+```
+
+  The server hands the script those aspects' current values as its context
+  document; the aspects' own schemas govern the gloss and the script input
+  alike — one schema, referenced, never copied.

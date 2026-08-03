@@ -110,7 +110,9 @@ pub struct FunctionDecl {
     pub scope: FunctionScope,
     /// The script reference named by `FROM`.
     pub script: String,
-    pub accepts: Option<Accepts>,
+    /// `ACCEPTS (aspect, …)` — aspects whose current values the server
+    /// hands the script as its context document; empty = no context.
+    pub accepts: Vec<Ident>,
     pub returns: JsonBody,
 }
 
@@ -118,20 +120,6 @@ pub struct FunctionDecl {
 pub enum FunctionScope {
     Dataset(Ident),
     Global,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum Accepts {
-    Schema(JsonBody),
-    Pointer(SchemaPointer),
-}
-
-/// `'producer#/json/pointer'` — a single value out of another producer's
-/// schema.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SchemaPointer {
-    pub producer: String,
-    pub pointer: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -197,27 +185,7 @@ pub struct PairPath {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Extract {
-    pub calls: Vec<Call>,
+    /// Bare function names — calls carry no arguments; settings are context.
+    pub calls: Vec<Ident>,
     pub subject: Subject,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct Call {
-    pub function: Ident,
-    pub args: Vec<NamedArg>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct NamedArg {
-    pub name: Ident,
-    pub value: ArgValue,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum ArgValue {
-    Name(Ident),
-    String(String),
-    /// Decimal literal, kept verbatim.
-    Number(String),
-    Bool(bool),
 }

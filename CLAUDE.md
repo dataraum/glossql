@@ -22,19 +22,23 @@ documents:
   fail). Fixtures 11–12 model the system's operational flows as statement
   sequences.
 - `crates/` — the Rust PoC server, a Cargo workspace at the repo root.
-  Directories unprefixed, package names `glossql-*`. Planned map (a crate is
-  created only when it has real content): `parser` (GlossqlParser wrapping
-  DataFusion's DFParser; the corpus is its acceptance suite) · `glossary`
-  (sqlx store, supersession, admission) · `catalog` (iceberg-rust behind the
-  Catalog trait) · `scripts` (rhai + arrow kernels) · `import` (ADBC,
-  CSV/parquet) · `session` (SessionContext assembly, GLOSSARY/ATTEST UDTFs,
-  statement router) · `serverd` (Flight SQL + MCP shim).
+  Directories unprefixed, package names `glossql-*`; datafusion is pinned in
+  lockstep with iceberg-datafusion (see the workspace `Cargo.toml` comment
+  and `reports/2026-08-03-m2-session-glossary.md`). Built: `parser`
+  (GlossqlParser wrapping DataFusion's DFParser; the corpus is its
+  acceptance suite) · `glossary` (sqlx store, supersession, admission) ·
+  `session` (SessionContext assembly, RelationPlanner reads, statement
+  router). Planned (a crate is created only when it has real content):
+  `catalog` (iceberg-rust behind the Catalog trait) · `scripts` (rhai +
+  arrow kernels) · `import` (ADBC, CSV/parquet) · `serverd` (Flight SQL +
+  MCP shim).
 - `reports/` — pivot records, review verdicts, and evaluation records.
 
-**Standing invariant:** `cargo test -p glossql-parser` passes — every
-```sql block in SPEC.md parses, every corpus fixture behaves as tagged. A
-grammar edit that breaks it doesn't land. (The Python harness retired
-2026-08-03 when this suite replaced it.)
+**Standing invariant:** workspace `cargo test` passes — every ```sql block
+in SPEC.md parses and every corpus fixture behaves as tagged (the
+`glossql-parser` suite), and the store and session suites hold the execution
+semantics. A grammar edit that breaks it doesn't land. (The Python harness
+retired 2026-08-03 when the parser suite replaced it.)
 
 **Ideation before prose:** no idea enters SPEC.md until it has survived a
 corpus test — write competing statement forms for the same real artifact,

@@ -50,7 +50,7 @@ GLOSS trial_balance ON fin AS $${
   "conventions": ["sign_natural_balance"]
 }$$;
 
-DECLARE FUNCTION trial_balance_check FOR fin FROM 'functions/trial_balance.py'
+DECLARE FUNCTION trial_balance_check FOR fin FROM 'functions/trial_balance.rhai'
   RETURNS $${
     "type": "object",
     "required": ["subject", "aspect", "witness", "band", "score", "computed_at"],

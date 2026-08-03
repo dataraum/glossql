@@ -45,11 +45,11 @@ DECLARE ASPECT behavior WITH $${
   "properties": {"value": {"enum": ["stock", "flow"]}}
 }$$ AS FACT;
 
-DECLARE FUNCTION temporal_behavior FOR GLOBAL FROM 'functions/temporal_behavior.py'
+DECLARE FUNCTION temporal_behavior FOR GLOBAL FROM 'functions/temporal_behavior.rhai'
   RETURNS $${"type": "object", "properties": {"value": {"enum": ["stock", "flow"]},
            "evidence": {"type": "string"}}}$$;
 
-DECLARE FUNCTION behavior_entropy FOR GLOBAL FROM 'functions/behavior_entropy.py'
+DECLARE FUNCTION behavior_entropy FOR GLOBAL FROM 'functions/behavior_entropy.rhai'
   RETURNS $${
     "type": "object",
     "required": ["subject", "aspect", "witness", "band", "score", "computed_at"],
@@ -65,7 +65,7 @@ DECLARE FUNCTION behavior_entropy FOR GLOBAL FROM 'functions/behavior_entropy.py
 DECLARE WITNESS behavior_w ON behavior BY (FUNCTION temporal_behavior, AGENT, HUMAN)
   DETECTOR behavior_entropy THRESHOLD 0.7;
 
-SELECT * FROM ATTEST(orders.amount.behavior);
+SELECT * FROM ATTEST(orders.amount::behavior);
 ```
 
 `claim_witnesses.distribution` becomes the value function's cached JSON output

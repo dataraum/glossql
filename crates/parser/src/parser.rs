@@ -196,9 +196,9 @@ fn parse_declaration(p: &mut Parser) -> Result<Declaration, ParserError> {
             expect_word(p, "FROM")?;
             let script = parse_string(p, "the script reference as a string")?;
             let accepts = if consume_word(p, "ACCEPTS") {
-                Some(parse_accepts(p)?)
+                parse_accepts(p)?
             } else {
-                None
+                Vec::new()
             };
             expect_word(p, "RETURNS")?;
             let returns = parse_json_body(p)?;
@@ -290,30 +290,17 @@ fn parse_speaker(p: &mut Parser) -> Result<Speaker, ParserError> {
     expected("FUNCTION <name>, AGENT, or HUMAN", &found)
 }
 
-fn parse_accepts(p: &mut Parser) -> Result<Accepts, ParserError> {
-    let token = p.peek_token();
-    match &token.token {
-        Token::DollarQuotedString(_) => Ok(Accepts::Schema(parse_json_body(p)?)),
-        Token::SingleQuotedString(s) => {
-            let pointer = s.clone();
-            p.next_token();
-            match pointer.split_once('#') {
-                Some((producer, ptr))
-                    if !producer.is_empty() && ptr.starts_with('/') && ptr.len() > 1 =>
-                {
-                    Ok(Accepts::Pointer(SchemaPointer {
-                        producer: producer.to_string(),
-                        pointer: ptr.to_string(),
-                    }))
-                }
-                _ => expected("a pointer of the form 'producer#/json/pointer'", &token),
-            }
-        }
-        _ => expected(
-            "a dollar-quoted JSON Schema or 'producer#/json/pointer'",
-            &token,
-        ),
+/// `ACCEPTS (aspect, …)` — the aspects whose current values the server
+/// hands the script as its context document. Settings are context, never
+/// call arguments.
+fn parse_accepts(p: &mut Parser) -> Result<Vec<Ident>, ParserError> {
+    p.expect_token(&Token::LParen)?;
+    let mut aspects = vec![p.parse_identifier()?];
+    while !p.consume_token(&Token::RParen) {
+        p.expect_token(&Token::Comma)?;
+        aspects.push(p.parse_identifier()?);
     }
+    Ok(aspects)
 }
 
 /// A dollar-quoted region holding a JSON object, validated per RFC 8259.
@@ -408,47 +395,14 @@ fn parse_extract(p: &mut Parser) -> Result<Extract, ParserError> {
     }
 }
 
-fn parse_call(p: &mut Parser) -> Result<Call, ParserError> {
+/// A call is bare — `f()`. Settings reach scripts as context (`ACCEPTS`),
+/// never as arguments; a call with arguments fails here and falls through
+/// to substrate SQL, where planning rejects it loudly.
+fn parse_call(p: &mut Parser) -> Result<Ident, ParserError> {
     let function = p.parse_identifier()?;
     p.expect_token(&Token::LParen)?;
-    let mut args = Vec::new();
-    if !p.consume_token(&Token::RParen) {
-        loop {
-            let name = p.parse_identifier()?;
-            p.expect_token(&Token::RArrow)?;
-            let value = parse_arg_value(p)?;
-            args.push(NamedArg { name, value });
-            if p.consume_token(&Token::RParen) {
-                break;
-            }
-            p.expect_token(&Token::Comma)?;
-        }
-    }
-    Ok(Call { function, args })
-}
-
-fn parse_arg_value(p: &mut Parser) -> Result<ArgValue, ParserError> {
-    if consume_word(p, "true") {
-        return Ok(ArgValue::Bool(true));
-    }
-    if consume_word(p, "false") {
-        return Ok(ArgValue::Bool(false));
-    }
-    match p.peek_token_ref().token {
-        Token::SingleQuotedString(_) => match p.next_token().token {
-            Token::SingleQuotedString(s) => Ok(ArgValue::String(s)),
-            _ => unreachable!("peeked"),
-        },
-        Token::Number(..) => match p.next_token().token {
-            Token::Number(n, _) => Ok(ArgValue::Number(n)),
-            _ => unreachable!("peeked"),
-        },
-        Token::Word(_) => Ok(ArgValue::Name(p.parse_identifier()?)),
-        _ => {
-            let found = p.peek_token();
-            expected("a name, string, number, true, or false", &found)
-        }
-    }
+    p.expect_token(&Token::RParen)?;
+    Ok(function)
 }
 
 fn parse_rel_op(p: &mut Parser) -> Result<RelOp, ParserError> {

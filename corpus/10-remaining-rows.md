@@ -68,7 +68,7 @@ witness and fills from its cache:
 DECLARE ASPECT min_max WITH $${
   "type": "object", "properties": {"min": {}, "max": {}}
 }$$ AS MEASUREMENT;
-DECLARE FUNCTION profile_min_max FOR GLOBAL FROM 'functions/profile.py'
+DECLARE FUNCTION profile_min_max FOR GLOBAL FROM 'functions/profile.rhai'
   RETURNS $${"type": "object", "properties": {"min": {}, "max": {}}}$$;
 DECLARE WITNESS min_max_w ON min_max BY (FUNCTION profile_min_max);
 

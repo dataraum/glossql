@@ -1,0 +1,37 @@
+---
+source: crates/parser/tests/statements.rs
+expression: "GlossqlParser ::\nparse_sql(r#\"DECLARE FUNCTION infer_types FOR GLOBAL FROM 'functions/infer_types.rhai' ACCEPTS (type_patterns, null_values) RETURNS $${\"type\": \"object\"}$$;\"#).expect(\"must parse\")"
+---
+[
+    Declare(
+        Function(
+            FunctionDecl {
+                name: Ident {
+                    value: "infer_types",
+                    quote_style: None,
+                    span: Span(Location(1,18)..Location(1,29)),
+                },
+                scope: Global,
+                script: "functions/infer_types.rhai",
+                accepts: [
+                    Ident {
+                        value: "type_patterns",
+                        quote_style: None,
+                        span: Span(Location(1,84)..Location(1,97)),
+                    },
+                    Ident {
+                        value: "null_values",
+                        quote_style: None,
+                        span: Span(Location(1,99)..Location(1,110)),
+                    },
+                ],
+                returns: JsonBody {
+                    value: Object {
+                        "type": String("object"),
+                    },
+                    raw: "{\"type\": \"object\"}",
+                },
+            },
+        ),
+    ),
+]

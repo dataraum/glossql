@@ -100,20 +100,23 @@ gloss             = "GLOSS", name, "ON", subject, "AS", json ;
 
 function_decl     = "FUNCTION", name, "FOR", ( name | "GLOBAL" ),
                     "FROM", string,
-                    [ "ACCEPTS", ( json | schema_pointer ) ],
+                    [ "ACCEPTS", "(", name, { ",", name }, ")" ],
                     "RETURNS", json ;
-                    (* FROM names the script; every function implicitly receives
-                       its subject and the subject's SQL schema; RETURNS is a
-                       JSON Schema — results are cached, caching is
-                       implementation *)
-schema_pointer    = string ;
-                    (* 'producer#/json/pointer' — a single value out of
-                       another producer's schema *)
+                    (* a function is a measurement or a detector — the engine's
+                       analytical machinery as rhai scripts; never a metric
+                       (metrics are QUERY aspects run as their SQL). FROM names
+                       the script. ACCEPTS names the aspects whose current
+                       values the server hands the script as context —
+                       settings are context, never call arguments. Every
+                       function implicitly receives its subject with schema and
+                       neighborhood; scripts may run any SQL. RETURNS is a JSON
+                       Schema — results land in the cache relation *)
 
 extract           = "SELECT", call, { ",", call }, "FROM", subject ;
-call              = name, "(", [ named_arg, { ",", named_arg } ], ")" ;
-named_arg         = name, "=>", ( name | string | number | "true" | "false" ) ;
-                    (* first run computes and caches; later selects read the
+call              = name, "(", ")" ;
+                    (* calls are bare — settings reach scripts as context
+                       (ACCEPTS), never as arguments (dropped 2026-08-04).
+                       first run computes and caches; later selects read the
                        cache; re-running = deleting the cached rows (ordinary
                        SQL, like glossary removal) and selecting again —
                        REFRESH dropped 2026-08-03. Functions never write the
@@ -135,17 +138,26 @@ speaker           = "FUNCTION", name         (* fills the measurement slot *)
 
 (* -- reading (table functions in substrate SQL) ------------------------- *)
 
-glossary_read     = "GLOSSARY", "(", subject, [ ",", named_arg ], ")" ;
-                    (* collapsed default: one row per (subject, aspect) —
+glossary_read     = "GLOSSARY", "(", [ glossary_args ], ")" ;
+glossary_args     = subject, [ "::", name ], [ ",", all_flag ]
+                  | all_flag ;
+all_flag          = "all", "=>", "true" ;
+                    (* no subject sweeps the USE'd dataset; "::aspect" narrows
+                       to one declared aspect, as in attest_read.
+                       collapsed default: one row per (subject, aspect) —
                        (subject, aspect, value, band, score); value collapsed by
                        the witness's detector, NULL when the slot is empty or
                        entropy exceeds the threshold.
                        all => true: one row per (subject, aspect, kind, witness)
                        — (subject, aspect, kind, witness, actor, body,
-                       written_at) *)
+                       written_at); kind is the aspect's kind, the speaker is
+                       actor under witness *)
 
-attest_read       = "ATTEST", "(", ( path | pair_path ), ".", name, ")" ;
-                    (* argument is subject.aspect; standard attest schema:
+attest_read       = "ATTEST", "(", [ subject, [ "::", name ] ], ")" ;
+                    (* no argument sweeps the USE'd dataset; "::aspect" (the
+                       host's cast spelling) narrows to one declared aspect —
+                       fin.trial_balance names a table, fin::reconciliation an
+                       aspect. standard attest schema:
                        (subject, aspect, witness, band, score, computed_at);
                        band: green|yellow|orange|red, score: 0..1.
                        sweeps are WHERE clauses over this relation, never a

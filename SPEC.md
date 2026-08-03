@@ -1,6 +1,6 @@
 # glossql — language specification
 
-Status: **working draft**, 2026-08-03. This is the simplified language; it
+Status: **working draft**, 2026-08-04. This is the simplified language; it
 supersedes the 2026-07 draft (git history holds it; the pivot record is
 `reports/2026-08-03-simplification.md`). SPEC.md is the only normative prose.
 `grammar.ebnf` is the source of truth for syntax; `corpus/` holds the evidence
@@ -26,9 +26,11 @@ Ground rules:
 - **The grammar fixes keys, not mechanics.** History, replay, and supersession
   mechanics are implementation. The grammar fixes what supersedes what: the
   key is (subject, aspect, actor kind).
-- **Functions are scripts.** Analytical logic (metrics, checks, profiling,
-  detection) lives in registered scripts with JSON contracts — addable,
-  removable, ported by copying. It does not live in the grammar.
+- **Functions are scripts.** The engine's analytical machinery — profiling,
+  typing, detection, adjudication — lives in registered rhai scripts with
+  JSON contracts; a function is either a measurement or a detector, never a
+  metric. Metrics are concepts: QUERY aspects, run as their SQL (§5.1).
+  Analytical logic does not live in the grammar.
 
 ## 2. Map
 
@@ -40,7 +42,7 @@ disagree, verify in code, then fix the map.
 |---|---|---|
 | ontology concepts (`ontology.yaml`) | QUERY aspects | 01 |
 | conventions (+ `targets`, `concept_groups`) | FACT aspect, in-blob | 02 |
-| metrics (`dso.yaml`, `metrics` tables) | function scripts | 03 |
+| metrics (`dso.yaml`, `metrics` tables) | QUERY aspect, grounded in SQL | 03 |
 | validations (`validations` table) | aspect + witness + ATTEST | 04 |
 | cycles (`cycles.yaml`) | FACT aspects, in-blob | 05 |
 | claim witnesses + reliabilities | witness slots + detector | 06 |
@@ -152,17 +154,23 @@ The kind fixes the aspect's role:
   timestamp, this convention holds). The `WITH` schema validates the gloss
   body. Constants and formulas are FACT aspects — "cannot be grounded" means
   simply not `AS QUERY`.
-- **QUERY** — an SQL-grounded concept (revenue, accounts_receivable). Its
-  glosses validate against the **standard grounding schema** (§5.2), not the
-  `WITH` schema; the `WITH` schema carries the ontology entry (description,
-  indicators, unit, rendering).
+- **QUERY** — an SQL-grounded concept (revenue, accounts_receivable, dso).
+  Metrics are QUERY aspects: the value materializes by running the grounding
+  SQL, never through a function. Glosses validate against the **standard
+  grounding schema** (§5.2), not the `WITH` schema; the `WITH` schema
+  carries the ontology entry (description, indicators, unit, parameters,
+  rendering).
 - **MEASUREMENT** — a statistical evaluation (min_max, outliers,
   relationship_candidates). Never glossed: its value is the bound function's
   cached JSON output (§6, §7), served by `GLOSSARY()` beside facts and
-  groundings. How it is cached is implementation.
+  groundings, from the `cache` relation (§6).
 
 Multiplicity lives inside the blob — array-typed schemas — never in extra
 statements or slots.
+
+Re-declaring an aspect with identical content is a no-op. Changing it while
+glosses under it exist is refused — delete those rows first; existing bodies
+never silently stop matching their schema.
 
 ### 5.2 Glosses
 
@@ -247,46 +255,81 @@ SELECT * FROM GLOSSARY(orders.amount, all => true);
 The raw read: one row per (subject, aspect, kind, witness) —
 `(subject, aspect, kind, witness, actor, body, written_at)` — all current
 values side by side; precedence between them is the reader's business.
+`kind` is the aspect's kind; who spoke is `actor`, under `witness`.
+
+With no subject, `GLOSSARY()` sweeps the `USE`'d dataset. A subject serves
+itself and what lies under it: a table serves its columns and every
+relationship it participates in, from either side; the far endpoint's own
+context is never pulled in.
+
+`subject::aspect` narrows either read to one declared aspect, as in ATTEST
+(§7.2) — a metric's declaration and grounding SQL are one narrowed read
+away:
+
+```sql
+SELECT * FROM GLOSSARY(fin::dso);
+```
 
 ## 6. The function library
 
 Scripts registered as functions, with name and contract; static by nature —
-ported by copying the script.
+ported by copying the script. A function is either a **measurement** — it
+fills a MEASUREMENT aspect through that aspect's witness (§7) — or a
+**detector** (§7.1). The library is the engine's analytical machinery
+(profiling, typing, detection) moved into the server as rhai scripts;
+metrics are not functions (§5.1).
 
 ```sql
-DECLARE FUNCTION dso FOR fin FROM 'functions/dso.py'
-  ACCEPTS $${
-    "type": "object",
-    "properties": {"days_in_period": {"type": "integer", "default": 30, "enum": [30, 90, 365]}}
-  }$$
+DECLARE FUNCTION profile_min_max FOR fin FROM 'functions/profile_min_max.rhai'
   RETURNS $${
     "type": "object",
-    "required": ["value"],
-    "properties": {"value": {"type": "number"}, "unit": {"const": "days"}}
+    "properties": {"min": {}, "max": {}}
+  }$$;
+
+DECLARE FUNCTION infer_types FOR GLOBAL FROM 'functions/infer_types.rhai'
+  ACCEPTS (type_patterns, null_values)
+  RETURNS $${
+    "type": "object",
+    "required": ["types"],
+    "properties": {"types": {"type": "object"}}
   }$$;
 ```
 
 - `FOR` scopes the function to a dataset, or `GLOBAL`.
 - `FROM` names the script.
-- `ACCEPTS` is the input contract: a JSON Schema, or a pointer to a single
-  value inside another producer's schema — `ACCEPTS 'period_grain#/properties/days'`,
-  a string holding `producer#/json/pointer`. Arguments are passed by name.
-- `RETURNS` is a JSON Schema; functions return JSON per it. How results are
-  cached is implementation.
-- Every function implicitly receives its subject and the subject's SQL schema.
+- `ACCEPTS` names the aspects whose current values the server hands the
+  script as its context document — settings are context, never call
+  arguments; calls are always bare `f()`. Absent `ACCEPTS`, the script
+  receives no context.
+- `RETURNS` is a JSON Schema; functions return JSON per it. Results land in
+  the `cache` relation below.
+- Every function implicitly receives its subject, with its SQL schema and
+  neighborhood (parent, siblings, children) as metadata. Scripts run
+  against the dataset — any SQL; determinism is the script's contract, the
+  workspace its boundary.
+- A detector receives the witness's slots and threshold, never table data
+  (§7.1).
 - A function bound to a MEASUREMENT aspect (§7) has that aspect's schema as
   its RETURNS — `GLOSSARY()` serves its output as-is.
 
 Extraction:
 
 ```sql
-SELECT dso(days_in_period => 90) FROM fin;
 SELECT profile_min_max() FROM orders;
+SELECT infer_types() FROM orders;
 ```
 
-The first run computes and caches; later selects read the cache. Re-running
-is removal, not a modifier: the cache is an ordinary relation, like the
-glossary — DELETE the cached rows and select again. Whether multi-function
+The first run computes and caches; later selects read the cache. The cache
+is an ordinary relation, like the glossary, named `cache`: one row per
+(subject, function) — `(subject, function, body, computed_at)`. Re-running
+is removal, not a modifier — DELETE at whatever
+grain the WHERE clause picks, and select again:
+
+```sql
+DELETE FROM cache WHERE function = 'dso';
+```
+
+Whether multi-function
 extraction fans out or runs one call after another is the caller's choice —
 send one statement with many calls, or many statements; the grammar carries
 no ordering surface. Functions never write the glossary; their results live
@@ -323,7 +366,7 @@ DECLARE WITNESS min_max_w ON min_max BY (FUNCTION profile_min_max);
 ### 7.2 Attestation
 
 ```sql
-SELECT * FROM ATTEST(orders.amount.behavior);
+SELECT * FROM ATTEST(orders.amount::behavior);
 SELECT subject, band FROM ATTEST(fin.trial_balance) WHERE band = 'red';
 ```
 
@@ -333,7 +376,10 @@ The **standard attest schema** is fixed:
 Same cache semantics as function SELECT; detail lives in the value
 function's own cached output, reachable by SELECT. Sweeps ("all contested
 behavior columns") are WHERE clauses over the attest relation, never a
-special form.
+special form; with no argument, `ATTEST()` sweeps the `USE`'d dataset.
+`subject::aspect` — the host's cast spelling — narrows attestation to one
+declared aspect, unambiguously: `fin.trial_balance` names a table,
+`fin::reconciliation` an aspect across the dataset.
 
 Judgment lives here — in detector functions and read policy — never in
 results: no construct writes a verdict into data.
@@ -361,8 +407,9 @@ reads as nonexistence). Closes by corpus test against the real served context
 PoC notes: batch visibility comes from (long-running) transactions — the
 running system's run_id + snapshot-head pointer is the verbose version of
 the same guarantee · actor transport rides the connection, DuckDB-style ·
-the cache is an ordinary relation like `glossary`; its name and schema are
-fixed when the store lands.
+parked as a future enhancement (2026-08-03): `GLOSSARY` may someday also
+materialize a QUERY aspect's value by running its grounding SQL at read —
+today the read serves the SQL, and running it is the reader's act.
 
 Deferred, not under discussion: access rights · portability · persistence
 backend and engine mapping.

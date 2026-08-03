@@ -50,12 +50,12 @@ snap!(
     r#"GLOSS type_patterns ON fin AS $${"expr": "STRPTIME(\"{col}\", '%d.%m.%Y')"}$$;"#
 );
 snap!(
-    function_decl_accepts_schema,
-    r#"DECLARE FUNCTION dso FOR fin FROM 'functions/dso.py' ACCEPTS $${"type": "object"}$$ RETURNS $${"type": "object", "required": ["value"]}$$;"#
+    function_decl_accepts_aspects,
+    r#"DECLARE FUNCTION infer_types FOR GLOBAL FROM 'functions/infer_types.rhai' ACCEPTS (type_patterns, null_values) RETURNS $${"type": "object"}$$;"#
 );
 snap!(
-    function_decl_accepts_pointer,
-    r#"DECLARE FUNCTION dso_auto FOR GLOBAL FROM 'functions/dso.py' ACCEPTS 'period_grain#/properties/days' RETURNS $${"type": "object"}$$;"#
+    function_decl_no_accepts,
+    r#"DECLARE FUNCTION profile_min_max FOR fin FROM 'functions/profile_min_max.rhai' RETURNS $${"type": "object", "required": ["value"]}$$;"#
 );
 snap!(
     witness_decl_full,
@@ -66,6 +66,6 @@ snap!(
     "DECLARE WITNESS min_max_w ON min_max BY (FUNCTION profile_min_max);"
 );
 snap!(
-    extract_with_args,
-    "SELECT dso(days_in_period => 90), profile() FROM fin.orders;"
+    extract_two_calls,
+    "SELECT outliers(), profile() FROM fin.orders;"
 );
