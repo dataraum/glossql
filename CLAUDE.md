@@ -1,11 +1,11 @@
 # glossql — workspace rules
 
-The context language (SPEC.md) and, later, its server. Current phase:
-**simplified language, working draft under review** (2026-08-03 pivot; the
-2026-07 draft lives in git history). There is no implementation and none
-should be started before the project lead agrees the grammar. One carve-out:
-the disposable §9.1 validation harness; its only outputs are transcription
-verdicts and SPEC.md diffs, and it does not survive into the implementation.
+The context language (SPEC.md) and its server. Current phase: **PoC server
+build-out** (started 2026-08-03; the language was agreed by the project lead
+after the same-day simplification pivot — the 2026-07 draft lives in git
+history, and the stack and storage decisions are recorded in `reports/`).
+Milestone 1 is the statement spine; corpus fixture 11 is the PoC acceptance
+test. Grammar changes still follow the corpus-first process below.
 
 ## The one-document rule
 
@@ -13,7 +13,7 @@ verdicts and SPEC.md diffs, and it does not survive into the implementation.
 assumption files, no per-topic notes. Open questions live in SPEC.md §9 and
 get folded into the body when decided, not appended as history.
 
-Four non-prose artifacts are first-class — fixtures and machinery, not
+Five non-prose artifacts are first-class — fixtures and machinery, not
 documents:
 
 - `grammar.ebnf` — the machine-readable grammar; the source of truth for syntax.
@@ -21,13 +21,17 @@ documents:
   (` ```glossql ` must parse; ` ```glossql-gap ` documents a gap and must
   fail). Fixtures 11–12 model the system's operational flows as statement
   sequences.
-- `harness/` — the §9.1 machinery (parser + checker). Disposable; does not
-  survive into the implementation.
-- `reports/` — pivot records and review verdicts.
+- `harness/` — the §9.1 machinery (parser + checker). Stays until the Rust
+  corpus suite fully replaces it, then retires.
+- `server/` — the Rust PoC server (Cargo workspace: `parser`, `catalog`,
+  `glossary`, `scripts`, `import`, `serverd`). `parser` is the Rust port of
+  the harness parser; the corpus is its acceptance suite.
+- `reports/` — pivot records, review verdicts, and evaluation records.
 
-**Standing invariant:** `python3 harness/check.py` passes — every ```sql
-block in SPEC.md parses, every corpus fixture behaves as tagged. A grammar
-edit that breaks it doesn't land.
+**Standing invariant:** `python3 harness/check.py` AND
+`cargo test -p parser` (from `server/`) pass — every ```sql block in SPEC.md
+parses, every corpus fixture behaves as tagged, in both parsers. A grammar
+edit that breaks either doesn't land.
 
 **Ideation before prose:** no idea enters SPEC.md until it has survived a
 corpus test — write competing statement forms for the same real artifact,
