@@ -126,7 +126,25 @@ no orchestration statement anywhere.
 
 ## Deliberately not built
 
-No eligibility spelling (fork still open — its mechanism is settled as
-derivation input, its statement form is not). No `raw.` alias layer (the
-migration papercut, if it is one, is cheap to add). No detector beyond
+No eligibility implementation — but the fork closed (project lead,
+2026-08-04): eligibility is **its own gloss**, never a boolean inside the
+type body. Whole-body supersession decides it: the flag would be hostage
+to every fresh typing decision (the function's pick knows nothing of
+eligibility and would silently drop it), and the fix would be merge-on-
+write — the overlay fixture 13 killed. Its own aspect supersedes
+independently and can grow its own witness chain. The concrete spelling
+lands with its fixture when eligibility is built. No `raw.` alias layer
+(ruled the same day: not needed — nobody reads raw). No detector beyond
 slot-entropy, no ADBC, no serverd; the M5 staging-name obligation stands.
+
+## Recorded for M5 (project lead, 2026-08-04)
+
+The cockpit's query door is a plain HTTP endpoint streaming Arrow IPC —
+arrow-js consumes the stream natively (`RecordBatchReader.from(fetch)`),
+in Node and the browser, and the batches already exist in memory. The
+TypeScript Flight SQL client ecosystem was surveyed and rejected as a
+dependency: every package is stale or tiny (a 2-star 0.1.0, a 3-year-old
+publish, a 9-months-quiet repo) — thin wrappers worth copying if Flight
+from TS is ever needed, not depending on. Flight SQL stays the
+engine-grade door for Python and peer engines; serverd carries both,
+plus the MCP shim.
