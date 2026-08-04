@@ -6,6 +6,7 @@ use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::catalog::{CatalogProvider, SchemaProvider, TableProvider};
 use datafusion::common::DataFusionError;
 use datafusion::datasource::MemTable;
+use datafusion::execution::SendableRecordBatchStream;
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion::sql::parser::Statement as DFStatement;
@@ -57,6 +58,8 @@ pub enum SessionError {
     SubstrateClosed(String),
     #[error("DROP TABLE {table} refused: {reason} (replacement is postponed — declare under another name)")]
     DropRefused { table: String, reason: String },
+    #[error("streaming takes exactly one query — everything else answers through execute")]
+    NotOneRead,
 }
 
 /// What one statement produced. `Rows` for anything that reads, `Affected`
@@ -333,7 +336,13 @@ impl Session {
         source: &str,
         sql: &str,
     ) -> Result<(usize, u64), SessionError> {
-        const STAGED: &str = "__glossql_staged";
+        // The doors cannot guarantee statement order (M3 report), so the
+        // staged name is unique per materialization, never per session.
+        static STAGED_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let staged = format!(
+            "__glossql_staged_{}",
+            STAGED_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        );
         let lake = self.lake().expect("caller holds a lake");
         let spec = self.source_spec(source).await?;
         let landed = glossql_import::run_recipe(&spec, sql).await?;
@@ -347,15 +356,15 @@ impl Session {
         mounted.register_table(table.to_string(), Arc::new(shape))?;
 
         if rows > 0 {
-            let staged = MemTable::try_new(Arc::clone(&landed.schema), vec![landed.batches])?;
-            self.ctx.register_table(STAGED, Arc::new(staged))?;
-            let insert = format!("INSERT INTO \"{dataset}\".\"{table}\" SELECT * FROM {STAGED}");
+            let batches = MemTable::try_new(Arc::clone(&landed.schema), vec![landed.batches])?;
+            self.ctx.register_table(&staged, Arc::new(batches))?;
+            let insert = format!("INSERT INTO \"{dataset}\".\"{table}\" SELECT * FROM {staged}");
             let inserted = async {
                 self.ctx.sql(&insert).await?.collect().await?;
                 Ok::<(), DataFusionError>(())
             }
             .await;
-            let _ = self.ctx.deregister_table(STAGED);
+            let _ = self.ctx.deregister_table(&staged);
             inserted?;
         }
         self.shared
@@ -534,6 +543,35 @@ impl Session {
             results.push(row);
         }
         Ok(Outcome::Rows(vec![crate::reads::extraction_batch(results)]))
+    }
+
+    /// One query, streaming (project lead, 2026-08-04): batches flow as
+    /// the engine produces them — memory rides one batch, and a dropped
+    /// stream cancels the work upstream. `GLOSSARY()`/`ATTEST()` stream
+    /// like any read; the planner did its part before the first batch.
+    /// Anything that is not exactly one query refuses with
+    /// [`SessionError::NotOneRead`] and belongs in [`Session::execute`].
+    pub async fn query_stream(
+        &self,
+        sql: &str,
+    ) -> Result<SendableRecordBatchStream, SessionError> {
+        let mut statements = GlossqlParser::parse_sql(sql)?;
+        let one_query = matches!(&statements[..], [Statement::Substrate(statement)]
+            if matches!(&**statement, DFStatement::Statement(inner)
+                if matches!(inner.as_ref(), SQLStatement::Query(_))));
+        if !one_query {
+            return Err(SessionError::NotOneRead);
+        }
+        let Some(Statement::Substrate(statement)) = statements.pop() else {
+            unreachable!("just matched")
+        };
+        let plan = self.ctx.state().statement_to_plan(*statement).await?;
+        Ok(self
+            .ctx
+            .execute_logical_plan(plan)
+            .await?
+            .execute_stream()
+            .await?)
     }
 
     /// Substrate SQL runs behind an allowlist (project lead, 2026-08-04):

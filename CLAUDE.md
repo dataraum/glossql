@@ -42,8 +42,16 @@ documents:
   on both sides, the aspect schema is the one validated contract, a
   function without RETURNS is a detector, and witnesses gate actors and
   adjudicate only — function voices ride the RETURNS binding.
-  Planned (a crate is created only when it has real content): `serverd`
-  (Flight SQL + MCP shim).
+  · `serverd` (the doors, M5: one axum listener — the MCP shim at `/mcp`,
+  rmcp streamable HTTP, stateless per the 2026-07-28 revision, one
+  `glossql` tool; the Arrow IPC query door at `/query`. Reads stream end
+  to end via `Session::query_stream` — one batch in memory, the MCP row
+  cap (`--row-cap`) terminates the stream early so it bounds engine work.
+  Sessions live in the plane keyed by actor; actor rides the connection
+  via initialize clientInfo with a boot-flag fallback. The door tells,
+  skills teach — agent knowledge ships as skills sourced from repo
+  artifacts, ruled 2026-08-04. Flight SQL cut from M5: a future door,
+  pyarrow reads the HTTP stream).
 - `reports/` — pivot records, review verdicts, and evaluation records.
 
 **Standing invariant:** workspace `cargo test` passes — every ```sql block
