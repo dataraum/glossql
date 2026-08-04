@@ -28,9 +28,9 @@ if p == () || !("numeric" in p) {
         count(CASE WHEN ${v} < ${iqr_low} OR ${v} > ${iqr_high} THEN 1 END) AS iqr_out,
         count(CASE WHEN ${v} < ${z_low} OR ${v} > ${z_high} THEN 1 END) AS z_out
         FROM "${table}"`);
-    let parsed = t.col("parsed").value_at(0).parse_int();
-    let iqr_out = t.col("iqr_out").value_at(0).parse_int();
-    let z_out = if mad > 0.0 { t.col("z_out").value_at(0).parse_int() } else { 0 };
+    let parsed = t.cell("parsed").parse_int();
+    let iqr_out = t.cell("iqr_out").parse_int();
+    let z_out = if mad > 0.0 { t.cell("z_out").parse_int() } else { 0 };
     let ratio = |count| if parsed == 0 { 0.0 } else { count.to_float() / parsed.to_float() };
     #{
         applicable: true,

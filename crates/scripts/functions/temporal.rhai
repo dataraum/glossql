@@ -16,10 +16,11 @@ let table = parts[0];
 let column = parts[1];
 
 // A point in time bounds a window; durations and times-of-day do not
-// (v0.3's TIME_POINT_TYPES rule, by type never by name). arrow_typeof
-// over min() types even an all-NULL result.
-let t = db.query(`SELECT arrow_typeof(min("${column}")) AS ty FROM "${table}"`);
-let ty = t.col("ty").value_at(0);
+// (v0.3's TIME_POINT_TYPES rule, by type never by name). The door's
+// empty results still carry schema, so LIMIT 0 types the column
+// without scanning it.
+let t = db.query(`SELECT "${column}" AS v FROM "${table}" LIMIT 0`);
+let ty = t.col("v").dtype();
 if !(ty.starts_with("Date") || ty.starts_with("Timestamp")) {
     #{ applicable: false }
 } else {
@@ -33,7 +34,7 @@ if !(ty.starts_with("Date") || ty.starts_with("Timestamp")) {
         FROM (SELECT count("${column}") AS present,
                      min("${column}") AS min_v, max("${column}") AS max_v
               FROM "${table}") AS bounds`);
-    if w.col("present").value_at(0).parse_int() == 0 {
+    if w.cell("present").parse_int() == 0 {
         // Nothing to bound a window with — abstain like outliers does.
         #{ applicable: false }
     } else {
@@ -46,7 +47,7 @@ if !(ty.starts_with("Date") || ty.starts_with("Timestamp")) {
             SELECT median(gap_seconds) AS med, min(gap_seconds) AS lo,
                    max(gap_seconds) AS hi
             FROM gaps WHERE gap_seconds IS NOT NULL`);
-        let med = g.col("med").value_at(0);
+        let med = g.cell("med");
         let granularity = "unknown";
         let confidence = 0.0;
         if med != () {
@@ -70,8 +71,8 @@ if !(ty.starts_with("Date") || ty.starts_with("Timestamp")) {
                 }
             }
             if granularity != "irregular" {
-                let lo = g.col("lo").value_at(0).parse_float();
-                let hi = g.col("hi").value_at(0).parse_float();
+                let lo = g.cell("lo").parse_float();
+                let hi = g.cell("hi").parse_float();
                 // v0.3's exact rule: a zero min gap (sub-second neighbours
                 // floored to 0) keeps the flat default instead of the
                 // variation formula; the 0.5 cap doubles as the floor.
@@ -127,9 +128,9 @@ if !(ty.starts_with("Date") || ty.starts_with("Timestamp")) {
 
         let out = #{
             applicable: true,
-            min: w.col("min_v").value_at(0),
-            max: w.col("max_v").value_at(0),
-            span_days: w.col("span_seconds").value_at(0).parse_float() / 86400.0,
+            min: w.cell("min_v"),
+            max: w.cell("max_v"),
+            span_days: w.cell("span_seconds").parse_float() / 86400.0,
             granularity: granularity,
             confidence: confidence,
             gaps: gaps,
@@ -157,8 +158,8 @@ if !(ty.starts_with("Date") || ty.starts_with("Timestamp")) {
                 FROM (SELECT count(DISTINCT date_trunc('${granularity}', ${ts})) AS actual,
                              min(${ts}) AS lo_t, max(${ts}) AS hi_t
                       FROM "${table}" WHERE "${column}" IS NOT NULL) AS bounds`);
-            let actual = c.col("actual").value_at(0).parse_int();
-            let expected = c.col("expected").value_at(0).parse_int();
+            let actual = c.cell("actual").parse_int();
+            let expected = c.cell("expected").parse_int();
             out.completeness = #{
                 expected: expected,
                 actual: actual,

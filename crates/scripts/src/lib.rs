@@ -104,10 +104,36 @@ impl RhaiRuntime {
                 datafusion::arrow::compute::concat(&arrays)
                     .map(Col)
                     .map_err(|e| e.to_string().into())
+            })
+            // The first row's value in a named column — the one-row
+            // aggregate read every script does; () for NULL or no rows.
+            .register_fn("cell", |t: &mut Table, name: &str| -> ScriptResult<Dynamic> {
+                let Some(first) = t.0.first() else {
+                    return fail(format!("no rows carry a column `{name}`"));
+                };
+                let Some((index, _)) = first.schema().column_with_name(name) else {
+                    return fail(format!("no column `{name}` in the result"));
+                };
+                let Some(batch) = t.0.iter().find(|b| b.num_rows() > 0) else {
+                    return Ok(Dynamic::UNIT);
+                };
+                let column = batch.column(index);
+                if column.is_null(0) {
+                    return Ok(Dynamic::UNIT);
+                }
+                Ok(Dynamic::from(
+                    array_value_to_string(column, 0).map_err(|e| e.to_string())?,
+                ))
             });
 
         engine
             .register_type_with_name::<Col>("Col")
+            // The column's Arrow type name ("Float64", "Date32", …) — the
+            // door's empty results still carry schema, so a LIMIT 0 query
+            // types a column without scanning it.
+            .register_fn("dtype", |c: &mut Col| -> String {
+                c.0.data_type().to_string()
+            })
             .register_fn("count", |c: &mut Col| -> i64 { c.0.len() as i64 })
             .register_fn("null_count", |c: &mut Col| -> i64 {
                 c.0.null_count() as i64

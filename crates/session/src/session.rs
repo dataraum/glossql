@@ -72,6 +72,10 @@ pub enum Outcome {
 /// scripts run any SQL against the dataset). Sync because scripts are; the
 /// session implements it over its context with the block-in-place bridge
 /// the reads already use. Detectors get a door that refuses (§7.1).
+///
+/// Contract: an empty result still ships one empty batch carrying the
+/// schema — the PROBE rule (§3), so a `LIMIT 0` through the door types
+/// columns without scanning them.
 pub trait SqlDoor: Send + Sync {
     fn sql(&self, query: &str) -> Result<Vec<RecordBatch>, String>;
 }
@@ -119,13 +123,13 @@ impl SqlDoor for CtxDoor {
     fn sql(&self, query: &str) -> Result<Vec<RecordBatch>, String> {
         tokio::task::block_in_place(|| {
             self.handle.block_on(async {
-                self.ctx
-                    .sql(query)
-                    .await
-                    .map_err(|e| e.to_string())?
-                    .collect()
-                    .await
-                    .map_err(|e| e.to_string())
+                let df = self.ctx.sql(query).await.map_err(|e| e.to_string())?;
+                let schema = Arc::new(df.schema().as_arrow().clone());
+                let mut batches = df.collect().await.map_err(|e| e.to_string())?;
+                if batches.is_empty() {
+                    batches.push(RecordBatch::new_empty(schema));
+                }
+                Ok(batches)
             })
         })
     }

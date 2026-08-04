@@ -38,11 +38,19 @@ impl CtxDoor {
 
 impl SqlDoor for CtxDoor {
     fn sql(&self, query: &str) -> Result<Vec<RecordBatch>, String> {
+        // The door contract: an empty result still ships one empty batch
+        // carrying the schema, so LIMIT 0 types columns without scanning.
         self.rt
             .block_on(async {
-                self.ctx.sql(query).await?.collect().await
+                let df = self.ctx.sql(query).await?;
+                let schema = Arc::new(df.schema().as_arrow().clone());
+                let mut batches = df.collect().await?;
+                if batches.is_empty() {
+                    batches.push(RecordBatch::new_empty(schema));
+                }
+                Ok(batches)
             })
-            .map_err(|e| e.to_string())
+            .map_err(|e: datafusion::error::DataFusionError| e.to_string())
     }
 }
 
