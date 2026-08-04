@@ -13,8 +13,6 @@ datafusion-functions-json.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 thiserror.workspace = true
-# try_to_date/try_to_timestamp parse with the same chrono arrow already uses.
-chrono = { version = "0.4", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 insta.workspace = true

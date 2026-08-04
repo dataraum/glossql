@@ -23,9 +23,7 @@ use datafusion::sql::sqlparser::ast::{
 };
 
 use glossql_catalog::Lake;
-use glossql_glossary::{
-    AttestRow, CollapsedRow, RAW_SUFFIX, RawRow, ReadContext, Scope, Store, schemas,
-};
+use glossql_glossary::{AttestRow, CollapsedRow, RawRow, ReadContext, Scope, Store, schemas};
 use serde_json::{Value, json};
 
 use crate::session::{FunctionRuntime, SessionError, SqlDoor};
@@ -54,10 +52,10 @@ impl Shared {
         Arc::clone(&self.runtime.read().expect("runtime lock"))
     }
 
-    /// What the store cannot know (SPEC.md §5.3): the logical subjects that
-    /// exist — recipe tables minus the `_raw` suffix, plus their columns —
-    /// and each table's current snapshot. The disclosure grid and the
-    /// staleness comparison ride on this.
+    /// What the store cannot know (SPEC.md §5.3): the subjects that exist —
+    /// the recipe tables and their columns — and each table's current
+    /// snapshot. The disclosure grid and the staleness comparison ride on
+    /// this.
     pub async fn read_context(&self) -> Result<ReadContext, SessionError> {
         if let Some(cached) = self.read_cache.read().expect("read cache").clone() {
             return Ok(cached);
@@ -69,15 +67,14 @@ impl Shared {
         ) else {
             return Ok(ctx);
         };
-        for raw in lake.table_names(&dataset).await? {
-            let logical = raw.strip_suffix(RAW_SUFFIX).unwrap_or(&raw).to_string();
-            if let Some(snapshot) = lake.snapshot_id(&dataset, &raw).await? {
-                ctx.snapshots.insert(logical.clone(), snapshot);
+        for table in lake.table_names(&dataset).await? {
+            if let Some(snapshot) = lake.snapshot_id(&dataset, &table).await? {
+                ctx.snapshots.insert(table.clone(), snapshot);
             }
-            for column in lake.table_columns(&dataset, &raw).await? {
-                ctx.universe.push(format!("{logical}.{column}"));
+            for column in lake.table_columns(&dataset, &table).await? {
+                ctx.universe.push(format!("{table}.{column}"));
             }
-            ctx.universe.push(logical);
+            ctx.universe.push(table);
         }
         *self.read_cache.write().expect("read cache") = Some(ctx.clone());
         Ok(ctx)
@@ -172,7 +169,7 @@ async fn ensure_verdicts(
             };
             shared
                 .store
-                .cache_put(dataset, subject, &detector, &output.to_string(), snapshot, &[])
+                .cache_put(dataset, subject, &detector, &output.to_string(), snapshot)
                 .await?;
         }
     }
@@ -216,7 +213,7 @@ impl RelationPlanner for GlossqlReads {
             ("attest", Some(a)) => self.run(attest_read(&self.shared, &a.args))?,
             // The store's relations, readable as plain tables; snapshot at
             // plan time, like every other read here.
-            ("glossary" | "cache", None) => {
+            ("glossary" | "cache" | "imports", None) => {
                 let table = fname.clone();
                 self.run(async {
                     let rows = self.shared.store.relation_rows(&table).await?;
@@ -600,6 +597,14 @@ fn relation_batch(table: &str, rows: Vec<Vec<Option<String>>>) -> RecordBatch {
             "body",
             "written_at",
             "snapshot_id",
+        ],
+        "imports" => &[
+            "dataset",
+            "table_name",
+            "source_rows",
+            "landed_rows",
+            "dropped_rows_count",
+            "imported_at",
         ],
         _ => &[
             "dataset",

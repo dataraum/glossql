@@ -2199,6 +2199,7 @@ dependencies = [
 name = "glossql-import"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "datafusion",
  "serde_json",
  "tempfile",
@@ -2235,7 +2236,6 @@ dependencies = [
 name = "glossql-session"
 version = "0.1.0"
 dependencies = [
- "chrono",
  "datafusion",
  "datafusion-functions-json",
  "glossql-catalog",

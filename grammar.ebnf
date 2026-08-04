@@ -27,7 +27,10 @@ statement         = declaration
                   | use
                   | gloss
                   | extract
-                  | substrate_sql ;          (* SELECT, CREATE VIEW, DELETE, ... *)
+                  | substrate_sql ;          (* allowlisted: SELECT and probes,
+                                                DROP TABLE, DELETE FROM
+                                                glossary|cache — the rest of
+                                                DDL/DML is refused *)
 
 declaration       = "DECLARE", ( source_decl
                                | recipe_decl
@@ -50,14 +53,15 @@ recipe_decl       = "RECIPE", name, "ON", name, "FROM", name, "AS", dollar ;
                        sql runs at the source: a relational source executes
                        it in its own dialect; at a file source the server
                        runs it, read_parquet/read_csv/read_json resolving
-                       under the source's location. Dollar-quoted so
-                       foreign-dialect text never meets the host tokenizer;
-                       the result lands as table r_raw; the bare name r is
-                       the engine-derived typed view (identity until `type`
-                       decisions exist), r_quarantined its complement — the
-                       suffixes are engine-owned. Unchanged re-declaration
-                       is a no-op; changed is refused while glosses exist
-                       under the table *)
+                       under the source's location, try_to_date/
+                       try_to_timestamp registered. Dollar-quoted so
+                       foreign-dialect text never meets the host tokenizer.
+                       The recipe carries the casts (ruled 2026-08-04):
+                       the result lands as table r, the typed table —
+                       no derived view, no raw twin. Identity is content
+                       (SQL + produced schema): unchanged re-declaration
+                       is a no-op, changed is refused outright; DROP TABLE
+                       removes whole and refuses on data or glosses *)
 
 (* -- datasets ----------------------------------------------------------- *)
 

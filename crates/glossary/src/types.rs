@@ -21,13 +21,9 @@ pub enum Error {
     )]
     AspectInUse { name: String, glosses: i64 },
     #[error(
-        "table `{table}` has {glosses} gloss(es) — a different SQL is a different table; declare it under another name"
+        "the recipe for `{table}` changed — a different SQL is a different table; declare it under another name (replacement is postponed)"
     )]
-    RecipeInUse { table: String, glosses: i64 },
-    #[error(
-        "`{name}` ends with an engine-owned suffix — `_raw` and `_quarantined` belong to the derived pair"
-    )]
-    ReservedSuffix { name: String },
+    RecipeChanged { table: String },
     #[error("witness on MEASUREMENT aspect `{0}` must be BY (FUNCTION fn) only")]
     MeasurementWitnessSpeakers(String),
     #[error(
@@ -144,12 +140,11 @@ pub struct FunctionRow {
 }
 
 /// What a `DECLARE RECIPE` amounted to (SPEC.md §3): the session
-/// materializes on `Created`/`Replaced` and leaves `Unchanged` alone.
+/// materializes on `Created` and leaves `Unchanged` alone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RecipeAdmission {
     Created,
     Unchanged,
-    Replaced,
 }
 
 /// A stored recipe, as materialization needs it.

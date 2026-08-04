@@ -27,16 +27,19 @@ documents:
   workspace `Cargo.toml` comment and the M2/M3 reports). Built: `parser`
   (GlossqlParser wrapping DataFusion's DFParser; the corpus is its
   acceptance suite) · `glossary` (sqlx store, supersession, admission,
-  collapse states, write-invalidation) · `session` (SessionContext
-  assembly, RelationPlanner reads, statement router, recipe
-  materialization, derived typed/quarantined pair, detector-at-read,
-  try_to_date/try_to_timestamp) · `catalog` (the workspace Lake:
+  collapse states, ACCEPTS-invalidation, imports counters) · `session`
+  (SessionContext assembly, RelationPlanner reads, statement router with
+  the substrate allowlist, recipe materialization, probe routing,
+  DROP TABLE lifecycle, detector-at-read) · `catalog` (the workspace Lake:
   iceberg-rust SqlCatalog on SQLite + warehouse dir; datasets are
-  namespaces) · `import` (recipe execution over file sources; ADBC executor
+  namespaces) · `import` (recipe and probe execution over file sources,
+  try_to_date/try_to_timestamp, source-row counting; ADBC executor
   planned) · `scripts` (rhai runtime behind FunctionRuntime, zero-copy
   column kernels, the reference function library under
-  `crates/scripts/functions/`). Planned (a crate is created only when it
-  has real content): `serverd` (Flight SQL + MCP shim).
+  `crates/scripts/functions/`). Typing is authored in recipes (ruled
+  2026-08-04) — no derived views, no raw twin, no typing functions.
+  Planned (a crate is created only when it has real content): `serverd`
+  (Flight SQL + MCP shim).
 - `reports/` — pivot records, review verdicts, and evaluation records.
 
 **Standing invariant:** workspace `cargo test` passes — every ```sql block

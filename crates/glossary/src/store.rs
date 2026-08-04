@@ -18,22 +18,6 @@ use crate::types::{
     RecipeAdmission, RecipeRow, Result, WitnessRow,
 };
 
-/// The aspect that carries typing decisions (SPEC.md §3): its current value
-/// per column drives the derived table view, and a change to it invalidates
-/// the table's cached evidence.
-pub const TYPE_ASPECT: &str = "type";
-
-/// The aspect that carries eligibility decisions (SPEC.md §3): a column
-/// whose current value is `{"value": false}` is dropped from the typed
-/// projection — raw and the glossary keep it, and a superseding gloss
-/// brings it back at the next read.
-pub const ELIGIBLE_ASPECT: &str = "eligible";
-
-/// The engine-owned suffix of the table behind a logical name (SPEC.md §3):
-/// recipes land `<t>_raw`; the bare name is the derived view. One
-/// definition — the session's naming and the scripts' `raw_of` both read it.
-pub const RAW_SUFFIX: &str = "_raw";
-
 /// What a read sweeps over (SPEC.md §5.3, §7.2): the whole dataset, or a
 /// subject and everything under it (columns of a table, relationships rooted
 /// at it).
@@ -156,14 +140,15 @@ CREATE TABLE IF NOT EXISTS cache (
   function TEXT NOT NULL,
   body TEXT NOT NULL,
   computed_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-  snapshot_id INTEGER,
-  reads TEXT NOT NULL DEFAULT '[]'
+  snapshot_id INTEGER
 );
-CREATE TABLE IF NOT EXISTS derived (
+CREATE TABLE IF NOT EXISTS imports (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
   dataset TEXT NOT NULL,
   table_name TEXT NOT NULL,
-  emitted TEXT NOT NULL,
-  PRIMARY KEY (dataset, table_name)
+  source_rows INTEGER NOT NULL,
+  landed_rows INTEGER NOT NULL,
+  imported_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 "#;
 
@@ -211,16 +196,13 @@ impl Store {
     }
 
     /// Statement identity is content (SPEC.md §3): an unchanged recipe is a
-    /// no-op; a changed one is refused while glosses exist under the table —
-    /// a different SQL is a different table, declare it under another name.
+    /// no-op; a changed one is refused outright (project lead, 2026-08-04 —
+    /// replacement is postponed until the deletion cascade exists). A
+    /// different SQL is a different table: declare it under another name,
+    /// or `DROP TABLE` first while the table is still empty and unglossed.
     pub async fn declare_recipe(&self, decl: &RecipeDecl) -> Result<RecipeAdmission> {
         let dataset = decl.dataset.value.as_str();
         let table = decl.table.value.as_str();
-        // `_raw` and `_quarantined` belong to the derived pair (project
-        // lead, 2026-08-04) — a recipe cannot claim them.
-        if table.ends_with("_raw") || table.ends_with("_quarantined") {
-            return Err(Error::ReservedSuffix { name: table.into() });
-        }
         self.require("dataset", "datasets", dataset).await?;
         self.require("source", "sources", decl.source.value.as_str())
             .await?;
@@ -231,21 +213,9 @@ impl Store {
                 return Ok(RecipeAdmission::Unchanged);
             }
             Some(_) => {
-                let (pred, binds) = Scope::Subject(table.to_string()).predicate("subject");
-                let sql =
-                    format!("SELECT count(*) AS n FROM glossary WHERE dataset = ? AND {pred}");
-                let mut q = sqlx::query(&sql).bind(dataset);
-                for b in &binds {
-                    q = q.bind(b);
-                }
-                let glosses: i64 = q.fetch_one(&self.pool).await?.get("n");
-                if glosses > 0 {
-                    return Err(Error::RecipeInUse {
-                        table: table.into(),
-                        glosses,
-                    });
-                }
-                RecipeAdmission::Replaced
+                return Err(Error::RecipeChanged {
+                    table: table.into(),
+                });
             }
         };
         sqlx::query(
@@ -272,6 +242,21 @@ impl Store {
             source: r.get("source"),
             sql: r.get("sql"),
         }))
+    }
+
+    /// Every declared source, for the probe surface (paths' first segment
+    /// names one of these).
+    pub async fn sources_all(&self) -> Result<Vec<(String, Value)>> {
+        let rows = sqlx::query("SELECT name, settings FROM sources ORDER BY name")
+            .fetch_all(&self.pool)
+            .await?;
+        rows.into_iter()
+            .map(|r| {
+                let settings = serde_json::from_str(&r.get::<String, _>("settings"))
+                    .map_err(|e| Error::Corrupt(e.to_string()))?;
+                Ok((r.get("name"), settings))
+            })
+            .collect()
     }
 
     pub async fn source_settings(&self, name: &str) -> Result<Option<Value>> {
@@ -524,8 +509,8 @@ impl Store {
     /// Writes invalidate, reads recompute, judgment only supersedes (project
     /// lead, 2026-08-04). A new value for an aspect kills the cached output
     /// of every function that `ACCEPTS` it, at and under the subject — the
-    /// context-in dependency. The data-in dependency is not declared but
-    /// recorded: see [`Store::advance_derived`].
+    /// declared dependency edge, the only definition-level invalidation
+    /// there is. Data freshness is snapshot staleness, marked at read.
     async fn invalidate(&self, dataset: &str, aspect: &str, subject: &str) -> Result<()> {
         let dependents = self.functions_accepting(aspect).await?;
         if !dependents.is_empty() {
@@ -552,48 +537,62 @@ impl Store {
         Ok(())
     }
 
-    /// The served shape of a table, advanced (project lead ruling,
-    /// 2026-08-04): the store holds each table's emitted view SQL — plain
-    /// text, the inspectable record, diffable when an invalidation
-    /// surprises. When a refresh finds it changed — a typing decision, an
-    /// eligibility decision, any future derivation input — every cache
-    /// whose run recorded reading that table dies, once, store-wide. No
-    /// curated exemption: `infer_types` survives because it factually reads
-    /// the raw table, `decide_types` because it reads no table at all.
-    pub async fn advance_derived(
+    /// One import, recorded (project lead, 2026-08-04): rows the recipe
+    /// filtered away are the author's to judge, on the files — the engine
+    /// keeps the counts, readable through the `imports` relation.
+    pub async fn import_put(
         &self,
         dataset: &str,
         table: &str,
-        emitted: &str,
-    ) -> Result<bool> {
-        let current: Option<String> = sqlx::query_scalar(
-            "SELECT emitted FROM derived WHERE dataset = ? AND table_name = ?",
+        source_rows: i64,
+        landed_rows: i64,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO imports (dataset, table_name, source_rows, landed_rows) \
+             VALUES (?, ?, ?, ?)",
         )
         .bind(dataset)
         .bind(table)
-        .fetch_optional(&self.pool)
+        .bind(source_rows)
+        .bind(landed_rows)
+        .execute(&self.pool)
         .await?;
-        if current.as_deref() == Some(emitted) {
-            return Ok(false);
+        Ok(())
+    }
+
+    /// Glosses at or under a table — what `DROP TABLE` refuses on.
+    pub async fn glosses_under(&self, dataset: &str, table: &str) -> Result<i64> {
+        let (pred, binds) = Scope::Subject(table.to_string()).predicate("subject");
+        let sql = format!("SELECT count(*) AS n FROM glossary WHERE dataset = ? AND {pred}");
+        let mut q = sqlx::query(&sql).bind(dataset);
+        for b in &binds {
+            q = q.bind(b);
         }
-        sqlx::query(
-            "INSERT INTO derived (dataset, table_name, emitted) VALUES (?, ?, ?) \
-             ON CONFLICT (dataset, table_name) DO UPDATE SET emitted = excluded.emitted",
-        )
-        .bind(dataset)
-        .bind(table)
-        .bind(emitted)
-        .execute(&self.pool)
-        .await?;
-        sqlx::query(
-            "DELETE FROM cache WHERE dataset = ? AND EXISTS \
-             (SELECT 1 FROM json_each(cache.reads) WHERE json_each.value = ?)",
-        )
-        .bind(dataset)
-        .bind(table)
-        .execute(&self.pool)
-        .await?;
-        Ok(true)
+        Ok(q.fetch_one(&self.pool).await?.get("n"))
+    }
+
+    /// The store side of `DROP TABLE` (PoC: caller has already refused on
+    /// data and glosses): the recipe row, the cached evidence under the
+    /// table, and the import records go together.
+    pub async fn drop_table_records(&self, dataset: &str, table: &str) -> Result<()> {
+        sqlx::query("DELETE FROM recipes WHERE dataset = ? AND table_name = ?")
+            .bind(dataset)
+            .bind(table)
+            .execute(&self.pool)
+            .await?;
+        let (pred, binds) = Scope::Subject(table.to_string()).predicate("subject");
+        let sql = format!("DELETE FROM cache WHERE dataset = ? AND {pred}");
+        let mut q = sqlx::query(&sql).bind(dataset);
+        for b in &binds {
+            q = q.bind(b);
+        }
+        q.execute(&self.pool).await?;
+        sqlx::query("DELETE FROM imports WHERE dataset = ? AND table_name = ?")
+            .bind(dataset)
+            .bind(table)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
     }
 
     async fn functions_accepting(&self, aspect: &str) -> Result<Vec<String>> {
@@ -792,47 +791,6 @@ impl Store {
             .collect())
     }
 
-    /// When the typing decision for each column subject last changed: the
-    /// newest `type` gloss or type-speaker cache write, per subject. The
-    /// staleness comparison for every other aspect's slots.
-    async fn type_decision_times(
-        &self,
-        dataset: &str,
-    ) -> Result<std::collections::HashMap<String, String>> {
-        let mut times: std::collections::HashMap<String, String> = sqlx::query(
-            "SELECT subject, MAX(written_at) AS t FROM glossary \
-             WHERE dataset = ? AND aspect = ? GROUP BY subject",
-        )
-        .bind(dataset)
-        .bind(TYPE_ASPECT)
-        .fetch_all(&self.pool)
-        .await?
-        .into_iter()
-        .map(|r| (r.get("subject"), r.get("t")))
-        .collect();
-        for w in self.witnesses_on(TYPE_ASPECT).await? {
-            for f in &w.function_speakers {
-                let rows = sqlx::query(
-                    "SELECT subject, MAX(computed_at) AS t FROM cache \
-                     WHERE dataset = ? AND function = ? GROUP BY subject",
-                )
-                .bind(dataset)
-                .bind(f.as_str())
-                .fetch_all(&self.pool)
-                .await?;
-                for r in rows {
-                    let subject: String = r.get("subject");
-                    let t: String = r.get("t");
-                    let entry = times.entry(subject).or_default();
-                    if t > *entry {
-                        *entry = t;
-                    }
-                }
-            }
-        }
-        Ok(times)
-    }
-
     /// The collapsed read (SPEC.md §5.3): value by precedence (human over
     /// agent over function), withheld only when the detector's score exceeds
     /// the witness threshold; `state` makes every gap visible — see
@@ -885,7 +843,6 @@ impl Store {
                 .and_then(|w| w.threshold)
         };
 
-        let decisions = self.type_decision_times(dataset).await?;
         let mut rows = Vec::new();
         for ((subject, aspect), mut group) in grouped {
             let verdict = verdicts.get(&(subject.clone(), aspect.clone()));
@@ -917,19 +874,13 @@ impl Store {
                     .and_then(|t| ctx.snapshots.get(t))
                     .is_some_and(|current| *current != seen)
             });
-            let decision_moved = aspect != TYPE_ASPECT
-                && subject.contains('.')
-                && !subject.contains(' ')
-                && decisions
-                    .get(&subject)
-                    .is_some_and(|t| *t > serving.written_at);
             rows.push(CollapsedRow {
                 subject,
                 aspect,
                 value: Some(serving.body.clone()),
                 band,
                 score,
-                state: if snapshot_moved || decision_moved {
+                state: if snapshot_moved {
                     "stale".into()
                 } else {
                     "current".into()
@@ -1037,9 +988,6 @@ impl Store {
         row.map(cache_row).transpose()
     }
 
-    /// `reads` is the set of tables the run actually queried through its
-    /// door — recorded, not declared, so [`Store::advance_derived`] kills
-    /// exactly the results the change can have falsified.
     pub async fn cache_put(
         &self,
         dataset: &str,
@@ -1047,18 +995,16 @@ impl Store {
         function: &str,
         body: &str,
         snapshot_id: Option<i64>,
-        reads: &[String],
     ) -> Result<()> {
         sqlx::query(
-            "INSERT INTO cache (dataset, subject, function, body, snapshot_id, reads) \
-             VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO cache (dataset, subject, function, body, snapshot_id) \
+             VALUES (?, ?, ?, ?, ?)",
         )
         .bind(dataset)
         .bind(subject)
         .bind(function)
         .bind(body)
         .bind(snapshot_id)
-        .bind(serde_json::to_string(reads).map_err(|e| Error::Corrupt(e.to_string()))?)
         .execute(&self.pool)
         .await?;
         // A measurement's new value invalidates like a gloss would: through
@@ -1123,6 +1069,13 @@ impl Store {
                 "SELECT dataset, subject, function, body, computed_at, \
                         CAST(snapshot_id AS TEXT) AS snapshot_id \
                  FROM cache ORDER BY id"
+            }
+            "imports" => {
+                "SELECT dataset, table_name, CAST(source_rows AS TEXT) AS source_rows, \
+                        CAST(landed_rows AS TEXT) AS landed_rows, \
+                        CAST(source_rows - landed_rows AS TEXT) AS dropped_rows_count, \
+                        imported_at \
+                 FROM imports ORDER BY id"
             }
             other => return Err(Error::ForwardRejected(other.into())),
         };

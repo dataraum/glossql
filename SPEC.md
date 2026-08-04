@@ -27,7 +27,7 @@ Ground rules:
   mechanics are implementation. The grammar fixes what supersedes what: the
   key is (subject, aspect, actor kind).
 - **Functions are scripts.** The engine's analytical machinery — profiling,
-  typing, detection, adjudication — lives in registered rhai scripts with
+  quality checks, detection, adjudication — lives in registered rhai scripts with
   JSON contracts; a function is either a measurement or a detector, never a
   metric. Metrics are concepts: QUERY aspects, run as their SQL (§5.1).
   Analytical logic does not live in the grammar.
@@ -75,28 +75,26 @@ DECLARE RECIPE segments ON fin FROM crm AS $$SELECT id, segment FROM customer_se
 
 The recipe SQL runs **at the source**: a relational source executes it in
 its own dialect; at a file source the server runs it, with `read_parquet` /
-`read_csv` / `read_json` resolving paths under the source's location. The
-result lands as table `segments_raw` in dataset `fin` — csv and json land
-raw all-VARCHAR, parquet keeps its file types. Statement identity is
-content: an unchanged re-declaration is a no-op; a changed one rebuilds the
-table, but is refused while glosses exist under it — a different SQL is a
-different table, declare it under another name.
+`read_csv` / `read_json` resolving paths under the source's location and
+`try_to_date` / `try_to_timestamp` registered. **The recipe carries the
+casts** (ruled 2026-08-04): typing is authored, not decided — the author
+probes the source first (the same SQL surface, landing nothing; a probe
+path's first segment names the source), writes the casts and the column
+choices into the recipe, and the result lands as table `segments` — the
+typed table, snapshotted by Iceberg on every import. The default recipe is
+`SELECT *`. The engine keeps one number per import — `dropped_rows_count`,
+source rows minus landed rows, readable through the `imports` relation;
+which rows were dropped is the author's question, answered at the source.
 
-The bare name is **the typed view, derived by the engine**: `segments` is
-an identity view over `segments_raw` until typing decisions exist, and the
-typed projection after — every decided column wrapped in `TRY_CAST`, a
-failed cast a NULL cell, never a lost row. `segments_quarantined` is the
-complement in raw shape: the rows where any decided column fails on a
-non-NULL value. A typing decision is the collapsed value of the `type`
-aspect per column (§5.3): the inference function's pick by default, agent
-and human glosses superseding it. An eligibility decision is the collapsed
-`eligible` aspect the same way: a column whose current value is false
-leaves the typed projection and its quarantine checks — `segments_raw` and
-the glossary keep it, and a superseding gloss restores it. Nothing
-regenerates on write — the pair follows the current decisions at the next
-read. The `_raw` and
-`_quarantined` suffixes belong to the engine; subjects stay logical
-(`segments.amount`), and their snapshots ride the raw table.
+Statement identity is content: the recipe SQL and the schema it produces.
+An unchanged re-declaration is a no-op; a changed one is refused outright —
+a different SQL is a different table, declare it under another name.
+`DROP TABLE` removes a table whole (the lake table, the recipe, the cached
+evidence, the import records) and refuses while the table holds data or
+glosses — replacement is postponed until a deletion cascade exists.
+Substrate SQL runs behind an allowlist: queries pass, `DROP TABLE` routes
+to the rules above, and everything else that would alter schema or data
+directly is refused. Tables come from recipes.
 
 ```sql
 DECLARE DATASET fin SET (purpose: 'working-capital analysis over ERP and CRM exports');
@@ -107,15 +105,10 @@ USE fin;
 against the USE'd dataset; the full `dataset.table.column` prefix is always
 allowed.
 
-Derived tables are plain SQL — enrichment, cleaning, dedup are dataset→dataset:
-
-```sql
-CREATE VIEW orders_enriched AS
-  SELECT o.order_id, o.amount, c.region
-  FROM orders o JOIN customers c ON o.customer_id = c.id;
-```
-
-Views are glossable like tables.
+Derived views (enrichment, cleaning, dedup as dataset→dataset SQL) are
+closed with the rest of schema-altering SQL for now; they return as a
+governed surface once the deletion cascade exists. When they do, views are
+glossable like tables.
 
 ## 4. Subjects and relationships
 
@@ -279,9 +272,8 @@ the read never hides one:
 - `contested` — entropy above the threshold; value withheld, band and
   score say how badly.
 - `current` — served, basis unchanged.
-- `stale` — served **and marked**: the table's snapshot moved on, or the
-  column's `type` decision postdates the write. Staleness never suppresses
-  judgment; it shows beside it.
+- `stale` — served **and marked**: the table's snapshot moved on since the
+  write. Staleness never suppresses judgment; it shows beside it.
 
 ```sql
 SELECT * FROM GLOSSARY(orders.amount, all => true);
@@ -311,8 +303,9 @@ Scripts registered as functions, with name and contract; static by nature —
 ported by copying the script. A function is either a **measurement** — it
 fills a MEASUREMENT aspect through that aspect's witness (§7) — or a
 **detector** (§7.1). The library is the engine's analytical machinery
-(profiling, typing, detection) moved into the server as rhai scripts;
-metrics are not functions (§5.1).
+(profiling, quality checks, detection) moved into the server as rhai
+scripts; metrics are not functions (§5.1). Typing is not in it — the
+recipe carries the casts (§3).
 
 ```sql
 DECLARE FUNCTION profile_min_max FOR fin FROM 'functions/profile_min_max.rhai'
@@ -321,12 +314,12 @@ DECLARE FUNCTION profile_min_max FOR fin FROM 'functions/profile_min_max.rhai'
     "properties": {"min": {}, "max": {}}
   }$$;
 
-DECLARE FUNCTION infer_types FOR GLOBAL FROM 'functions/infer_types.rhai'
-  ACCEPTS (type_patterns, null_values)
+DECLARE FUNCTION outliers FOR GLOBAL FROM 'functions/outliers.rhai'
+  ACCEPTS (column_profile)
   RETURNS $${
     "type": "object",
-    "required": ["types"],
-    "properties": {"types": {"type": "object"}}
+    "required": ["applicable"],
+    "properties": {"applicable": {"type": "boolean"}}
   }$$;
 ```
 
@@ -351,7 +344,7 @@ Extraction:
 
 ```sql
 SELECT profile_min_max() FROM orders;
-SELECT infer_types() FROM orders;
+SELECT outliers() FROM orders.amount;
 ```
 
 The first run computes and caches; later selects read the cache. The cache
@@ -369,15 +362,13 @@ DELETE FROM cache WHERE function = 'dso';
 value for an aspect — glossed, or a bound measurement's fresh output —
 deletes the cached results of every function that `ACCEPTS` it, at and
 under the subject: the declaration that names a script's inputs also names
-what kills its cache. Data dependencies are recorded, not declared: each
-cached run remembers which tables it actually queried, and the store holds
-each table's emitted view SQL; when a refresh finds the served shape
-changed — a typing decision, an eligibility decision, any input to the
-derivation — every cache that read that table dies, once. No curated
-exemption: inference survives a re-typing because it reads the raw table,
-the deciders because they read no table at all. Nothing recomputes at
-write time, and no machinery ever deletes a gloss: stale judgment is
-served and marked (§5.3), superseded only by whoever owns the slot.
+what kills its cache, and it is the only definition-level invalidation
+there is. Data freshness is snapshot staleness, marked at read (§5.3) — a
+table's definition never changes underneath its evidence, because a
+changed recipe is refused and `DROP TABLE` takes the evidence with it
+(§3). Nothing recomputes at write time, and no machinery ever deletes a
+gloss: stale judgment is served and marked, superseded only by whoever
+owns the slot.
 
 Whether multi-function
 extraction fans out or runs one call after another is the caller's choice —

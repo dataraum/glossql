@@ -2,15 +2,20 @@
 //!
 //! A recipe at a file source runs on the server: the recipe SQL executes in
 //! a scratch DataFusion context where `read_parquet` / `read_csv` /
-//! `read_json` resolve under the source's `location` root. A recipe at a
+//! `read_json` resolve under the source's `location` root, and
+//! `try_to_date`/`try_to_timestamp` are registered — the recipe carries the
+//! casts (project lead, 2026-08-04). A probe is the same SQL surface
+//! without a landing: paths' first segment names the source. A recipe at a
 //! relational source runs its SQL at the source — that executor (ADBC) is
 //! planned, not built; declaring such a source stores it, running its
 //! recipe errors.
 
+pub mod casts;
 mod normalize;
 
+use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
@@ -91,22 +96,30 @@ impl SourceSpec {
     }
 }
 
+/// What a recipe run landed, plus what it read: `source_rows` is the row
+/// count of every source relation the recipe scanned, so the caller can
+/// record `source_rows - landed` as the dropped-row count (project lead,
+/// 2026-08-04 — which rows were dropped is the author's question, answered
+/// on the files).
+#[derive(Debug)]
+pub struct Landed {
+    pub schema: SchemaRef,
+    pub batches: Vec<RecordBatch>,
+    pub source_rows: u64,
+}
+
 /// Run a recipe against its source and return the batches that will land as
 /// the table — csv/json folded to the raw all-VARCHAR shape, parquet folded
 /// to Iceberg-v2-compatible types.
-pub async fn run_recipe(spec: &SourceSpec, sql: &str) -> Result<(SchemaRef, Vec<RecordBatch>)> {
+pub async fn run_recipe(spec: &SourceSpec, sql: &str) -> Result<Landed> {
     if spec.kind == SourceKind::RelationalDb {
         return Err(Error::RelationalSource(spec.name.clone()));
     }
-    let root = spec
-        .location
-        .canonicalize()
-        .map_err(|e| Error::BadSource {
-            name: spec.name.clone(),
-            detail: format!("location {}: {e}", spec.location.display()),
-        })?;
+    let root = canonical_root(spec)?;
 
     let ctx = SessionContext::new();
+    casts::register_try_functions(&ctx);
+    let seen: Scanned = Arc::default();
     for (fn_name, kind) in [
         ("read_parquet", SourceKind::Parquet),
         ("read_csv", SourceKind::Csv),
@@ -115,8 +128,9 @@ pub async fn run_recipe(spec: &SourceSpec, sql: &str) -> Result<(SchemaRef, Vec<
         ctx.register_udtf(
             fn_name,
             Arc::new(ReadFiles {
-                root: root.clone(),
+                resolve: Resolve::Rooted(root.clone()),
                 kind,
+                seen: Some(Arc::clone(&seen)),
             }),
         );
     }
@@ -124,20 +138,86 @@ pub async fn run_recipe(spec: &SourceSpec, sql: &str) -> Result<(SchemaRef, Vec<
     let df = ctx.sql(sql).await?;
     let schema: SchemaRef = Arc::new(df.schema().as_arrow().clone());
     let batches = df.collect().await?;
-    match spec.kind {
-        SourceKind::Csv | SourceKind::Json => normalize::force_utf8(schema, batches),
-        _ => normalize::compat(schema, batches),
+
+    let mut source_rows = 0u64;
+    let scanned = std::mem::take(&mut *seen.lock().expect("seen"));
+    for provider in scanned {
+        source_rows += ctx.read_table(provider)?.count().await? as u64;
     }
+
+    let (schema, batches) = match spec.kind {
+        SourceKind::Csv | SourceKind::Json => normalize::force_utf8(schema, batches)?,
+        _ => normalize::compat(schema, batches)?,
+    };
+    Ok(Landed {
+        schema,
+        batches,
+        source_rows,
+    })
+}
+
+/// Run a probe: the recipe SQL surface, landing nothing. Paths' first
+/// segment names the source (`read_parquet('erp_export/orders/*.parquet')`),
+/// so one probe can look at any declared file source.
+pub async fn run_probe(
+    sources: &[SourceSpec],
+    sql: &str,
+) -> Result<Vec<RecordBatch>> {
+    let mut roots = HashMap::new();
+    for spec in sources {
+        if spec.kind == SourceKind::RelationalDb {
+            continue;
+        }
+        roots.insert(spec.name.clone(), canonical_root(spec)?);
+    }
+    let ctx = SessionContext::new();
+    casts::register_try_functions(&ctx);
+    for (fn_name, kind) in [
+        ("read_parquet", SourceKind::Parquet),
+        ("read_csv", SourceKind::Csv),
+        ("read_json", SourceKind::Json),
+    ] {
+        ctx.register_udtf(
+            fn_name,
+            Arc::new(ReadFiles {
+                resolve: Resolve::BySource(roots.clone()),
+                kind,
+                seen: None,
+            }),
+        );
+    }
+    Ok(ctx.sql(sql).await?.collect().await?)
+}
+
+fn canonical_root(spec: &SourceSpec) -> Result<PathBuf> {
+    spec.location.canonicalize().map_err(|e| Error::BadSource {
+        name: spec.name.clone(),
+        detail: format!("location {}: {e}", spec.location.display()),
+    })
+}
+
+/// Providers a recipe run scanned, recorded so source rows can be counted.
+type Scanned = Arc<Mutex<Vec<Arc<dyn TableProvider>>>>;
+
+/// How a read path finds its root: a recipe is bound to one source
+/// (`Rooted`), a probe names the source as the path's first segment
+/// (`BySource`).
+#[derive(Debug)]
+enum Resolve {
+    Rooted(PathBuf),
+    BySource(HashMap<String, PathBuf>),
 }
 
 /// `read_parquet('…') | read_csv('…') | read_json('…')` — one file format,
 /// rooted at the source's location. CSV reads with an all-Utf8 schema so
 /// raw text survives byte-exact (no inferred typing to undo); parquet and
-/// json read as the files are typed.
+/// json read as the files are typed. When `seen` is set, every provider
+/// built is recorded so the caller can count source rows.
 #[derive(Debug)]
 struct ReadFiles {
-    root: PathBuf,
+    resolve: Resolve,
     kind: SourceKind,
+    seen: Option<Scanned>,
 }
 
 impl TableFunctionImpl for ReadFiles {
@@ -162,7 +242,26 @@ impl TableFunctionImpl for ReadFiles {
                 "`{rel}` must stay under the source's location — relative, no `..`"
             )));
         }
-        let target = self.root.join(rel_path);
+        let (root, rel_path) = match &self.resolve {
+            Resolve::Rooted(root) => (root.clone(), rel_path.to_path_buf()),
+            Resolve::BySource(roots) => {
+                let mut components = rel_path.components();
+                let Some(Component::Normal(source)) = components.next() else {
+                    return Err(plan_err(format!(
+                        "`{rel}` — a probe path starts with the source's name"
+                    )));
+                };
+                let source = source.to_string_lossy();
+                let Some(root) = roots.get(source.as_ref()) else {
+                    return Err(plan_err(format!(
+                        "`{source}` is not a declared file source"
+                    )));
+                };
+                (root.clone(), components.as_path().to_path_buf())
+            }
+        };
+        let target = root.join(&rel_path);
+        let rel = rel_path.display().to_string();
 
         let format: Arc<dyn FileFormat> = match self.kind {
             SourceKind::Parquet => Arc::new(ParquetFormat::default()),
@@ -197,6 +296,10 @@ impl TableFunctionImpl for ReadFiles {
         let config = ListingTableConfig::new(url)
             .with_listing_options(options)
             .with_schema(schema);
-        Ok(Arc::new(ListingTable::try_new(config)?))
+        let provider: Arc<dyn TableProvider> = Arc::new(ListingTable::try_new(config)?);
+        if let Some(seen) = &self.seen {
+            seen.lock().expect("seen").push(Arc::clone(&provider));
+        }
+        Ok(provider)
     }
 }

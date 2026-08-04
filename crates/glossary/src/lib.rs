@@ -14,7 +14,7 @@ mod store;
 mod types;
 
 pub use schemas::{GROUNDING_SCHEMA, grounding_schema};
-pub use store::{ELIGIBLE_ASPECT, RAW_SUFFIX, ReadContext, Scope, Store, TYPE_ASPECT};
+pub use store::{ReadContext, Scope, Store};
 pub use types::{
     Actor, ActorKind, AttestRow, CacheRow, CollapsedRow, Error, FunctionRow, RawRow,
     RecipeAdmission, RecipeRow, Result, WitnessRow,

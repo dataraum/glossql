@@ -21,16 +21,61 @@ phases in `pipeline/phases/`. Ordered steps and what each produces:
 
 ## Transcription
 
-The three actor kinds of the pipeline map onto the three ways of speaking:
-deterministic phases are **functions** (MEASUREMENT aspects), LLM phases are
-**agent glosses**, teaches and parks are **human glosses**.
+The actor kinds of the pipeline map onto the ways of speaking:
+deterministic phases are **functions** (MEASUREMENT aspects), LLM phases
+are **agent glosses**, teaches and parks are **human glosses**. The typing
+phase maps to none of them — it becomes **authorship**, the
+probe-and-recipe conversation below.
 
-Human registers the source; recipes land the tables:
+Human registers the source; the agent probes it through the same statement
+door — recipe-shaped SQL, executed at the source, landing nothing (v0.3's
+"probe query" step, returned to its place):
 
 ```glossql
 USE fin;
 DECLARE SOURCE erp_export SET (type: parquet, location: 'lake/erp');
-DECLARE RECIPE orders ON fin FROM erp_export AS $$SELECT * FROM read_parquet('orders/*.parquet')$$;
+
+SELECT * FROM read_parquet('erp_export/orders/*.parquet') LIMIT 50;
+SELECT count("order_date") AS filled,
+       count(try_to_date("order_date", '%d.%m.%Y')) AS parsed
+FROM read_parquet('erp_export/orders/*.parquet');
+```
+
+Typing is authored, not decided (ruled 2026-08-04): the recipe carries the
+casts. The agent writes it from the probes and the taught patterns
+(fixture 13 — still FACT glosses, now read by the author instead of
+consumed by machinery); the human approves. The default is `SELECT *`;
+the landed table is the typed table, snapshotted by Iceberg on every
+import:
+
+```glossql
+DECLARE RECIPE orders ON fin FROM erp_export AS $$
+  SELECT order_id,
+         try_cast(amount AS DECIMAL(12,2)) AS amount,
+         try_to_date(order_date, '%d.%m.%Y') AS order_date
+  FROM read_parquet('orders/*.parquet')$$;
+
+SELECT sum(amount) FROM orders;
+```
+
+The table is its recipe's result — identity is content, the hash of the
+SQL and the schema it produces (the v0.3 engine already keys recipes this
+way). A data update re-runs the same recipe and appends a snapshot; it
+must reproduce the schema or it errors. Correcting a wrong recipe is
+removal first:
+
+```glossql
+DROP TABLE orders;
+```
+
+— refused while the table holds data (PoC rule); a wrong recipe gets a
+new name instead, because a different SQL is a different table. The
+deletion cascade is future work. Rows the recipe filtered away are the
+author's to judge, on the files, outside the box; the engine keeps one
+number:
+
+```glossql
+SELECT dropped_rows_count FROM imports WHERE table_name = 'orders';
 ```
 
 Framing the vertical is replaying the vertical folder's declarations —
@@ -38,7 +83,11 @@ aspects, check functions, witnesses (fixtures 01, 02, 04); no construct.
 
 The deterministic profile plane — declared once (vertical/global), fanned
 out per column (extraction grain is the subject; the fan-out is the
-caller's loop, the grammar carries no ordering):
+caller's loop, the grammar carries no ordering). The quality plane chains
+on it through `ACCEPTS`: the outlier fences reuse the profile's quartiles
+and MAD, and a re-profile kills the outlier cache. An all-null column
+needs no machinery — the author leaves it out of the recipe, or keeps it,
+deliberately:
 
 ```glossql
 DECLARE ASPECT column_profile WITH $${
@@ -52,50 +101,6 @@ DECLARE FUNCTION profile FOR GLOBAL FROM 'functions/profile.rhai'
                    "top_values": {"type": "array"}}}$$;
 DECLARE WITNESS column_profile_w ON column_profile BY (FUNCTION profile);
 
-DECLARE ASPECT type_candidates WITH $${
-  "type": "object",
-  "properties": {"candidates": {"type": "array",
-    "items": {"type": "object",
-      "properties": {"type": {"type": "string"}, "confidence": {"type": "number"}}}}}
-}$$ AS MEASUREMENT;
-DECLARE FUNCTION infer_types FOR GLOBAL FROM 'functions/infer_types.rhai'
-  ACCEPTS (type_patterns, null_values)
-  RETURNS $${"type": "object", "properties": {"candidates": {"type": "array"}}}$$;
-DECLARE WITNESS type_candidates_w ON type_candidates BY (FUNCTION infer_types);
-
-SELECT profile(), infer_types() FROM fin.orders.amount;
-```
-
-The typing decision is a witness slot like any other (ruled 2026-08-04):
-`decide_types`' pick fills it by default — typing needs no agent in the
-loop — and the engine derives the typed view from the current decisions
-under the bare table name, `orders_quarantined` beside it. The recipe's
-table is `orders_raw`; nothing is hand-written:
-
-```glossql
-DECLARE ASPECT type WITH $${
-  "type": "object", "required": ["value"],
-  "properties": {"value": {"type": "string"}, "expr": {"type": "string"}}
-}$$ AS FACT;
-DECLARE FUNCTION decide_types FOR GLOBAL FROM 'functions/decide_types.rhai'
-  ACCEPTS (type_candidates, type_patterns)
-  RETURNS $${"type": "object", "required": ["value"],
-    "properties": {"value": {"type": "string"}, "expr": {"type": "string"}}}$$;
-DECLARE WITNESS type_w ON type BY (FUNCTION decide_types, AGENT, HUMAN)
-  DETECTOR slot_entropy;
-
-SELECT decide_types() FROM fin.orders.amount;
-SELECT sum(amount) FROM orders;
-```
-
-The quality plane chains on the profile — the outlier fences reuse its
-quartiles and MAD, the eligibility pick reads its null ratio, and both
-caches die with a re-profile through the `ACCEPTS` rule. Eligibility is a
-witness slot like typing (ruled 2026-08-04): a `false` pick drops the
-column from the derived view, `orders_raw` and the glossary keep it, and
-a superseding gloss brings it back:
-
-```glossql
 DECLARE ASPECT outlier_profile WITH $${
   "type": "object", "required": ["applicable"],
   "properties": {"applicable": {"type": "boolean"},
@@ -106,28 +111,16 @@ DECLARE FUNCTION outliers FOR GLOBAL FROM 'functions/outliers.rhai'
   RETURNS $${"type": "object", "required": ["applicable"]}$$;
 DECLARE WITNESS outlier_profile_w ON outlier_profile BY (FUNCTION outliers);
 
-DECLARE ASPECT eligible WITH $${
-  "type": "object", "required": ["value"],
-  "properties": {"value": {"type": "boolean"}, "reason": {"type": "string"}}
-}$$ AS FACT;
-DECLARE FUNCTION decide_eligibility FOR GLOBAL FROM 'functions/decide_eligibility.rhai'
-  ACCEPTS (column_profile)
-  RETURNS $${"type": "object", "required": ["value"],
-    "properties": {"value": {"type": "boolean"}, "reason": {"type": "string"}}}$$;
-DECLARE WITNESS eligible_w ON eligible BY (FUNCTION decide_eligibility, AGENT, HUMAN)
-  DETECTOR slot_entropy;
-
-SELECT outliers(), decide_eligibility() FROM fin.orders.amount;
+SELECT profile(), outliers() FROM fin.orders.amount;
 ```
 
 Semantic annotation stays agent glosses (an agent connection, reading the
-measurements first); a typing correction is the same gesture on the `type`
-aspect — the override case, superseding the function's pick:
+measurements first). A typing correction is a recipe correction — the
+same SQL hands that wrote it — never a gloss:
 
 ```glossql
 SELECT * FROM GLOSSARY(fin.orders.amount);
 
-GLOSS type ON orders.amount AS $${"value": "DECIMAL(12,2)"}$$;
 GLOSS meaning ON orders.amount AS $${"value": "gross invoiced amount per order line"}$$;
 GLOSS behavior ON orders.amount AS $${"value": "flow"}$$;
 GLOSS unit ON orders.amount AS $${"value": "EUR", "source_column": "currency_code"}$$;
@@ -139,7 +132,7 @@ sweeping the attest relation and re-glossing where it may:
 
 ```glossql
 SELECT * FROM ATTEST(fin::behavior);
-SELECT subject, band, score FROM ATTEST(fin::type_agreement) WHERE band = 'red';
+SELECT subject, band, score FROM ATTEST(fin::unit) WHERE band = 'red';
 ```
 
 A human closes what the agent could not — the same statements on a human
@@ -158,22 +151,41 @@ that the grammar knows about.
   orchestration — app concern. The grammar carries no ordering surface at
   all (`SEQUENTIAL | PARALLEL` was dropped 2026-08-03): the caller either
   sends one extraction with many calls or several statements in sequence.
-- **The typed table is derived, not authored** (respelled 2026-08-04, with
-  the M4 build-out): the original transcription hand-wrote `CREATE VIEW
-  orders_typed` with CASTs — a strict CAST view half-works per projection
-  and hides quarantine entirely. Now the recipe lands `orders_raw`, the
-  bare name serves the engine-derived typed view (identity until decisions
-  exist), and `orders_quarantined` is the complement — v0.3's actual
-  semantics (cell-NULL typed, full row count, audit-copy quarantine),
-  regenerated at read from the `type` decisions.
-- **Eligibility is a gloss, and the gate is the projection** (ruled
-  2026-08-04): v0.3's phase `ALTER`-dropped the column from the lake table
-  and deleted its metadata rows — irreversible, with no override surface —
-  while its `WARN` tier and audit table were read by nobody. Here the pick
-  is a witness slot like typing: `false` drops the column from the derived
-  view, raw and the glossary keep it, and supersession is the override.
-  The rule set that was YAML behind an `eval()` is the script itself; the
-  one rule that ever fired on real data (all-null) is the one that ports.
+- **Typing is authored in the recipe** (ruled 2026-08-04 — the third
+  respell of this finding, and the arc is the record): the original
+  transcription hand-wrote `CREATE VIEW orders_typed` with strict CASTs;
+  the M4 build derived the typed view from `type` glosses, with
+  `orders_raw` and `orders_quarantined` beside it. Both put typing in
+  machinery. The ruling puts it in authorship: the recipe carries the
+  casts, written by the agent from probes and patterns, approved by the
+  human, and the landed table is the typed table — served types are
+  catalog fact, not judgment. `type`, `type_candidates`, and `eligible`
+  leave the engine's vocabulary; the derived pair, the raw twin, and
+  reactive view invalidation leave the engine.
+- **Eligibility dissolved into authorship** (ruled 2026-08-04, hours after
+  the projection gate landed): column selection is the recipe's SELECT
+  list. The v0.3 findings stand — the phase's `ALTER`-drop was
+  irreversible with no override, and its `WARN` tier was read by nobody —
+  but the corrected answer is a line the author writes, not a gate the
+  engine owns.
+- **Table lifecycle is content identity plus coarse rules** (ruled
+  2026-08-04, after holding the design against dbt and dlt): identity is
+  the recipe-and-schema hash; a data update must reproduce the schema or
+  error (the frozen-contract rule); `DROP TABLE` refuses while data
+  exists (PoC), so replacement means a new name; the deletion cascade is
+  future work — tricky through relations and actor-generated SQL. No
+  reactive invalidation of definitions anywhere: declared `ACCEPTS` edges
+  and snapshot staleness are the only freshness mechanisms.
+- **Filtered rows are the author's judgment** (ruled 2026-08-04): the
+  engine keeps one number, `dropped_rows_count` — source rows minus
+  landed rows — transcribed here as an `imports` relation beside `cache`
+  (spelling open: relation, or a table-grain glossary row). Which rows
+  were dropped is the agent's question, answered on the files.
+- **Probe queries need a source binding** (open fork): a probe is
+  recipe-shaped SQL executed at the source without landing, transcribed
+  here with the source name as the path's first segment
+  (`read_parquet('erp_export/orders/*.parquet')`). The alternative is a
+  scoped form naming the source outside the path. Undecided.
 - **Benford's law dropped** (ruled 2026-08-04): the only domain-leaning
   measurement in the deterministic plane — and the only numpy/scipy
   dependency in it — consumed by nothing as a signal. It never ports;

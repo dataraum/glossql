@@ -53,12 +53,14 @@ async fn parquet_recipe_keeps_types_and_folds_ns_to_us() {
     let dir = tempfile::tempdir().unwrap();
     write_parquet_fixture(dir.path()).await;
 
-    let (schema, batches) = run_recipe(
+    let landed = run_recipe(
         &spec("parquet", dir.path()),
         "SELECT * FROM read_parquet('orders/*.parquet')",
     )
     .await
     .unwrap();
+    let (schema, batches) = (landed.schema, landed.batches);
+    assert_eq!(landed.source_rows, 2, "the recipe scanned two source rows");
 
     assert_eq!(schema.field(0).data_type(), &DataType::Int64);
     assert_eq!(
@@ -79,12 +81,13 @@ async fn csv_recipe_lands_raw_all_varchar_byte_exact() {
     )
     .unwrap();
 
-    let (schema, batches) = run_recipe(
+    let landed = run_recipe(
         &spec("csv", dir.path()),
         "SELECT * FROM read_csv('accounts.csv')",
     )
     .await
     .unwrap();
+    let (schema, batches) = (landed.schema, landed.batches);
 
     assert!(
         schema.fields().iter().all(|f| f.data_type() == &DataType::Utf8),

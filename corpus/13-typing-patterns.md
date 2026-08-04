@@ -14,7 +14,7 @@ Fork tested: a dedicated `DECLARE PATTERN [regex] FOR [TYPE | NULL_VALUE]`
 head fails transcription — the real pattern shape needs eight more fields
 than a regex and a target, so the head grows back into a JSON body with a
 keyword in front, and the grammar by one head. The surviving fork: the
-configs are FACT glosses on the dataset. The typing function reads the
+configs are FACT glosses on the dataset. The recipe's author reads the
 latest body; the base set is written at vertical replay; a teach is a human
 re-gloss superseding whole-body (approved: the bodies are small JSON
 documents, edited and read as wholes). Base-vs-taught falls out of the
@@ -92,20 +92,18 @@ GLOSS null_values ON fin AS $${"values": [
   patterns spell `try_to_date` / `try_to_timestamp` — the engine's NULL-on-
   failure parsers, registered because the substrate's own `to_date` aborts
   a whole scan on one dirty value and ships no try_ variant. A pattern's
-  expr must never be able to error a scan: the typed view wraps every
-  decision in `TRY_CAST`, and the functions inside must be as gentle.
+  expr must never be able to error a scan: it lands inside a recipe, and
+  one dirty value must cost a NULL cell, never the import.
 - Whole-body supersession replaces the overlay's per-entry merge: the teach
   skill does read–amend–re-gloss. The human slot supersedes the base slot by
   the ordinary key; no merge machinery survives.
-- The typing function is the consumer, by name — its declaration closes
-  the loop, and is the corpus evidence for the `ACCEPTS (aspect, …)` form:
-
-```glossql
-DECLARE FUNCTION infer_types FOR GLOBAL FROM 'functions/infer_types.rhai'
-  ACCEPTS (type_patterns, null_values)
-  RETURNS $${"type": "object"}$$;
-```
-
-  The server hands the script those aspects' current values as its context
-  document; the aspects' own schemas govern the gloss and the script input
-  alike — one schema, referenced, never copied.
+- **The author is the consumer** (respelled 2026-08-04, with the
+  authored-typing ruling): the patterns' reader was the typing function
+  (`infer_types ACCEPTS (type_patterns, null_values)`); it is now the
+  agent authoring a recipe, reading the same glosses through
+  `GLOSSARY(fin::type_patterns)` before writing the casts — a pattern's
+  `standardization_expr` is exactly the SQL the author pastes. The corpus
+  evidence for the `ACCEPTS (aspect, …)` form lives in fixture 11:
+  `outliers ACCEPTS (column_profile)`, where the server hands the script
+  the aspect's current value as its context document — one schema,
+  referenced, never copied.

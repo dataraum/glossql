@@ -9,7 +9,9 @@ use datafusion::datasource::MemTable;
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion::sql::parser::Statement as DFStatement;
-use datafusion::sql::sqlparser::ast::{FromTable, Statement as SQLStatement, TableFactor};
+use datafusion::sql::sqlparser::ast::{
+    FromTable, ObjectType, Statement as SQLStatement, TableFactor,
+};
 use datafusion::sql::sqlparser::parser::ParserError;
 use serde_json::Value;
 
@@ -43,6 +45,12 @@ pub enum SessionError {
     Lake(#[from] glossql_catalog::Error),
     #[error(transparent)]
     Import(#[from] glossql_import::Error),
+    #[error(
+        "the substrate is not open for {0} — tables come from recipes; removal is DROP TABLE (SPEC.md §3)"
+    )]
+    SubstrateClosed(String),
+    #[error("DROP TABLE {table} refused: {reason} (replacement is postponed — declare under another name)")]
+    DropRefused { table: String, reason: String },
 }
 
 /// What one statement produced. `Rows` for anything that reads, `Affected`
@@ -117,62 +125,13 @@ impl SqlDoor for CtxDoor {
     }
 }
 
-/// A door that remembers which tables each query touched — the recorded
-/// read-set stored beside the cached result, so a change to a table's
-/// served shape kills exactly the results that read it (project lead
-/// ruling, 2026-08-04). Recorded, never declared: a run that branches
-/// invalidates by what it actually did.
-struct RecordingDoor {
-    inner: CtxDoor,
-    seen: std::sync::Mutex<std::collections::BTreeSet<String>>,
-}
-
-impl RecordingDoor {
-    fn new(inner: CtxDoor) -> Self {
-        RecordingDoor {
-            inner,
-            seen: std::sync::Mutex::new(std::collections::BTreeSet::new()),
-        }
-    }
-
-    /// The tables read so far, bare names — `fin.orders` and `orders` both
-    /// record as `orders`, the name the derivation advances under.
-    fn reads(&self) -> Vec<String> {
-        self.seen.lock().expect("reads").iter().cloned().collect()
-    }
-}
-
-impl SqlDoor for RecordingDoor {
-    fn sql(&self, query: &str) -> Result<Vec<RecordBatch>, String> {
-        // The same parser the context uses: a query it cannot parse cannot
-        // execute either, so an unrecorded read cannot produce a result.
-        if let Ok(statements) = datafusion::sql::parser::DFParser::parse_sql(query) {
-            let mut seen = self.seen.lock().expect("reads");
-            for statement in &statements {
-                if let Ok((relations, _ctes)) =
-                    datafusion::sql::resolve::resolve_table_references(statement, true)
-                {
-                    for r in relations {
-                        seen.insert(r.table().to_string());
-                    }
-                }
-            }
-        }
-        self.inner.sql(query)
-    }
-}
-
 pub struct Session {
     ctx: SessionContext,
     shared: Arc<Shared>,
     actor: Actor,
-    /// Bare-name mounts of the `USE`'d dataset's raw tables in the default
-    /// schema (`orders_raw`), so recipe tables and the derived views resolve
-    /// side by side.
+    /// Bare-name mounts of the `USE`'d dataset's tables in the default
+    /// schema, so `orders` and `fin.orders` resolve alike.
     aliased: RwLock<Vec<String>>,
-    /// The derived pair's last-emitted SQL per logical table — regeneration
-    /// happens at read, only when the emitted text changes.
-    derived: RwLock<std::collections::HashMap<String, String>>,
 }
 
 impl Session {
@@ -189,10 +148,11 @@ impl Session {
         });
         let config = SessionConfig::new()
             .set_str("datafusion.sql_parser.dialect", "postgres")
-            // Iceberg's arrow fields carry `PARQUET:field_id` metadata; a
-            // cast in a derived view drops it logically but not physically,
-            // and the aggregate schema check trips on the difference. The
-            // knob exists for exactly this (datafusion-common config.rs:532).
+            // Iceberg's arrow fields carry `PARQUET:field_id` metadata; any
+            // expression derived from them (a cast, a common subexpression)
+            // drops it logically but not physically, and the aggregate
+            // schema check trips on the difference. The knob exists for
+            // exactly this (datafusion-common config.rs:532).
             .set_bool(
                 "datafusion.execution.skip_physical_aggregate_schema_check",
                 true,
@@ -206,13 +166,12 @@ impl Session {
             .build();
         let mut ctx = SessionContext::new_with_state(state);
         datafusion_functions_json::register_all(&mut ctx)?;
-        crate::typing::register_try_functions(&ctx);
+        glossql_import::casts::register_try_functions(&ctx);
         Ok(Session {
             ctx,
             shared,
             actor,
             aliased: RwLock::new(Vec::new()),
-            derived: RwLock::new(Default::default()),
         })
     }
 
@@ -287,7 +246,7 @@ impl Session {
                     None => format!("DECLARE RECIPE {table} ON {dataset}"),
                     Some(lake)
                         if admission == RecipeAdmission::Unchanged
-                            && lake.table_exists(dataset, &raw_name(table)).await? =>
+                            && lake.table_exists(dataset, table).await? =>
                     {
                         format!("DECLARE RECIPE {table} ON {dataset} (unchanged)")
                     }
@@ -340,62 +299,12 @@ impl Session {
             for old in stale {
                 let _ = self.ctx.deregister_table(old.as_str());
             }
-            self.derived.write().expect("derived").clear();
             *self.shared.read_cache.write().expect("read cache") = None;
             for table in lake.table_names(name).await? {
                 self.alias(&table, &schema).await?;
             }
-            self.refresh_derived().await?;
         }
         Ok(Outcome::Done(format!("USE {name}")))
-    }
-
-    /// Derivation at read (project lead, 2026-08-04): the bare table name is
-    /// always a view — identity while nothing is decided, the typed
-    /// projection as decisions land — with `<t>_quarantined` beside it.
-    /// Nothing regenerates on write; before statements plan, the emitted SQL
-    /// is recompared and `CREATE OR REPLACE VIEW` runs only on change. The
-    /// authoritative comparison lives in the store (`advance_derived`), so
-    /// a served-shape change invalidates its readers exactly once however
-    /// many sessions notice it; the session-local map only decides whether
-    /// this context's views need re-creating.
-    async fn refresh_derived(&self) -> Result<(), SessionError> {
-        let (Some(lake), Some(dataset)) = (
-            self.lake(),
-            self.shared.dataset.read().expect("state lock").clone(),
-        ) else {
-            return Ok(());
-        };
-        for raw in lake.table_names(&dataset).await? {
-            let Some(logical) = raw.strip_suffix(glossql_glossary::RAW_SUFFIX) else {
-                continue;
-            };
-            let columns = lake.table_columns(&dataset, &raw).await?;
-            if columns.is_empty() {
-                continue;
-            }
-            let decisions =
-                crate::typing::decisions(&self.shared.store, &dataset, logical).await?;
-            let ineligible =
-                crate::typing::ineligible(&self.shared.store, &dataset, logical).await?;
-            let (typed, quarantine) =
-                crate::typing::pair_sql(logical, &raw, &columns, &decisions, &ineligible);
-            let emitted = format!("{typed}\n{quarantine}");
-            if self.derived.read().expect("derived").get(logical) == Some(&emitted) {
-                continue;
-            }
-            self.shared
-                .store
-                .advance_derived(&dataset, logical, &emitted)
-                .await?;
-            self.ctx.sql(&typed).await?.collect().await?;
-            self.ctx.sql(&quarantine).await?.collect().await?;
-            self.derived
-                .write()
-                .expect("derived")
-                .insert(logical.to_string(), emitted);
-        }
-        Ok(())
     }
 
     /// Land a recipe as its table: run it at the source, create the table
@@ -409,32 +318,21 @@ impl Session {
         sql: &str,
     ) -> Result<usize, SessionError> {
         const STAGED: &str = "__glossql_staged";
-        let raw = raw_name(table);
         let lake = self.lake().expect("caller holds a lake");
-        let settings = self.shared.store.source_settings(source).await?.ok_or(
-            SessionError::Store(glossql_glossary::Error::Unknown {
-                what: "source",
-                name: source.into(),
-            }),
-        )?;
-        let spec = SourceSpec::from_settings(source, &settings)?;
-        let (schema, batches) = glossql_import::run_recipe(&spec, sql).await?;
-        let rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        let spec = self.source_spec(source).await?;
+        let landed = glossql_import::run_recipe(&spec, sql).await?;
+        let rows: usize = landed.batches.iter().map(|b| b.num_rows()).sum();
 
         lake.ensure_namespace(dataset).await?;
         let mounted = self.mount_schema(dataset).await?;
-        if mounted.table_exist(&raw) {
-            // a replaced recipe rebuilds its table (admission already ruled)
-            mounted.deregister_table(&raw)?;
-        }
-        let empty = RecordBatch::new_empty(Arc::clone(&schema));
-        let shape = MemTable::try_new(Arc::clone(&schema), vec![vec![empty]])?;
-        mounted.register_table(raw.clone(), Arc::new(shape))?;
+        let empty = RecordBatch::new_empty(Arc::clone(&landed.schema));
+        let shape = MemTable::try_new(Arc::clone(&landed.schema), vec![vec![empty]])?;
+        mounted.register_table(table.to_string(), Arc::new(shape))?;
 
         if rows > 0 {
-            let staged = MemTable::try_new(schema, vec![batches])?;
+            let staged = MemTable::try_new(Arc::clone(&landed.schema), vec![landed.batches])?;
             self.ctx.register_table(STAGED, Arc::new(staged))?;
-            let insert = format!("INSERT INTO \"{dataset}\".\"{raw}\" SELECT * FROM {STAGED}");
+            let insert = format!("INSERT INTO \"{dataset}\".\"{table}\" SELECT * FROM {STAGED}");
             let inserted = async {
                 self.ctx.sql(&insert).await?.collect().await?;
                 Ok::<(), DataFusionError>(())
@@ -443,12 +341,25 @@ impl Session {
             let _ = self.ctx.deregister_table(STAGED);
             inserted?;
         }
+        self.shared
+            .store
+            .import_put(dataset, table, landed.source_rows as i64, rows as i64)
+            .await?;
         *self.shared.read_cache.write().expect("read cache") = None;
         if self.shared.dataset.read().expect("state lock").as_deref() == Some(dataset) {
-            self.alias(&raw, &mounted).await?;
-            self.refresh_derived().await?;
+            self.alias(table, &mounted).await?;
         }
         Ok(rows)
+    }
+
+    async fn source_spec(&self, source: &str) -> Result<SourceSpec, SessionError> {
+        let settings = self.shared.store.source_settings(source).await?.ok_or(
+            SessionError::Store(glossql_glossary::Error::Unknown {
+                what: "source",
+                name: source.into(),
+            }),
+        )?;
+        Ok(SourceSpec::from_settings(source, &settings)?)
     }
 
     /// The dataset's namespace as a schema in the session's default catalog
@@ -483,53 +394,8 @@ impl Session {
         Ok(())
     }
 
-    /// A `type` gloss carrying an `expr` becomes executable view SQL — a
-    /// malformed one would brick every read at the next derivation, so it
-    /// is refused at admission: the emitted cast is probed as a zero-row
-    /// query against the raw table (syntax, column references, target type
-    /// — all checked; the probe is skipped when the table has no data yet).
-    async fn admit_type_expr(
-        &self,
-        gloss: &Gloss,
-        resolved: &Resolved,
-    ) -> Result<(), SessionError> {
-        if gloss.aspect.value != glossql_glossary::TYPE_ASPECT {
-            return Ok(());
-        }
-        let Ok(body) = serde_json::from_str::<Value>(&gloss.body.raw) else {
-            return Ok(()); // schema validation rejects it downstream
-        };
-        let (Some(expr), Some(target)) = (
-            body.pointer("/expr").and_then(Value::as_str),
-            body.pointer("/value").and_then(Value::as_str),
-        ) else {
-            return Ok(());
-        };
-        let Some((table, _column)) = resolved.subject.split_once('.') else {
-            return Ok(());
-        };
-        let raw = raw_name(table);
-        let probe = format!(
-            "SELECT TRY_CAST(({expr}) AS {target}) FROM \"{raw}\" LIMIT 0"
-        );
-        match self.ctx.sql(&probe).await {
-            Ok(df) => {
-                df.collect().await.map_err(|e| SessionError::BadSubject(
-                    format!("type expr for `{}` fails: {e}", resolved.subject),
-                ))?;
-                Ok(())
-            }
-            Err(e) if e.to_string().contains(&raw) => Ok(()), // no table yet
-            Err(e) => Err(SessionError::BadSubject(format!(
-                "type expr for `{}` fails: {e}",
-                resolved.subject
-            ))),
-        }
-    }
-
     /// The subject's table snapshot at write time — `None` for dataset-level
     /// subjects, pair paths, tables the lake does not hold, or no lake.
-    /// Subjects are logical names; the snapshot rides on the `_raw` table.
     async fn stamp(&self, resolved: &Resolved) -> Result<Option<i64>, SessionError> {
         let Some(lake) = self.lake() else {
             return Ok(None);
@@ -542,14 +408,11 @@ impl Session {
             .split('.')
             .next()
             .expect("subjects are non-empty");
-        Ok(lake
-            .snapshot_id(&resolved.dataset, &raw_name(table))
-            .await?)
+        Ok(lake.snapshot_id(&resolved.dataset, table).await?)
     }
 
     async fn gloss(&self, gloss: Gloss) -> Result<Outcome, SessionError> {
         let resolved = self.subject(&gloss.subject).await?;
-        self.admit_type_expr(&gloss, &resolved).await?;
         let snapshot = self.stamp(&resolved).await?;
         self.shared
             .store
@@ -574,7 +437,6 @@ impl Session {
     /// value walking up from the subject (subject, parent, dataset), null
     /// when nothing is glossed.
     async fn extract(&self, extract: Extract) -> Result<Outcome, SessionError> {
-        self.refresh_derived().await?;
         let store = self.shared.store.clone();
         let resolved = self.subject(&extract.subject).await?;
         let mut results = Vec::new();
@@ -598,7 +460,6 @@ impl Session {
                         context.insert(aspect.clone(), value);
                     }
                     let context = Value::Object(context);
-                    let door = Arc::new(RecordingDoor::new(self.door()));
                     let output = self
                         .shared
                         .runtime()
@@ -606,7 +467,7 @@ impl Session {
                             &function,
                             &resolved.subject,
                             &context,
-                            Arc::clone(&door) as Arc<dyn SqlDoor>,
+                            Arc::new(self.door()),
                         )
                         .map_err(SessionError::Runtime)?;
                     schemas::validate_instance(&function.returns, &output).map_err(|detail| {
@@ -623,7 +484,6 @@ impl Session {
                             &name,
                             &output.to_string(),
                             snapshot,
-                            &door.reads(),
                         )
                         .await?;
                     store
@@ -637,6 +497,10 @@ impl Session {
         Ok(Outcome::Rows(vec![crate::reads::extraction_batch(results)]))
     }
 
+    /// Substrate SQL runs behind an allowlist (project lead, 2026-08-04):
+    /// queries pass, the store's forwarded deletes pass, `DROP TABLE`
+    /// routes to engine semantics — everything else that would alter the
+    /// schema or data directly is refused. Tables come from recipes.
     async fn substrate(&self, statement: DFStatement) -> Result<Outcome, SessionError> {
         // Removal is SQL (SPEC.md §5.2, §6): deletes on the store's two
         // relations run at the store. DataFusion cannot execute DML against
@@ -645,10 +509,97 @@ impl Session {
             let affected = self.shared.store.forward_delete(&target, &text).await?;
             return Ok(Outcome::Affected(affected));
         }
-        self.refresh_derived().await?;
+        let DFStatement::Statement(inner) = &statement else {
+            return Err(SessionError::SubstrateClosed(statement_verb(&statement)));
+        };
+        match inner.as_ref() {
+            SQLStatement::Query(_) => {}
+            SQLStatement::Explain { .. } => {}
+            SQLStatement::Drop { object_type, names, .. }
+                if *object_type == ObjectType::Table && names.len() == 1 =>
+            {
+                let name = names[0].to_string();
+                return self.drop_table(&name).await;
+            }
+            other => return Err(SessionError::SubstrateClosed(verb_of(other))),
+        }
+        if let Some(sql) = probe_sql(inner) {
+            let specs = self.file_source_specs().await?;
+            let batches = glossql_import::run_probe(&specs, &sql).await?;
+            return Ok(Outcome::Rows(batches));
+        }
         let plan = self.ctx.state().statement_to_plan(statement).await?;
         let frame = self.ctx.execute_logical_plan(plan).await?;
         Ok(Outcome::Rows(frame.collect().await?))
+    }
+
+    /// `DROP TABLE` (PoC rules, project lead 2026-08-04): refused while the
+    /// table holds data or glosses — replacement is postponed, so this only
+    /// ever removes a mis-declared table. What it removes, it removes
+    /// whole: the lake table, the recipe row, the cached evidence, the
+    /// import records.
+    async fn drop_table(&self, name: &str) -> Result<Outcome, SessionError> {
+        let dataset = self
+            .shared
+            .dataset
+            .read()
+            .expect("state lock")
+            .clone()
+            .ok_or(SessionError::NoDataset)?;
+        let table = name.rsplit('.').next().unwrap_or(name).trim_matches('"');
+        let Some(lake) = self.lake() else {
+            return Err(SessionError::BadSubject(format!(
+                "no lake — nothing to drop for `{table}`"
+            )));
+        };
+        if !lake.table_exists(&dataset, table).await? {
+            return Err(SessionError::Store(glossql_glossary::Error::Unknown {
+                what: "table",
+                name: table.into(),
+            }));
+        }
+        let rows = self.door().sql(&format!("SELECT count(*) FROM \"{dataset}\".\"{table}\""));
+        let has_data = match rows {
+            Ok(batches) => batches.iter().any(|b| {
+                b.column(0)
+                    .as_any()
+                    .downcast_ref::<datafusion::arrow::array::Int64Array>()
+                    .is_some_and(|c| !c.is_empty() && c.value(0) > 0)
+            }),
+            Err(_) => true, // cannot verify: refuse
+        };
+        if has_data {
+            return Err(SessionError::DropRefused {
+                table: table.into(),
+                reason: "it holds data".into(),
+            });
+        }
+        let glosses = self.shared.store.glosses_under(&dataset, table).await?;
+        if glosses > 0 {
+            return Err(SessionError::DropRefused {
+                table: table.into(),
+                reason: format!("{glosses} gloss(es) sit under it"),
+            });
+        }
+        // Through the mounted schema provider: iceberg-datafusion's
+        // deregister drops the catalog table and updates its own map in one
+        // move (iceberg-datafusion-0.10.1 schema.rs:215-236).
+        let mounted = self.mount_schema(&dataset).await?;
+        mounted.deregister_table(table)?;
+        self.shared.store.drop_table_records(&dataset, table).await?;
+        let _ = self.ctx.deregister_table(table);
+        *self.shared.read_cache.write().expect("read cache") = None;
+        Ok(Outcome::Done(format!("DROP TABLE {table}")))
+    }
+
+    async fn file_source_specs(&self) -> Result<Vec<SourceSpec>, SessionError> {
+        let mut specs = Vec::new();
+        for (name, settings) in self.shared.store.sources_all().await? {
+            if let Ok(spec) = SourceSpec::from_settings(&name, &settings) {
+                specs.push(spec);
+            }
+        }
+        Ok(specs)
     }
 
     async fn subject(&self, subject: &Subject) -> Result<Resolved, SessionError> {
@@ -692,12 +643,6 @@ impl Session {
         };
         Ok((l, op, r))
     }
-}
-
-/// The Iceberg table behind a logical name (project lead, 2026-08-04):
-/// recipes land `<t>_raw`; the bare name is always the derived view.
-pub(crate) fn raw_name(table: &str) -> String {
-    format!("{table}{}", glossql_glossary::RAW_SUFFIX)
 }
 
 fn endpoint_segments(path: &glossql_parser::ColumnPath) -> Vec<String> {
@@ -754,6 +699,45 @@ fn parent_of(subject: &str, dataset: &str) -> Option<String> {
     } else {
         Some(subject.rsplit_once('.').expect("has a dot").0.to_string())
     }
+}
+
+/// The verb of a statement the allowlist refused, for the error message.
+fn statement_verb(statement: &DFStatement) -> String {
+    match statement {
+        DFStatement::CreateExternalTable(_) => "CREATE EXTERNAL TABLE".into(),
+        DFStatement::CopyTo(_) => "COPY".into(),
+        DFStatement::Statement(inner) => verb_of(inner),
+        other => format!("{other}").split_whitespace().take(2).collect::<Vec<_>>().join(" "),
+    }
+}
+
+fn verb_of(statement: &SQLStatement) -> String {
+    statement
+        .to_string()
+        .split_whitespace()
+        .take(2)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// A probe is a query over the source files themselves: any reference to
+/// `read_parquet` / `read_csv` / `read_json` routes the whole statement to
+/// the import context, where paths' first segment names the source.
+fn probe_sql(statement: &SQLStatement) -> Option<String> {
+    let SQLStatement::Query(_) = statement else {
+        return None;
+    };
+    let mut is_probe = false;
+    let _ = datafusion::sql::sqlparser::ast::visit_relations(statement, |name| {
+        if let Some(ident) = name.0.last().and_then(|p| p.as_ident()) {
+            let n = ident.value.to_lowercase();
+            if n == "read_parquet" || n == "read_csv" || n == "read_json" {
+                is_probe = true;
+            }
+        }
+        std::ops::ControlFlow::<()>::Continue(())
+    });
+    is_probe.then(|| statement.to_string())
 }
 
 /// `DELETE FROM glossary … | DELETE FROM cache …` → (target, verbatim SQL).

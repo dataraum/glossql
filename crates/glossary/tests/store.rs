@@ -378,10 +378,10 @@ async fn function_scope_gates_visibility() {
 #[tokio::test]
 async fn cache_serves_the_latest_row_per_subject_and_function() {
     let s = store().await;
-    s.cache_put("fin", "orders", "profile", r#"{"n": 1}"#, None, &[])
+    s.cache_put("fin", "orders", "profile", r#"{"n": 1}"#, None)
         .await
         .unwrap();
-    s.cache_put("fin", "orders", "profile", r#"{"n": 2}"#, None, &[])
+    s.cache_put("fin", "orders", "profile", r#"{"n": 2}"#, None)
         .await
         .unwrap();
     let row = s
@@ -420,7 +420,7 @@ async fn forwarded_deletes_only_touch_the_two_relations() {
 // -- recipe admission (SPEC.md §3) ----------------------------------------
 
 #[tokio::test]
-async fn recipe_redeclare_is_content_idempotent_but_refused_once_glossed() {
+async fn recipe_redeclare_is_content_idempotent_and_change_is_refused() {
     use glossql_glossary::RecipeAdmission;
 
     let s = store().await;
@@ -446,29 +446,17 @@ async fn recipe_redeclare_is_content_idempotent_but_refused_once_glossed() {
         RecipeAdmission::Unchanged
     );
 
-    // No glosses yet: a different SQL replaces the table.
+    // A changed SQL is refused outright — replacement is postponed
+    // (project lead, 2026-08-04); a different SQL is a different table.
     let v2 = recipe("DECLARE RECIPE orders ON fin FROM erp AS $$SELECT * FROM read_parquet('orders_v2/*.parquet')$$;");
-    assert_eq!(
-        s.declare_recipe(&v2).await.unwrap(),
-        RecipeAdmission::Replaced
-    );
-
-    // A gloss under the table pins it — a different SQL is a different table.
-    write(
-        &s,
-        &agent(),
-        r#"GLOSS unit ON orders.amount AS $${"value": "EUR"}$$;"#,
-    )
-    .await
-    .unwrap();
-    let e = s.declare_recipe(&v1).await.unwrap_err();
+    let e = s.declare_recipe(&v2).await.unwrap_err();
     assert!(
-        matches!(e, Error::RecipeInUse { ref table, glosses: 1 } if table == "orders"),
+        matches!(e, Error::RecipeChanged { ref table } if table == "orders"),
         "{e}"
     );
     // The unchanged spelling still no-ops.
     assert_eq!(
-        s.declare_recipe(&v2).await.unwrap(),
+        s.declare_recipe(&v1).await.unwrap(),
         RecipeAdmission::Unchanged
     );
 }
@@ -484,10 +472,10 @@ async fn a_gloss_invalidates_the_caches_of_functions_accepting_its_aspect() {
         unreachable!()
     };
     s.declare_function(&f).await.unwrap();
-    s.cache_put("fin", "orders.amount", "conv", "{}", None, &[])
+    s.cache_put("fin", "orders.amount", "conv", "{}", None)
         .await
         .unwrap();
-    s.cache_put("fin", "invoices.total", "conv", "{}", None, &[])
+    s.cache_put("fin", "invoices.total", "conv", "{}", None)
         .await
         .unwrap();
 
@@ -524,88 +512,4 @@ async fn a_gloss_invalidates_the_caches_of_functions_accepting_its_aspect() {
             .unwrap()
             .is_none()
     );
-}
-
-#[tokio::test]
-async fn a_served_shape_change_kills_exactly_what_read_the_table() {
-    let s = store().await;
-    // The real lifecycle: the derivation exists before any extraction can
-    // cache against it (every statement refreshes first).
-    let first = s
-        .advance_derived("fin", "orders", "CREATE OR REPLACE VIEW ...v1")
-        .await
-        .unwrap();
-    assert!(first, "the first emitted shape is a change");
-
-    // Three cached runs with recorded reads: profile read the served view,
-    // infer_types read the raw table, decide_types read nothing.
-    for (f, reads) in [
-        ("profile", vec!["orders".to_string()]),
-        ("infer_types", vec!["orders_raw".to_string()]),
-        ("decide_types", vec![]),
-    ] {
-        s.cache_put("fin", "orders.amount", f, r#"{"candidates": []}"#, None, &reads)
-            .await
-            .unwrap();
-    }
-    let again = s
-        .advance_derived("fin", "orders", "CREATE OR REPLACE VIEW ...v1")
-        .await
-        .unwrap();
-    assert!(!again, "an unchanged shape advances nothing");
-    assert!(
-        s.cache_get("fin", "orders.amount", "profile")
-            .await
-            .unwrap()
-            .is_some(),
-        "unchanged shape, the reader's result stands"
-    );
-
-    let changed = s
-        .advance_derived("fin", "orders", "CREATE OR REPLACE VIEW ...v2")
-        .await
-        .unwrap();
-    assert!(changed);
-    assert!(
-        s.cache_get("fin", "orders.amount", "profile")
-            .await
-            .unwrap()
-            .is_none(),
-        "it read the table whose served shape moved"
-    );
-    for survivor in ["infer_types", "decide_types"] {
-        assert!(
-            s.cache_get("fin", "orders.amount", survivor)
-                .await
-                .unwrap()
-                .is_some(),
-            "`{survivor}` did not read the served view — recorded fact, not a curated list"
-        );
-    }
-}
-
-#[tokio::test]
-async fn recipe_names_cannot_claim_the_derived_suffixes() {
-    let s = store().await;
-    let Declaration::Dataset(d) =
-        decl(r#"DECLARE DATASET fin SET (purpose: 'test');"#)
-    else {
-        unreachable!()
-    };
-    s.declare_dataset(&d).await.unwrap();
-    let Declaration::Source(src) =
-        decl(r#"DECLARE SOURCE erp SET (type: parquet, location: 'lake/erp');"#)
-    else {
-        unreachable!()
-    };
-    s.declare_source(&src).await.unwrap();
-    let Declaration::Recipe(r) =
-        decl(r#"DECLARE RECIPE orders_raw ON fin FROM erp AS $$SELECT 1$$;"#)
-    else {
-        unreachable!()
-    };
-    assert!(matches!(
-        s.declare_recipe(&r).await.unwrap_err(),
-        Error::ReservedSuffix { .. }
-    ));
 }

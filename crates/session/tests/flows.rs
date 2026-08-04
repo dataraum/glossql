@@ -327,12 +327,7 @@ async fn substrate_sql_runs_against_registered_tables() {
         )
         .unwrap();
 
-    run(
-        &session,
-        "CREATE VIEW big_orders AS SELECT id, amount FROM orders WHERE amount > 20;",
-    )
-    .await;
-    let rows = table(&session, "SELECT id, amount FROM big_orders ORDER BY id;").await;
+    let rows = table(&session, "SELECT id, amount FROM orders WHERE amount > 20 ORDER BY id;").await;
     insta::assert_snapshot!(rows, @r"
     +----+--------+
     | id | amount |
@@ -340,6 +335,14 @@ async fn substrate_sql_runs_against_registered_tables() {
     | 2  | 32.5   |
     +----+--------+
     ");
+
+    // The allowlist (project lead, 2026-08-04): schema-altering SQL is
+    // refused at the door — tables come from recipes.
+    let err = session
+        .execute("CREATE VIEW big_orders AS SELECT id FROM orders;")
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("not open for CREATE VIEW"), "{err}");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
