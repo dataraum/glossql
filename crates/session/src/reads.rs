@@ -162,9 +162,7 @@ async fn ensure_verdicts(
                 }
             })?;
             let snapshot = match (shared.lake(), glossary_table_of(subject)) {
-                (Some(lake), Some(table)) => {
-                    lake.snapshot_id(dataset, &format!("{table}_raw")).await?
-                }
+                (Some(lake), Some(table)) => lake.snapshot_id(dataset, table).await?,
                 _ => None,
             };
             shared

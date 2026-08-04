@@ -89,9 +89,11 @@ The deterministic profile plane — declared once (vertical/global), fanned
 out per column (extraction grain is the subject; the fan-out is the
 caller's loop, the grammar carries no ordering). The quality plane chains
 on it through `ACCEPTS`: the outlier fences reuse the profile's quartiles
-and MAD, and a re-profile kills the outlier cache. An all-null column
-needs no machinery — the author leaves it out of the recipe, or keeps it,
-deliberately:
+and MAD, and a re-profile kills the outlier cache. The temporal plane is
+the same shape — window, cadence, completeness, gaps, all pure functions
+of the landed column's instants (v0.3's `temporal_column_profiles`, minus
+its one wall-clock field). An all-null column needs no machinery — the
+author leaves it out of the recipe, or keeps it, deliberately:
 
 ```glossql
 DECLARE ASPECT column_profile WITH $${
@@ -115,7 +117,18 @@ DECLARE FUNCTION outliers FOR GLOBAL FROM 'functions/outliers.rhai'
   RETURNS $${"type": "object", "required": ["applicable"]}$$;
 DECLARE WITNESS outlier_profile_w ON outlier_profile BY (FUNCTION outliers);
 
+DECLARE ASPECT temporal_profile WITH $${
+  "type": "object", "required": ["applicable"],
+  "properties": {"applicable": {"type": "boolean"},
+                 "granularity": {"type": "string"},
+                 "completeness": {"type": "object"}, "gaps": {"type": "object"}}
+}$$ AS MEASUREMENT;
+DECLARE FUNCTION temporal FOR GLOBAL FROM 'functions/temporal.rhai'
+  RETURNS $${"type": "object", "required": ["applicable"]}$$;
+DECLARE WITNESS temporal_profile_w ON temporal_profile BY (FUNCTION temporal);
+
 SELECT profile(), outliers() FROM fin.orders.amount;
+SELECT temporal() FROM fin.orders.order_date;
 ```
 
 Semantic annotation stays agent glosses (an agent connection, reading the
@@ -201,6 +214,21 @@ that the grammar knows about.
   measurement in the deterministic plane — and the only numpy/scipy
   dependency in it — consumed by nothing as a signal. It never ports;
   whoever wants it writes a script.
+- **The temporal family ports as one ordinary function** (2026-08-04):
+  with tables that never change under their evidence, temporal needs no
+  machinery of its own — window, cadence, completeness and gaps are pure
+  functions of the landed column. Cadence is the nearest named grain to
+  the median gap between *distinct* instants (a duplicate-heavy fact
+  column counts each day once — v0.3 learned that the hard way);
+  completeness counts calendar buckets over the column's own window, by
+  calendar arithmetic, never by nominal grain seconds; gaps are the
+  stretches beyond twice the median. Two v0.3 fields stayed behind:
+  `is_stale` — the family's only wall-clock-dependent field, and a verdict
+  about *now* is judgment, which lives in detectors and read policy, never
+  in results (an agent who wants it is one `max(column)` from it) — and
+  `last_period_complete`, low-signal by its own documentation and read by
+  nothing. The cadence is what fed v0.3's slice-and-drill grain floor;
+  here it is a measurement an agent reads before bucketing.
 - `run_id` versioning and the promote/head flip are the cache and
   supersession mechanics — implementation by ground rule; the only surface
   is deleting cached rows to force recomputation (REFRESH was dropped

@@ -2,9 +2,9 @@
 // distribution facts, no domain rules. ACCEPTS column_profile: the
 // quartiles and MAD come from the cached profile, never recomputed — the
 // door only counts what lies beyond the fences, and a re-profiled column
-// invalidates this cache through the ACCEPTS rule. Reads the served
-// plane like the profile it chains on; TRY_CAST keeps the count honest
-// while the column still rides raw.
+// invalidates this cache through the ACCEPTS rule. Reads the landed
+// table like the profile it chains on; TRY_CAST is identity on a typed
+// numeric column and keeps the door honest on an untyped one.
 let p = context.column_profile;
 if p == () || !("numeric" in p) {
     #{ applicable: false }

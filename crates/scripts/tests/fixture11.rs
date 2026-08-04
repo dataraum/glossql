@@ -85,11 +85,14 @@ DECLARE ASPECT behavior WITH $${
 }$$ AS FACT;
 DECLARE ASPECT column_profile WITH $${"type": "object"}$$ AS MEASUREMENT;
 DECLARE ASPECT outlier_profile WITH $${"type": "object"}$$ AS MEASUREMENT;
+DECLARE ASPECT temporal_profile WITH $${"type": "object"}$$ AS MEASUREMENT;
 
 DECLARE FUNCTION profile FOR GLOBAL FROM 'functions/profile.rhai'
   RETURNS $${"type": "object"}$$;
 DECLARE FUNCTION outliers FOR GLOBAL FROM 'functions/outliers.rhai'
   ACCEPTS (column_profile)
+  RETURNS $${"type": "object", "required": ["applicable"]}$$;
+DECLARE FUNCTION temporal FOR GLOBAL FROM 'functions/temporal.rhai'
   RETURNS $${"type": "object", "required": ["applicable"]}$$;
 DECLARE FUNCTION slot_entropy FOR GLOBAL FROM 'functions/slot_entropy.rhai'
   RETURNS $${
@@ -105,6 +108,7 @@ DECLARE FUNCTION slot_entropy FOR GLOBAL FROM 'functions/slot_entropy.rhai'
 
 DECLARE WITNESS column_profile_w ON column_profile BY (FUNCTION profile);
 DECLARE WITNESS outlier_profile_w ON outlier_profile BY (FUNCTION outliers);
+DECLARE WITNESS temporal_profile_w ON temporal_profile BY (FUNCTION temporal);
 DECLARE WITNESS behavior_w ON behavior BY (AGENT, HUMAN)
   DETECTOR slot_entropy THRESHOLD 0.7;
 "#;
@@ -230,6 +234,31 @@ async fn fixture_11_with_real_scripts() {
         .unwrap();
     assert!(one(&outlier).contains("\"applicable\":true"), "{}", one(&outlier));
     assert!(one(&outlier).contains("\"count\":1"), "99.90 is beyond both fences: {}", one(&outlier));
+
+    // The temporal family is one ordinary function on the landed column:
+    // five consecutive days read as day cadence, complete and gapless.
+    agent
+        .execute("SELECT temporal() FROM orders.order_date;")
+        .await
+        .unwrap();
+    let tprof = agent
+        .execute("SELECT value FROM GLOSSARY(orders.order_date::temporal_profile);")
+        .await
+        .unwrap();
+    let v = one(&tprof);
+    assert!(v.contains("\"granularity\":\"day\""), "{v}");
+    assert!(v.contains("\"ratio\":1.0"), "{v}");
+    assert!(v.contains("\"gaps\":{\"count\":0}"), "{v}");
+    // A numeric column abstains instead of erroring.
+    agent
+        .execute("SELECT temporal() FROM orders.amount;")
+        .await
+        .unwrap();
+    let na = agent
+        .execute("SELECT value FROM GLOSSARY(orders.amount::temporal_profile);")
+        .await
+        .unwrap();
+    assert!(one(&na).contains("\"applicable\":false"), "{}", one(&na));
 
     // The ACCEPTS edge is the one declared invalidation: a fresh profile
     // kills the outlier cache.
