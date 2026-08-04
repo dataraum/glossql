@@ -76,12 +76,23 @@ DECLARE RECIPE segments ON fin FROM crm AS $$SELECT id, segment FROM customer_se
 The recipe SQL runs **at the source**: a relational source executes it in
 its own dialect; at a file source the server runs it, with `read_parquet` /
 `read_csv` / `read_json` resolving paths under the source's location. The
-result lands as table `segments` in dataset `fin` — csv and json land raw
-all-VARCHAR, parquet keeps its file types; typing is the typed view's
-business (`corpus/11`). Statement identity is content: an unchanged
-re-declaration is a no-op; a changed one rebuilds the table, but is refused
-while glosses exist under it — a different SQL is a different table, declare
-it under another name.
+result lands as table `segments_raw` in dataset `fin` — csv and json land
+raw all-VARCHAR, parquet keeps its file types. Statement identity is
+content: an unchanged re-declaration is a no-op; a changed one rebuilds the
+table, but is refused while glosses exist under it — a different SQL is a
+different table, declare it under another name.
+
+The bare name is **the typed view, derived by the engine**: `segments` is
+an identity view over `segments_raw` until typing decisions exist, and the
+typed projection after — every decided column wrapped in `TRY_CAST`, a
+failed cast a NULL cell, never a lost row. `segments_quarantined` is the
+complement in raw shape: the rows where any decided column fails on a
+non-NULL value. A typing decision is the collapsed value of the `type`
+aspect per column (§5.3): the inference function's pick by default, agent
+and human glosses superseding it. Nothing regenerates on write — the pair
+follows the current decisions at the next read. The `_raw` and
+`_quarantined` suffixes belong to the engine; subjects stay logical
+(`segments.amount`), and their snapshots ride the raw table.
 
 ```sql
 DECLARE DATASET fin SET (purpose: 'working-capital analysis over ERP and CRM exports');
@@ -254,11 +265,19 @@ SELECT * FROM GLOSSARY(orders.amount);
 ```
 
 The default, collapsed read: one row per (subject, aspect) —
-`(subject, aspect, value, band, score)`. The value is collapsed by the
-aspect's witness detector; it is NULL when the slot is empty or entropy is
-above the witness's threshold. An agent reading NULL knows the context is
-absent or contested — judgment stays in the read policy, never in fabricated
-values.
+`(subject, aspect, value, band, score, state)`. The value is the precedence
+pick — human over agent over function — withheld only when the witness
+detector's score exceeds the threshold. `state` makes every gap visible;
+the read never hides one:
+
+- `unassessed` — a witness exists, nobody spoke. The row still appears
+  (absence is a visible row, never an omission — fixture 09's benchmark).
+- `contested` — entropy above the threshold; value withheld, band and
+  score say how badly.
+- `current` — served, basis unchanged.
+- `stale` — served **and marked**: the table's snapshot moved on, or the
+  column's `type` decision postdates the write. Staleness never suppresses
+  judgment; it shows beside it.
 
 ```sql
 SELECT * FROM GLOSSARY(orders.amount, all => true);
@@ -342,6 +361,17 @@ grain the WHERE clause picks, and select again:
 DELETE FROM cache WHERE function = 'dso';
 ```
 
+**Writes invalidate, reads recompute, judgment only supersedes.** A new
+value for an aspect — glossed, or a bound measurement's fresh output —
+deletes the cached results of every function that `ACCEPTS` it, at and
+under the subject: the declaration that names a script's inputs also names
+what kills its cache. A changed `type` decision additionally deletes the
+table's evidence — everything that analyzed its served shape — sparing the
+typing machinery itself, whose input is the raw table and whose output is
+the decision. Nothing recomputes at write time, and no machinery ever
+deletes a gloss: stale judgment is served and marked (§5.3), superseded
+only by whoever owns the slot.
+
 Whether multi-function
 extraction fans out or runs one call after another is the caller's choice —
 send one statement with many calls, or many statements; the grammar carries
@@ -386,8 +416,11 @@ SELECT subject, band FROM ATTEST(fin.trial_balance) WHERE band = 'red';
 The **standard attest schema** is fixed:
 `(subject, aspect, witness, band, score, computed_at)` — `band` in
 `green | yellow | orange | red`, `score` the disagreement/entropy in 0..1.
-Same cache semantics as function SELECT; detail lives in the value
-function's own cached output, reachable by SELECT. Sweeps ("all contested
+Detectors run **at read**: a verdict missing or older than the newest slot
+write recomputes when `ATTEST()` or a collapsed `GLOSSARY()` read needs it,
+and caches like any function result — `DELETE FROM cache` still forces it.
+Detail lives in the value function's own cached output, reachable by
+SELECT. Sweeps ("all contested
 behavior columns") are WHERE clauses over the attest relation, never a
 special form; with no argument, `ATTEST()` sweeps the `USE`'d dataset.
 `subject::aspect` — the host's cast spelling — narrows attestation to one
@@ -408,14 +441,11 @@ running system's two operational flows as statement sequences.
 
 ## 9. Open
 
-One open question, raised by fixture 09's disclosure benchmark: the collapsed
-`GLOSSARY()` read (§5.3). NULL may be too simple — it conflates three states
-a reading agent must distinguish: **never assessed** (no witness ran),
-**contested** (entropy above threshold), **gated** (awaiting human
-confirmation). Related: whether the read enumerates the declared-aspect grid
-(so "never assessed" is a visible row) or serves only existing rows (absence
-reads as nonexistence). Closes by corpus test against the real served context
-(fixture 09), not by argument.
+One open question, fixture 09's remaining half: whether agents actually
+compose their context from the reads — sweeping `state != 'current'`,
+respecting bands — now that the collapsed shape discloses every gap
+(§5.3, decided 2026-08-04: serving wrong information is not an
+experiment). Closes by running the agent experiment, not by argument.
 
 PoC notes: batch visibility comes from (long-running) transactions — the
 running system's run_id + snapshot-head pointer is the verbose version of

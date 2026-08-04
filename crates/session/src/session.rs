@@ -54,15 +54,25 @@ pub enum Outcome {
     Affected(u64),
 }
 
-/// The seam scripts plug into at M4 (rhai + arrow kernels). `context` is
-/// the document the server assembled from the function's `ACCEPTS` aspects
-/// (SPEC.md §6). M2 ships [`NoRuntime`]; tests inject fakes.
+/// The query capability every measurement invocation receives (SPEC.md §6 —
+/// scripts run any SQL against the dataset). Sync because scripts are; the
+/// session implements it over its context with the block-in-place bridge
+/// the reads already use. Detectors get a door that refuses (§7.1).
+pub trait SqlDoor: Send + Sync {
+    fn sql(&self, query: &str) -> Result<Vec<RecordBatch>, String>;
+}
+
+/// The seam scripts plug into (rhai + arrow kernels, `glossql-scripts`).
+/// `context` is the document the server assembled from the function's
+/// `ACCEPTS` aspects (SPEC.md §6) — or, for a detector, its slots and
+/// threshold (§7.1). Tests inject fakes.
 pub trait FunctionRuntime: Send + Sync + std::fmt::Debug {
     fn invoke(
         &self,
         function: &FunctionRow,
         subject: &str,
         context: &Value,
+        door: Arc<dyn SqlDoor>,
     ) -> Result<Value, String>;
 }
 
@@ -70,11 +80,40 @@ pub trait FunctionRuntime: Send + Sync + std::fmt::Debug {
 pub struct NoRuntime;
 
 impl FunctionRuntime for NoRuntime {
-    fn invoke(&self, function: &FunctionRow, _: &str, _: &Value) -> Result<Value, String> {
+    fn invoke(
+        &self,
+        function: &FunctionRow,
+        _: &str,
+        _: &Value,
+        _: Arc<dyn SqlDoor>,
+    ) -> Result<Value, String> {
         Err(format!(
-            "no function runtime configured — `{}` cannot run before scripts land (M4)",
+            "no function runtime configured — `{}` cannot run without scripts",
             function.name
         ))
+    }
+}
+
+/// The session's own door: statements run against its context, so scripts
+/// see the mounted lake tables, the derived views, and the read relations.
+struct CtxDoor {
+    ctx: SessionContext,
+    handle: tokio::runtime::Handle,
+}
+
+impl SqlDoor for CtxDoor {
+    fn sql(&self, query: &str) -> Result<Vec<RecordBatch>, String> {
+        tokio::task::block_in_place(|| {
+            self.handle.block_on(async {
+                self.ctx
+                    .sql(query)
+                    .await
+                    .map_err(|e| e.to_string())?
+                    .collect()
+                    .await
+                    .map_err(|e| e.to_string())
+            })
+        })
     }
 }
 
@@ -82,12 +121,13 @@ pub struct Session {
     ctx: SessionContext,
     shared: Arc<Shared>,
     actor: Actor,
-    runtime: Arc<dyn FunctionRuntime>,
-    lake: Option<Lake>,
-    /// Bare-name mounts of the `USE`'d dataset's tables in the default
-    /// schema, so `orders` and `fin.orders` both resolve while views land
-    /// beside them.
+    /// Bare-name mounts of the `USE`'d dataset's raw tables in the default
+    /// schema (`orders_raw`), so recipe tables and the derived views resolve
+    /// side by side.
     aliased: RwLock<Vec<String>>,
+    /// The derived pair's last-emitted SQL per logical table — regeneration
+    /// happens at read, only when the emitted text changes.
+    derived: RwLock<std::collections::HashMap<String, String>>,
 }
 
 impl Session {
@@ -98,8 +138,19 @@ impl Session {
             store,
             dataset: RwLock::new(None),
             handle: tokio::runtime::Handle::current(),
+            lake: RwLock::new(None),
+            runtime: RwLock::new(Arc::new(NoRuntime)),
         });
-        let config = SessionConfig::new().set_str("datafusion.sql_parser.dialect", "postgres");
+        let config = SessionConfig::new()
+            .set_str("datafusion.sql_parser.dialect", "postgres")
+            // Iceberg's arrow fields carry `PARQUET:field_id` metadata; a
+            // cast in a derived view drops it logically but not physically,
+            // and the aggregate schema check trips on the difference. The
+            // knob exists for exactly this (datafusion-common config.rs:532).
+            .set_bool(
+                "datafusion.execution.skip_physical_aggregate_schema_check",
+                true,
+            );
         let state = SessionStateBuilder::new()
             .with_default_features()
             .with_config(config)
@@ -109,26 +160,37 @@ impl Session {
             .build();
         let mut ctx = SessionContext::new_with_state(state);
         datafusion_functions_json::register_all(&mut ctx)?;
+        crate::typing::register_try_functions(&ctx);
         Ok(Session {
             ctx,
             shared,
             actor,
-            runtime: Arc::new(NoRuntime),
-            lake: None,
             aliased: RwLock::new(Vec::new()),
+            derived: RwLock::new(Default::default()),
         })
     }
 
-    pub fn with_runtime(mut self, runtime: Arc<dyn FunctionRuntime>) -> Self {
-        self.runtime = runtime;
+    pub fn with_runtime(self, runtime: Arc<dyn FunctionRuntime>) -> Self {
+        *self.shared.runtime.write().expect("runtime lock") = runtime;
         self
     }
 
     /// Attach the workspace data plane: recipes materialize, `USE` mounts
     /// the dataset's tables, gloss and cache writes carry snapshot ids.
-    pub fn with_lake(mut self, lake: Lake) -> Self {
-        self.lake = Some(lake);
+    pub fn with_lake(self, lake: Lake) -> Self {
+        *self.shared.lake.write().expect("lake lock") = Some(lake);
         self
+    }
+
+    fn lake(&self) -> Option<Lake> {
+        self.shared.lake()
+    }
+
+    fn door(&self) -> CtxDoor {
+        CtxDoor {
+            ctx: self.ctx.clone(),
+            handle: self.shared.handle.clone(),
+        }
     }
 
     /// Data-plane tables come from recipes at M3; until then (and in tests)
@@ -166,7 +228,7 @@ impl Session {
             }
             Declaration::Dataset(d) => {
                 store.declare_dataset(d).await?;
-                if let Some(lake) = &self.lake {
+                if let Some(lake) = self.lake() {
                     lake.ensure_namespace(&d.name.value).await?;
                     self.mount_schema(&d.name.value).await?;
                 }
@@ -175,11 +237,11 @@ impl Session {
             Declaration::Recipe(d) => {
                 let admission = store.declare_recipe(d).await?;
                 let (dataset, table) = (d.dataset.value.as_str(), d.table.value.as_str());
-                match &self.lake {
+                match self.lake() {
                     None => format!("DECLARE RECIPE {table} ON {dataset}"),
                     Some(lake)
                         if admission == RecipeAdmission::Unchanged
-                            && lake.table_exists(dataset, table).await? =>
+                            && lake.table_exists(dataset, &raw_name(table)).await? =>
                     {
                         format!("DECLARE RECIPE {table} ON {dataset} (unchanged)")
                     }
@@ -225,18 +287,58 @@ impl Session {
             }));
         }
         *self.shared.dataset.write().expect("state lock") = Some(name.to_string());
-        if let Some(lake) = &self.lake {
+        if let Some(lake) = self.lake() {
             lake.ensure_namespace(name).await?;
             let schema = self.mount_schema(name).await?;
             let stale: Vec<String> = std::mem::take(&mut *self.aliased.write().expect("aliases"));
             for old in stale {
                 let _ = self.ctx.deregister_table(old.as_str());
             }
+            self.derived.write().expect("derived").clear();
             for table in lake.table_names(name).await? {
                 self.alias(&table, &schema).await?;
             }
+            self.refresh_derived().await?;
         }
         Ok(Outcome::Done(format!("USE {name}")))
+    }
+
+    /// Derivation at read (project lead, 2026-08-04): the bare table name is
+    /// always a view — identity while nothing is decided, the typed
+    /// projection as decisions land — with `<t>_quarantined` beside it.
+    /// Nothing regenerates on write; before statements plan, the emitted SQL
+    /// is recompared and `CREATE OR REPLACE VIEW` runs only on change.
+    async fn refresh_derived(&self) -> Result<(), SessionError> {
+        let (Some(lake), Some(dataset)) = (
+            self.lake(),
+            self.shared.dataset.read().expect("state lock").clone(),
+        ) else {
+            return Ok(());
+        };
+        for raw in lake.table_names(&dataset).await? {
+            let Some(logical) = raw.strip_suffix("_raw") else {
+                continue;
+            };
+            let columns = lake.table_columns(&dataset, &raw).await?;
+            if columns.is_empty() {
+                continue;
+            }
+            let decisions =
+                crate::typing::decisions(&self.shared.store, &dataset, logical).await?;
+            let (typed, quarantine) =
+                crate::typing::pair_sql(logical, &raw, &columns, &decisions);
+            let emitted = format!("{typed}\n{quarantine}");
+            if self.derived.read().expect("derived").get(logical) == Some(&emitted) {
+                continue;
+            }
+            self.ctx.sql(&typed).await?.collect().await?;
+            self.ctx.sql(&quarantine).await?.collect().await?;
+            self.derived
+                .write()
+                .expect("derived")
+                .insert(logical.to_string(), emitted);
+        }
+        Ok(())
     }
 
     /// Land a recipe as its table: run it at the source, create the table
@@ -250,7 +352,8 @@ impl Session {
         sql: &str,
     ) -> Result<usize, SessionError> {
         const STAGED: &str = "__glossql_staged";
-        let lake = self.lake.as_ref().expect("caller holds a lake");
+        let raw = raw_name(table);
+        let lake = self.lake().expect("caller holds a lake");
         let settings = self.shared.store.source_settings(source).await?.ok_or(
             SessionError::Store(glossql_glossary::Error::Unknown {
                 what: "source",
@@ -263,18 +366,18 @@ impl Session {
 
         lake.ensure_namespace(dataset).await?;
         let mounted = self.mount_schema(dataset).await?;
-        if mounted.table_exist(table) {
+        if mounted.table_exist(&raw) {
             // a replaced recipe rebuilds its table (admission already ruled)
-            mounted.deregister_table(table)?;
+            mounted.deregister_table(&raw)?;
         }
         let empty = RecordBatch::new_empty(Arc::clone(&schema));
         let shape = MemTable::try_new(Arc::clone(&schema), vec![vec![empty]])?;
-        mounted.register_table(table.to_string(), Arc::new(shape))?;
+        mounted.register_table(raw.clone(), Arc::new(shape))?;
 
         if rows > 0 {
             let staged = MemTable::try_new(schema, vec![batches])?;
             self.ctx.register_table(STAGED, Arc::new(staged))?;
-            let insert = format!("INSERT INTO \"{dataset}\".\"{table}\" SELECT * FROM {STAGED}");
+            let insert = format!("INSERT INTO \"{dataset}\".\"{raw}\" SELECT * FROM {STAGED}");
             let inserted = async {
                 self.ctx.sql(&insert).await?.collect().await?;
                 Ok::<(), DataFusionError>(())
@@ -284,7 +387,8 @@ impl Session {
             inserted?;
         }
         if self.shared.dataset.read().expect("state lock").as_deref() == Some(dataset) {
-            self.alias(table, &mounted).await?;
+            self.alias(&raw, &mounted).await?;
+            self.refresh_derived().await?;
         }
         Ok(rows)
     }
@@ -296,7 +400,7 @@ impl Session {
         if let Some(existing) = default.schema(dataset) {
             return Ok(existing);
         }
-        let lake = self.lake.as_ref().expect("caller holds a lake");
+        let lake = self.lake().expect("caller holds a lake");
         let provider = lake.provider().await?;
         let schema = provider.schema(dataset).ok_or_else(|| {
             SessionError::Lake(glossql_catalog::Error::Workspace(format!(
@@ -323,8 +427,9 @@ impl Session {
 
     /// The subject's table snapshot at write time — `None` for dataset-level
     /// subjects, pair paths, tables the lake does not hold, or no lake.
+    /// Subjects are logical names; the snapshot rides on the `_raw` table.
     async fn stamp(&self, resolved: &Resolved) -> Result<Option<i64>, SessionError> {
-        let Some(lake) = &self.lake else {
+        let Some(lake) = self.lake() else {
             return Ok(None);
         };
         if resolved.subject == resolved.dataset || resolved.subject.contains(' ') {
@@ -335,7 +440,9 @@ impl Session {
             .split('.')
             .next()
             .expect("subjects are non-empty");
-        Ok(lake.snapshot_id(&resolved.dataset, table).await?)
+        Ok(lake
+            .snapshot_id(&resolved.dataset, &raw_name(table))
+            .await?)
     }
 
     async fn gloss(&self, gloss: Gloss) -> Result<Outcome, SessionError> {
@@ -364,6 +471,7 @@ impl Session {
     /// value walking up from the subject (subject, parent, dataset), null
     /// when nothing is glossed.
     async fn extract(&self, extract: Extract) -> Result<Outcome, SessionError> {
+        self.refresh_derived().await?;
         let store = self.shared.store.clone();
         let resolved = self.subject(&extract.subject).await?;
         let mut results = Vec::new();
@@ -388,8 +496,14 @@ impl Session {
                     }
                     let context = Value::Object(context);
                     let output = self
-                        .runtime
-                        .invoke(&function, &resolved.subject, &context)
+                        .shared
+                        .runtime()
+                        .invoke(
+                            &function,
+                            &resolved.subject,
+                            &context,
+                            Arc::new(self.door()),
+                        )
                         .map_err(SessionError::Runtime)?;
                     schemas::validate_instance(&function.returns, &output).map_err(|detail| {
                         SessionError::OutputRejected {
@@ -426,6 +540,7 @@ impl Session {
             let affected = self.shared.store.forward_delete(&target, &text).await?;
             return Ok(Outcome::Affected(affected));
         }
+        self.refresh_derived().await?;
         let plan = self.ctx.state().statement_to_plan(statement).await?;
         let frame = self.ctx.execute_logical_plan(plan).await?;
         Ok(Outcome::Rows(frame.collect().await?))
@@ -474,6 +589,12 @@ impl Session {
     }
 }
 
+/// The Iceberg table behind a logical name (project lead, 2026-08-04):
+/// recipes land `<t>_raw`; the bare name is always the derived view.
+pub(crate) fn raw_name(table: &str) -> String {
+    format!("{table}_raw")
+}
+
 fn endpoint_segments(path: &glossql_parser::ColumnPath) -> Vec<String> {
     let mut segments = Vec::new();
     if let Some(d) = &path.dataset {
@@ -500,7 +621,9 @@ async fn context_value(
         } else {
             glossql_glossary::Scope::Subject(current.clone())
         };
-        let rows = store.collapsed_read(dataset, &scope, Some(aspect)).await?;
+        let rows = store
+            .collapsed_read(dataset, &scope, Some(aspect), &Default::default())
+            .await?;
         let target = if current == dataset {
             dataset
         } else {

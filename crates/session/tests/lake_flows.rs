@@ -1,7 +1,8 @@
-//! The fixture-11 flow against a real warehouse (corpus/11-flow-add-source):
-//! source declared, recipe lands a parquet-backed Iceberg table, bare and
-//! qualified names resolve, the typed view works beside them, glosses carry
-//! the table's snapshot id, and recipe re-declaration follows §3.
+//! The fixture-11 flow against a real warehouse (corpus/11-flow-add-source),
+//! under the M4 naming (ruled 2026-08-04): the recipe lands `orders_raw`;
+//! the bare name is the derived view (identity until decisions land, typed
+//! after); `orders_quarantined` is the complement. Glosses carry snapshot
+//! ids; recipe re-declaration follows §3.
 
 use std::sync::Arc;
 
@@ -87,30 +88,38 @@ async fn fixture_11_add_source_flow() {
     let outcomes = session.execute(&setup).await.unwrap();
     assert_eq!(done(&outcomes[3]), "DECLARE RECIPE orders ON fin (3 rows)");
 
-    // Bare and dataset-qualified names both resolve to the Iceberg table.
+    // The bare name is the derived view (identity — nothing decided yet);
+    // the raw table resolves bare and dataset-qualified.
     let n = session.execute("SELECT count(*) FROM orders;").await.unwrap();
     assert_eq!(single_value(&n), "3");
     let n = session
-        .execute("SELECT count(*) FROM fin.orders;")
+        .execute("SELECT count(*) FROM fin.orders_raw;")
         .await
         .unwrap();
     assert_eq!(single_value(&n), "3");
 
-    // The typed view (fixture 11) lands beside the data tables.
+    // A typing decision lands as a gloss; the next read serves the typed
+    // shape under the same bare name — no hand-written view.
     session
         .execute(
-            "CREATE VIEW orders_typed AS \
-               SELECT CAST(order_id AS BIGINT) AS order_id, \
-                      CAST(amount AS DECIMAL(12,2)) AS amount \
-               FROM orders;",
+            r#"DECLARE ASPECT type WITH $${
+                 "type": "object", "required": ["value"],
+                 "properties": {"value": {"type": "string"}, "expr": {"type": "string"}}
+               }$$ AS FACT;
+               GLOSS type ON orders.amount AS $${"value": "DECIMAL(12,2)"}$$;"#,
         )
         .await
         .unwrap();
     let total = session
-        .execute("SELECT sum(amount) FROM orders_typed;")
+        .execute("SELECT sum(amount) FROM orders;")
         .await
         .unwrap();
     assert_eq!(single_value(&total), "120.40");
+    let quarantined = session
+        .execute("SELECT count(*) FROM orders_quarantined;")
+        .await
+        .unwrap();
+    assert_eq!(single_value(&quarantined), "0", "every amount casts");
 
     // A gloss on a column subject carries the table's snapshot id.
     session
@@ -142,6 +151,18 @@ async fn fixture_11_add_source_flow() {
         .await
         .unwrap();
     assert_eq!(single_value(&unstamped), "1");
+
+    // The unit gloss predates the current type decision for its column —
+    // served and marked stale (ruled 2026-08-04), never hidden.
+    session
+        .execute(r#"GLOSS type ON orders.amount AS $${"value": "DECIMAL(18,4)"}$$;"#)
+        .await
+        .unwrap();
+    let state = session
+        .execute("SELECT state FROM GLOSSARY(orders.amount::unit);")
+        .await
+        .unwrap();
+    assert_eq!(single_value(&state), "stale");
 
     // §3: unchanged recipe is a no-op; changed is refused while glossed.
     let redeclare = "DECLARE RECIPE orders ON fin FROM erp_export AS $$SELECT * FROM read_parquet('orders/*.parquet')$$;";
@@ -182,7 +203,8 @@ async fn changed_recipe_rematerializes_when_nothing_is_glossed() {
     let outcomes = session.execute(narrowed).await.unwrap();
     assert_eq!(done(&outcomes[0]), "DECLARE RECIPE orders ON fin (3 rows)");
 
-    // The rebuilt table has the narrowed shape, one column.
+    // The rebuilt table has the narrowed shape — and the derived view
+    // followed it (regenerated at read, the emitted SQL changed).
     let out = session.execute("SELECT * FROM orders;").await.unwrap();
     match out.last().unwrap() {
         Outcome::Rows(batches) => {

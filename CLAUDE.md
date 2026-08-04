@@ -26,13 +26,17 @@ documents:
   lockstep with iceberg-datafusion, sqlx with iceberg-catalog-sql (see the
   workspace `Cargo.toml` comment and the M2/M3 reports). Built: `parser`
   (GlossqlParser wrapping DataFusion's DFParser; the corpus is its
-  acceptance suite) · `glossary` (sqlx store, supersession, admission) ·
-  `session` (SessionContext assembly, RelationPlanner reads, statement
-  router, recipe materialization) · `catalog` (the workspace Lake:
+  acceptance suite) · `glossary` (sqlx store, supersession, admission,
+  collapse states, write-invalidation) · `session` (SessionContext
+  assembly, RelationPlanner reads, statement router, recipe
+  materialization, derived typed/quarantined pair, detector-at-read,
+  try_to_date/try_to_timestamp) · `catalog` (the workspace Lake:
   iceberg-rust SqlCatalog on SQLite + warehouse dir; datasets are
   namespaces) · `import` (recipe execution over file sources; ADBC executor
-  planned). Planned (a crate is created only when it has real content):
-  `scripts` (rhai + arrow kernels) · `serverd` (Flight SQL + MCP shim).
+  planned) · `scripts` (rhai runtime behind FunctionRuntime, zero-copy
+  column kernels, the reference function library under
+  `crates/scripts/functions/`). Planned (a crate is created only when it
+  has real content): `serverd` (Flight SQL + MCP shim).
 - `reports/` — pivot records, review verdicts, and evaluation records.
 
 **Standing invariant:** workspace `cargo test` passes — every ```sql block

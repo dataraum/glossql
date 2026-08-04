@@ -22,17 +22,160 @@ use datafusion::sql::sqlparser::ast::{
     TableFactor, Value as SQLValue,
 };
 
-use glossql_glossary::{AttestRow, CollapsedRow, RawRow, Scope, Store};
+use glossql_catalog::Lake;
+use glossql_glossary::{AttestRow, CollapsedRow, RawRow, ReadContext, Scope, Store, schemas};
+use serde_json::{Value, json};
 
-use crate::session::SessionError;
+use crate::session::{FunctionRuntime, SessionError, SqlDoor};
 use crate::subject::{pair_subject, resolve_endpoint, resolve_path};
 
-/// State the planner shares with the router: the `USE`'d dataset.
+/// State the planner shares with the router: the `USE`'d dataset, the data
+/// plane, and the script runtime (reads run detectors).
 #[derive(Debug)]
 pub(crate) struct Shared {
     pub store: Store,
     pub dataset: RwLock<Option<String>>,
     pub handle: tokio::runtime::Handle,
+    pub lake: RwLock<Option<Lake>>,
+    pub runtime: RwLock<Arc<dyn FunctionRuntime>>,
+}
+
+impl Shared {
+    pub fn lake(&self) -> Option<Lake> {
+        self.lake.read().expect("lake lock").clone()
+    }
+
+    pub fn runtime(&self) -> Arc<dyn FunctionRuntime> {
+        Arc::clone(&self.runtime.read().expect("runtime lock"))
+    }
+
+    /// What the store cannot know (SPEC.md §5.3): the logical subjects that
+    /// exist — recipe tables minus the `_raw` suffix, plus their columns —
+    /// and each table's current snapshot. The disclosure grid and the
+    /// staleness comparison ride on this.
+    pub async fn read_context(&self) -> Result<ReadContext, SessionError> {
+        let mut ctx = ReadContext::default();
+        let (Some(lake), Some(dataset)) = (
+            self.lake(),
+            self.dataset.read().expect("state lock").clone(),
+        ) else {
+            return Ok(ctx);
+        };
+        for raw in lake.table_names(&dataset).await? {
+            let logical = raw.strip_suffix("_raw").unwrap_or(&raw).to_string();
+            if let Some(snapshot) = lake.snapshot_id(&dataset, &raw).await? {
+                ctx.snapshots.insert(logical.clone(), snapshot);
+            }
+            for column in lake.table_columns(&dataset, &raw).await? {
+                ctx.universe.push(format!("{logical}.{column}"));
+            }
+            ctx.universe.push(logical);
+        }
+        Ok(ctx)
+    }
+}
+
+/// What a detector gets instead of a SQL door: a refusal (SPEC.md §7.1 — a
+/// detector receives the witness's slots and threshold, never table data).
+struct DeniedDoor;
+
+impl SqlDoor for DeniedDoor {
+    fn sql(&self, _query: &str) -> Result<Vec<RecordBatch>, String> {
+        Err("a detector sees slots and threshold, never table data (SPEC.md §7.1)".into())
+    }
+}
+
+/// Detector freshness at read (project lead, 2026-08-04): a verdict missing
+/// or older than the newest slot write recomputes here, is cached like any
+/// function result, and `DELETE FROM cache` still forces it.
+async fn ensure_verdicts(
+    shared: &Shared,
+    dataset: &str,
+    scope: &Scope,
+    aspect: Option<&str>,
+) -> Result<(), SessionError> {
+    for w in shared.store.witnesses_all().await? {
+        if let Some(a) = aspect
+            && w.aspect != a
+        {
+            continue;
+        }
+        let Some(detector) = w.detector.clone() else {
+            continue;
+        };
+        let slots = shared.store.raw_read(dataset, scope, Some(&w.aspect)).await?;
+        let mut newest: std::collections::BTreeMap<&str, &str> = Default::default();
+        for s in &slots {
+            let t = newest.entry(s.subject.as_str()).or_insert(&s.written_at);
+            if s.written_at.as_str() > *t {
+                *t = &s.written_at;
+            }
+        }
+        for (subject, newest) in newest {
+            let fresh = shared
+                .store
+                .cache_get(dataset, subject, &detector)
+                .await?
+                .is_some_and(|c| c.computed_at.as_str() >= newest);
+            if fresh {
+                continue;
+            }
+            let function = shared
+                .store
+                .function(&detector, Some(dataset))
+                .await?
+                .ok_or_else(|| SessionError::UnknownFunction(detector.clone()))?;
+            let doc: Vec<Value> = slots
+                .iter()
+                .filter(|s| s.subject == subject)
+                .map(|s| {
+                    json!({
+                        "speaker": s.speaker,
+                        "actor": s.actor,
+                        "body": serde_json::from_str::<Value>(&s.body)
+                            .unwrap_or_else(|_| Value::String(s.body.clone())),
+                        "written_at": s.written_at,
+                    })
+                })
+                .collect();
+            let context = json!({
+                "subject": subject,
+                "aspect": w.aspect,
+                "witness": w.name,
+                "slots": doc,
+                "threshold": w.threshold,
+            });
+            let output = shared
+                .runtime()
+                .invoke(&function, subject, &context, Arc::new(DeniedDoor))
+                .map_err(SessionError::Runtime)?;
+            schemas::validate_instance(&function.returns, &output).map_err(|detail| {
+                SessionError::OutputRejected {
+                    function: detector.clone(),
+                    detail,
+                }
+            })?;
+            let snapshot = match (shared.lake(), glossary_table_of(subject)) {
+                (Some(lake), Some(table)) => {
+                    lake.snapshot_id(dataset, &format!("{table}_raw")).await?
+                }
+                _ => None,
+            };
+            shared
+                .store
+                .cache_put(dataset, subject, &detector, &output.to_string(), snapshot)
+                .await?;
+        }
+    }
+    Ok(())
+}
+
+/// The subject's table: its first path segment; pair paths have none.
+fn glossary_table_of(subject: &str) -> Option<&str> {
+    if subject.contains(' ') {
+        return None;
+    }
+    subject.split('.').next()
 }
 
 #[derive(Debug)]
@@ -111,10 +254,11 @@ async fn glossary_read(shared: &Shared, args: &[FunctionArg]) -> Result<RecordBa
             shared.store.raw_read(&dataset, &scope, aspect).await?,
         ))
     } else {
+        ensure_verdicts(shared, &dataset, &scope, aspect).await?;
         Ok(collapsed_batch(
             shared
                 .store
-                .collapsed_read(&dataset, &scope, aspect)
+                .collapsed_read(&dataset, &scope, aspect, &shared.read_context().await?)
                 .await?,
         ))
     }
@@ -123,6 +267,7 @@ async fn glossary_read(shared: &Shared, args: &[FunctionArg]) -> Result<RecordBa
 async fn attest_read(shared: &Shared, args: &[FunctionArg]) -> Result<RecordBatch, SessionError> {
     let (subject, _) = split_args(args, false)?;
     let ((dataset, scope), aspect) = decode_scope(shared, subject).await?;
+    ensure_verdicts(shared, &dataset, &scope, aspect.as_deref()).await?;
     Ok(attest_batch(
         shared
             .store
@@ -302,7 +447,7 @@ fn batch(schema: SchemaRef, columns: Vec<ArrayRef>) -> RecordBatch {
     RecordBatch::try_new(schema, columns).expect("column shapes match the schema")
 }
 
-/// `(subject, aspect, value, band, score)` — SPEC.md §5.3, collapsed.
+/// `(subject, aspect, value, band, score, state)` — SPEC.md §5.3, collapsed.
 fn collapsed_batch(rows: Vec<CollapsedRow>) -> RecordBatch {
     let schema = Arc::new(Schema::new(vec![
         utf8("subject"),
@@ -310,6 +455,7 @@ fn collapsed_batch(rows: Vec<CollapsedRow>) -> RecordBatch {
         utf8("value"),
         utf8("band"),
         Field::new("score", DataType::Float64, true),
+        utf8("state"),
     ]));
     batch(
         schema,
@@ -327,6 +473,9 @@ fn collapsed_batch(rows: Vec<CollapsedRow>) -> RecordBatch {
                 rows.iter().map(|r| r.band.as_deref()),
             )),
             Arc::new(Float64Array::from_iter(rows.iter().map(|r| r.score))),
+            Arc::new(StringArray::from_iter_values(
+                rows.iter().map(|r| r.state.as_str()),
+            )),
         ],
     )
 }

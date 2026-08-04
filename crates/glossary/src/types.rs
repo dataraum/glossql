@@ -24,6 +24,10 @@ pub enum Error {
         "table `{table}` has {glosses} gloss(es) — a different SQL is a different table; declare it under another name"
     )]
     RecipeInUse { table: String, glosses: i64 },
+    #[error(
+        "`{name}` ends with an engine-owned suffix — `_raw` and `_quarantined` belong to the derived pair"
+    )]
+    ReservedSuffix { name: String },
     #[error("witness on MEASUREMENT aspect `{0}` must be BY (FUNCTION fn) only")]
     MeasurementWitnessSpeakers(String),
     #[error(
@@ -81,12 +85,19 @@ pub struct RawRow {
     pub actor: String,
     pub body: String,
     pub written_at: String,
+    /// Which slot spoke — `human` | `agent` | `function`. Not part of the
+    /// §5.3 shape; detectors receive it in their slots document.
+    pub speaker: String,
 }
 
-/// One row of the collapsed `GLOSSARY(subject)` read (SPEC.md §5.3). Until
-/// detectors run (M4), `value` follows the minimal honest policy: exactly one
-/// current slot value serves it, anything contested serves NULL; `band` and
-/// `score` stay NULL. Provisional pending the fixture-09 corpus test (§9).
+/// One row of the collapsed `GLOSSARY(subject)` read (SPEC.md §5.3).
+/// `value` is the precedence pick (human > agent > function) unless the
+/// detector's score exceeds the witness threshold; `state` says what the
+/// value's absence or presence means — the read never hides a gap:
+/// `unassessed` (a witness exists, nobody spoke — the row still appears),
+/// `contested` (entropy over threshold, value withheld), `current`, or
+/// `stale` (served and marked: the table's snapshot moved on, or the
+/// column's type decision postdates the write).
 #[derive(Debug, Clone)]
 pub struct CollapsedRow {
     pub subject: String,
@@ -94,6 +105,7 @@ pub struct CollapsedRow {
     pub value: Option<String>,
     pub band: Option<String>,
     pub score: Option<f64>,
+    pub state: String,
 }
 
 /// One row of `ATTEST(...)` — the fixed attest shape (SPEC.md §7.2).

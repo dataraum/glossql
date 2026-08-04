@@ -42,10 +42,13 @@ GLOSS type_patterns ON fin AS $${
     "name": "eu_date",
     "pattern": "^\\d{2}\\.\\d{2}\\.\\d{4}$",
     "inferred_type": "DATE",
-    "standardization": "strptime(value, '%d.%m.%Y')"
+    "standardization": "try_to_date(\"{col}\", '%d.%m.%Y')"
   }]
 }$$;
 ```
+
+(Expr vocabulary respelled 2026-08-04 with fixture 13: patterns speak the
+substrate's SQL, and only NULL-on-failure functions may appear in them.)
 
 `validation` / `cycle` / `metric` teaches are fixtures 04/05/03 authored on a
 human connection. A relationship *reject* teach has no statement: rejected

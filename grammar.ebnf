@@ -52,9 +52,12 @@ recipe_decl       = "RECIPE", name, "ON", name, "FROM", name, "AS", dollar ;
                        runs it, read_parquet/read_csv/read_json resolving
                        under the source's location. Dollar-quoted so
                        foreign-dialect text never meets the host tokenizer;
-                       the result lands as table r in the dataset. Unchanged
-                       re-declaration is a no-op; changed is refused while
-                       glosses exist under the table *)
+                       the result lands as table r_raw; the bare name r is
+                       the engine-derived typed view (identity until `type`
+                       decisions exist), r_quarantined its complement — the
+                       suffixes are engine-owned. Unchanged re-declaration
+                       is a no-op; changed is refused while glosses exist
+                       under the table *)
 
 (* -- datasets ----------------------------------------------------------- *)
 
@@ -149,9 +152,11 @@ all_flag          = "all", "=>", "true" ;
                     (* no subject sweeps the USE'd dataset; "::aspect" narrows
                        to one declared aspect, as in attest_read.
                        collapsed default: one row per (subject, aspect) —
-                       (subject, aspect, value, band, score); value collapsed by
-                       the witness's detector, NULL when the slot is empty or
-                       entropy exceeds the threshold.
+                       (subject, aspect, value, band, score, state); value is
+                       the precedence pick (human > agent > function),
+                       withheld when the detector's score exceeds the
+                       threshold; state in unassessed | contested | current |
+                       stale — every gap visible, stale served-and-marked.
                        all => true: one row per (subject, aspect, kind, witness)
                        — (subject, aspect, kind, witness, actor, body,
                        written_at); kind is the aspect's kind, the speaker is

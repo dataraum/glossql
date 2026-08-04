@@ -126,4 +126,22 @@ impl Lake {
         let ident = TableIdent::new(NamespaceIdent::new(dataset.to_string()), table.to_string());
         Ok(self.catalog.table_exists(&ident).await?)
     }
+
+    /// Column names of `dataset.table`, empty when the table is missing —
+    /// the session's disclosure grid enumerates them as subjects.
+    pub async fn table_columns(&self, dataset: &str, table: &str) -> Result<Vec<String>> {
+        let ident = TableIdent::new(NamespaceIdent::new(dataset.to_string()), table.to_string());
+        if !self.catalog.table_exists(&ident).await? {
+            return Ok(Vec::new());
+        }
+        let table = self.catalog.load_table(&ident).await?;
+        Ok(table
+            .metadata()
+            .current_schema()
+            .as_struct()
+            .fields()
+            .iter()
+            .map(|f| f.name.clone())
+            .collect())
+    }
 }

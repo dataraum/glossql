@@ -3,7 +3,7 @@
 //! supersession per (subject, aspect, actor kind), the provisional collapse
 //! policy (§5.3), and cache semantics (§6).
 
-use glossql_glossary::{Actor, ActorKind, Error, Scope, Store};
+use glossql_glossary::{Actor, ActorKind, Error, ReadContext, Scope, Store};
 use glossql_parser::{Declaration, Gloss, GlossqlParser, Statement};
 
 fn decl(sql: &str) -> Declaration {
@@ -303,8 +303,9 @@ async fn supersession_is_per_subject_aspect_actor_kind() {
 }
 
 #[tokio::test]
-async fn collapse_serves_a_lone_slot_and_nulls_a_contested_one() {
+async fn collapse_serves_by_precedence_human_over_agent() {
     let s = store().await;
+    let ctx = ReadContext::default();
     write(
         &s,
         &agent(),
@@ -313,11 +314,12 @@ async fn collapse_serves_a_lone_slot_and_nulls_a_contested_one() {
     .await
     .unwrap();
     let rows = s
-        .collapsed_read("fin", &Scope::Subject("orders.amount".into()), None)
+        .collapsed_read("fin", &Scope::Subject("orders.amount".into()), None, &ctx)
         .await
         .unwrap();
     assert_eq!(rows.len(), 1);
     assert!(rows[0].value.as_deref().unwrap().contains("EUR"));
+    assert_eq!(rows[0].state, "current");
 
     write(
         &s,
@@ -327,13 +329,13 @@ async fn collapse_serves_a_lone_slot_and_nulls_a_contested_one() {
     .await
     .unwrap();
     let rows = s
-        .collapsed_read("fin", &Scope::Subject("orders.amount".into()), None)
+        .collapsed_read("fin", &Scope::Subject("orders.amount".into()), None, &ctx)
         .await
         .unwrap();
     assert_eq!(rows.len(), 1);
     assert!(
-        rows[0].value.is_none(),
-        "two slots with no detector run is contested — NULL, never a fabricated value"
+        rows[0].value.as_deref().unwrap().contains("USD"),
+        "the human slot outranks the agent slot (ruled 2026-08-04)"
     );
 }
 
@@ -469,4 +471,137 @@ async fn recipe_redeclare_is_content_idempotent_but_refused_once_glossed() {
         s.declare_recipe(&v2).await.unwrap(),
         RecipeAdmission::Unchanged
     );
+}
+
+// -- writes invalidate (project lead, 2026-08-04) --------------------------
+
+#[tokio::test]
+async fn a_gloss_invalidates_the_caches_of_functions_accepting_its_aspect() {
+    let s = store().await;
+    let Declaration::Function(f) = decl(
+        r#"DECLARE FUNCTION conv FOR GLOBAL FROM 'conv.rhai' ACCEPTS (unit) RETURNS $${"type": "object"}$$;"#,
+    ) else {
+        unreachable!()
+    };
+    s.declare_function(&f).await.unwrap();
+    s.cache_put("fin", "orders.amount", "conv", "{}", None)
+        .await
+        .unwrap();
+    s.cache_put("fin", "invoices.total", "conv", "{}", None)
+        .await
+        .unwrap();
+
+    // At or under the subject: the other table's row survives.
+    write(
+        &s,
+        &agent(),
+        r#"GLOSS unit ON orders.amount AS $${"value": "EUR"}$$;"#,
+    )
+    .await
+    .unwrap();
+    assert!(
+        s.cache_get("fin", "orders.amount", "conv")
+            .await
+            .unwrap()
+            .is_none(),
+        "the dependent evidence died with the write"
+    );
+    assert!(
+        s.cache_get("fin", "invoices.total", "conv")
+            .await
+            .unwrap()
+            .is_some()
+    );
+
+    // A dataset-level gloss sweeps the dataset.
+    let g = gloss(r#"GLOSS unit ON fin AS $${"value": "EUR"}$$;"#);
+    s.gloss("fin", &agent(), "unit", "fin", &g.body, None)
+        .await
+        .unwrap();
+    assert!(
+        s.cache_get("fin", "invoices.total", "conv")
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn a_type_decision_kills_the_tables_evidence_but_spares_the_machinery() {
+    let s = store().await;
+    for d in [
+        r#"DECLARE ASPECT type WITH $${"type": "object", "required": ["value"], "properties": {"value": {"type": "string"}, "expr": {"type": "string"}}}$$ AS FACT;"#,
+        r#"DECLARE ASPECT type_candidates WITH $${"type": "object", "required": ["candidates"], "properties": {"candidates": {"type": "array"}}}$$ AS MEASUREMENT;"#,
+    ] {
+        let Declaration::Aspect(a) = decl(d) else { unreachable!() };
+        s.declare_aspect(&a).await.unwrap();
+    }
+    for d in [
+        r#"DECLARE FUNCTION infer_types FOR GLOBAL FROM 'i.rhai' RETURNS $${"type": "object"}$$;"#,
+        r#"DECLARE FUNCTION decide_types FOR GLOBAL FROM 'd.rhai' ACCEPTS (type_candidates) RETURNS $${"type": "object"}$$;"#,
+        r#"DECLARE FUNCTION profile FOR GLOBAL FROM 'p.rhai' RETURNS $${"type": "object"}$$;"#,
+    ] {
+        let Declaration::Function(f) = decl(d) else { unreachable!() };
+        s.declare_function(&f).await.unwrap();
+    }
+    for d in [
+        "DECLARE WITNESS tc_w ON type_candidates BY (FUNCTION infer_types);",
+        "DECLARE WITNESS type_w ON type BY (FUNCTION decide_types, AGENT, HUMAN);",
+    ] {
+        let Declaration::Witness(w) = decl(d) else { unreachable!() };
+        s.declare_witness(&w).await.unwrap();
+    }
+    for f in ["infer_types", "decide_types", "profile"] {
+        s.cache_put("fin", "orders.amount", f, r#"{"candidates": []}"#, None)
+            .await
+            .unwrap();
+    }
+
+    let g = gloss(r#"GLOSS type ON orders.amount AS $${"value": "DECIMAL(12,2)"}$$;"#);
+    s.gloss("fin", &agent(), "type", "orders.amount", &g.body, None)
+        .await
+        .unwrap();
+
+    assert!(
+        s.cache_get("fin", "orders.amount", "profile")
+            .await
+            .unwrap()
+            .is_none(),
+        "analysis of the table's served shape is stale evidence"
+    );
+    for machinery in ["infer_types", "decide_types"] {
+        assert!(
+            s.cache_get("fin", "orders.amount", machinery)
+                .await
+                .unwrap()
+                .is_some(),
+            "`{machinery}` reads raw; its output is the decision chain"
+        );
+    }
+}
+
+#[tokio::test]
+async fn recipe_names_cannot_claim_the_derived_suffixes() {
+    let s = store().await;
+    let Declaration::Dataset(d) =
+        decl(r#"DECLARE DATASET fin SET (purpose: 'test');"#)
+    else {
+        unreachable!()
+    };
+    s.declare_dataset(&d).await.unwrap();
+    let Declaration::Source(src) =
+        decl(r#"DECLARE SOURCE erp SET (type: parquet, location: 'lake/erp');"#)
+    else {
+        unreachable!()
+    };
+    s.declare_source(&src).await.unwrap();
+    let Declaration::Recipe(r) =
+        decl(r#"DECLARE RECIPE orders_raw ON fin FROM erp AS $$SELECT 1$$;"#)
+    else {
+        unreachable!()
+    };
+    assert!(matches!(
+        s.declare_recipe(&r).await.unwrap_err(),
+        Error::ReservedSuffix { .. }
+    ));
 }

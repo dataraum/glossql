@@ -40,11 +40,15 @@ SELECT subject, band FROM ATTEST(fin.trial_balance) WHERE band = 'red';
   skills, without a curated serving layer.
 - The three properties are the benchmark the experiment must meet: context
   stable enough to cache, curation cuts made visible, confirmation state
-  respected. In the new model their natural homes are: caching → the reads
-  are cacheable relations; disclosure → `GLOSSARY()` returns NULL rows
-  rather than omitting subjects; confirmation state → the band from
-  `ATTEST()`. Whether agents actually use them that way is what the
-  experiment tests.
+  respected. Disclosure stopped being experimental 2026-08-04 ("serving
+  wrong information is not an experiment" — project lead): the collapsed
+  read carries `state` — `unassessed` (a witnessed aspect nobody spoke to
+  is a visible row, the "9 of 41" cut), `contested` (value withheld, band
+  says how badly), `current`, `stale` (served and marked — the snapshot
+  moved or the column's type decision postdates the gloss). Confirmation
+  state stays the band from `ATTEST()`. What remains for the experiment is
+  only whether agents *use* the surface — sweep `state != 'current'` and
+  close what they find.
 - Nothing to fix in the grammar; everything to learn in the experiment. If it
   fails, the lesson returns as hardened skills or a read-side construct — the
   read surface itself does not change.

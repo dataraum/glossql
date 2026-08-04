@@ -11,7 +11,7 @@ use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::arrow::util::pretty::pretty_format_batches;
 use datafusion::datasource::MemTable;
 use glossql_glossary::{Actor, ActorKind, FunctionRow, Store};
-use glossql_session::{FunctionRuntime, Outcome, Session};
+use glossql_session::{FunctionRuntime, Outcome, Session, SqlDoor};
 use serde_json::{Value, json};
 
 #[derive(Debug, Default)]
@@ -21,7 +21,13 @@ struct Fake {
 }
 
 impl FunctionRuntime for Fake {
-    fn invoke(&self, function: &FunctionRow, _: &str, context: &Value) -> Result<Value, String> {
+    fn invoke(
+        &self,
+        function: &FunctionRow,
+        _: &str,
+        context: &Value,
+        _: Arc<dyn SqlDoor>,
+    ) -> Result<Value, String> {
         self.invocations.fetch_add(1, Ordering::SeqCst);
         *self.last_context.lock().unwrap() = Some(context.clone());
         Ok(match function.name.as_str() {
@@ -117,7 +123,7 @@ async fn gloss_then_read_collapsed_and_raw() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn two_actor_kinds_contest_the_collapsed_value() {
+async fn the_human_slot_outranks_the_agent_slot_in_collapse() {
     let store = Store::open_memory().await.unwrap();
     let agent = session_with(ActorKind::Agent, "agent-1", &store).await;
     run(&agent, SETUP).await;
@@ -135,18 +141,21 @@ async fn two_actor_kinds_contest_the_collapsed_value() {
     )
     .await;
 
+    // Precedence (ruled 2026-08-04): human > agent > function; no detector
+    // on this aspect, so nothing withholds the value, and the state says it
+    // is current.
     let collapsed = table(
         &agent,
-        "SELECT subject, aspect, value FROM GLOSSARY(orders.amount);",
+        "SELECT subject, aspect, value, state FROM GLOSSARY(orders.amount);",
     )
     .await;
-    insta::assert_snapshot!(collapsed, @r"
-    +---------------+--------+-------+
-    | subject       | aspect | value |
-    +---------------+--------+-------+
-    | orders.amount | unit   |       |
-    +---------------+--------+-------+
-    ");
+    insta::assert_snapshot!(collapsed, @r#"
+    +---------------+--------+------------------+---------+
+    | subject       | aspect | value            | state   |
+    +---------------+--------+------------------+---------+
+    | orders.amount | unit   | {"value": "USD"} | current |
+    +---------------+--------+------------------+---------+
+    "#);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

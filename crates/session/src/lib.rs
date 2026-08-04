@@ -19,5 +19,6 @@
 mod reads;
 mod session;
 mod subject;
+mod typing;
 
-pub use session::{FunctionRuntime, NoRuntime, Outcome, Session, SessionError};
+pub use session::{FunctionRuntime, NoRuntime, Outcome, Session, SessionError, SqlDoor};

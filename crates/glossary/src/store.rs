@@ -18,6 +18,11 @@ use crate::types::{
     RecipeAdmission, RecipeRow, Result, WitnessRow,
 };
 
+/// The aspect that carries typing decisions (SPEC.md §3): its current value
+/// per column drives the derived table view, and a change to it invalidates
+/// the table's cached evidence.
+pub const TYPE_ASPECT: &str = "type";
+
 /// What a read sweeps over (SPEC.md §5.3, §7.2): the whole dataset, or a
 /// subject and everything under it (columns of a table, relationships rooted
 /// at it).
@@ -25,6 +30,34 @@ use crate::types::{
 pub enum Scope {
     Dataset,
     Subject(String),
+}
+
+/// What the session knows and the store cannot: the subjects that exist
+/// (tables and columns from the data plane — the disclosure grid enumerates
+/// them so absence shows as a row, never as omission) and each table's
+/// current snapshot (the staleness comparison). Empty context still collapses
+/// correctly; it just cannot show `unassessed` subjects nobody wrote about
+/// or mark snapshot staleness.
+#[derive(Debug, Clone, Default)]
+pub struct ReadContext {
+    pub universe: Vec<String>,
+    pub snapshots: std::collections::HashMap<String, i64>,
+}
+
+/// One current slot under (subject, aspect): a gloss (human or agent) or a
+/// witness-bound function's cached output. The collapse and the raw read
+/// both build from these.
+#[derive(Debug, Clone)]
+struct Slot {
+    subject: String,
+    aspect: String,
+    /// 0 = human, 1 = agent, 2 = function — the precedence order.
+    rank: u8,
+    actor: String,
+    witness: Option<String>,
+    body: String,
+    written_at: String,
+    snapshot_id: Option<i64>,
 }
 
 impl Scope {
@@ -165,6 +198,11 @@ impl Store {
     pub async fn declare_recipe(&self, decl: &RecipeDecl) -> Result<RecipeAdmission> {
         let dataset = decl.dataset.value.as_str();
         let table = decl.table.value.as_str();
+        // `_raw` and `_quarantined` belong to the derived pair (project
+        // lead, 2026-08-04) — a recipe cannot claim them.
+        if table.ends_with("_raw") || table.ends_with("_quarantined") {
+            return Err(Error::ReservedSuffix { name: table.into() });
+        }
         self.require("dataset", "datasets", dataset).await?;
         self.require("source", "sources", decl.source.value.as_str())
             .await?;
@@ -320,6 +358,12 @@ impl Store {
         .bind(decl.returns.raw.as_str())
         .execute(&self.pool)
         .await?;
+        // A re-declared function is a different function; its cached results
+        // no longer describe anything.
+        sqlx::query("DELETE FROM cache WHERE function = ?")
+            .bind(decl.name.value.as_str())
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 
@@ -455,23 +499,153 @@ impl Store {
         .bind(snapshot_id)
         .execute(&self.pool)
         .await?;
+        self.invalidate(dataset, aspect, subject).await?;
         Ok(())
+    }
+
+    /// Writes invalidate, reads recompute, judgment only supersedes (project
+    /// lead, 2026-08-04). A new value for an aspect kills the cached output
+    /// of every function that `ACCEPTS` it, at and under the subject; a new
+    /// typing decision additionally kills the table's evidence — everything
+    /// that analyzed its served shape — sparing the typing machinery itself,
+    /// whose output *is* the decision and whose input is the raw table.
+    async fn invalidate(&self, dataset: &str, aspect: &str, subject: &str) -> Result<()> {
+        let dependents = self.functions_accepting(aspect).await?;
+        if !dependents.is_empty() {
+            let scope = if subject == dataset {
+                Scope::Dataset
+            } else {
+                Scope::Subject(subject.into())
+            };
+            let (pred, binds) = scope.predicate("subject");
+            let marks = vec!["?"; dependents.len()].join(", ");
+            let sql = format!(
+                "DELETE FROM cache WHERE dataset = ? AND function IN ({marks}) AND {pred}"
+            );
+            let mut q = sqlx::query(&sql).bind(dataset);
+            for f in &dependents {
+                q = q.bind(f.as_str());
+            }
+            for b in &binds {
+                q = q.bind(b);
+            }
+            q.execute(&self.pool).await?;
+        }
+
+        if aspect == TYPE_ASPECT
+            && let Some(table) = table_of(subject)
+        {
+            let exempt = self.typing_machinery().await?;
+            let marks = vec!["?"; exempt.len()].join(", ");
+            let not_in = if exempt.is_empty() {
+                String::new()
+            } else {
+                format!("AND function NOT IN ({marks}) ")
+            };
+            let sql = format!(
+                "DELETE FROM cache WHERE dataset = ? {not_in}\
+                 AND (subject = ? OR subject LIKE ?)"
+            );
+            let mut q = sqlx::query(&sql).bind(dataset);
+            for f in &exempt {
+                q = q.bind(f.as_str());
+            }
+            q.bind(table.to_string())
+                .bind(format!("{table}.%"))
+                .execute(&self.pool)
+                .await?;
+        }
+        Ok(())
+    }
+
+    async fn functions_accepting(&self, aspect: &str) -> Result<Vec<String>> {
+        let rows = sqlx::query("SELECT name, accepts FROM functions WHERE accepts IS NOT NULL")
+            .fetch_all(&self.pool)
+            .await?;
+        let mut names = Vec::new();
+        for r in rows {
+            let accepts: Vec<String> = serde_json::from_str(&r.get::<String, _>("accepts"))
+                .map_err(|e| Error::Corrupt(format!("ACCEPTS: {e}")))?;
+            if accepts.iter().any(|a| a == aspect) {
+                names.push(r.get("name"));
+            }
+        }
+        Ok(names)
+    }
+
+    /// The typing machinery, derived from declarations: speakers on the
+    /// `type` witness, plus speakers on the aspects those functions
+    /// `ACCEPTS` (the evidence they decide from).
+    async fn typing_machinery(&self) -> Result<Vec<String>> {
+        let mut set = std::collections::BTreeSet::new();
+        let mut evidence_aspects = std::collections::BTreeSet::new();
+        for w in self.witnesses_on(TYPE_ASPECT).await? {
+            for f in &w.function_speakers {
+                set.insert(f.clone());
+                if let Some(row) = self.function(f, None).await? {
+                    evidence_aspects.extend(row.accepts);
+                }
+            }
+        }
+        for a in evidence_aspects {
+            for w in self.witnesses_on(&a).await? {
+                set.extend(w.function_speakers.iter().cloned());
+            }
+        }
+        Ok(set.into_iter().collect())
+    }
+
+    /// The newest write into (subject, aspect) across all slots — what a
+    /// detector's verdict must be at least as fresh as.
+    pub async fn newest_slot_write(
+        &self,
+        dataset: &str,
+        subject: &str,
+        aspect: &str,
+    ) -> Result<Option<String>> {
+        let mut newest: Option<String> = sqlx::query(
+            "SELECT MAX(written_at) AS t FROM glossary \
+             WHERE dataset = ? AND subject = ? AND aspect = ?",
+        )
+        .bind(dataset)
+        .bind(subject)
+        .bind(aspect)
+        .fetch_one(&self.pool)
+        .await?
+        .get("t");
+        for w in self.witnesses_on(aspect).await? {
+            for f in &w.function_speakers {
+                let t: Option<String> = sqlx::query(
+                    "SELECT MAX(computed_at) AS t FROM cache \
+                     WHERE dataset = ? AND subject = ? AND function = ?",
+                )
+                .bind(dataset)
+                .bind(subject)
+                .bind(f.as_str())
+                .fetch_one(&self.pool)
+                .await?
+                .get("t");
+                if let Some(t) = t
+                    && newest.as_deref().is_none_or(|n| t.as_str() > n)
+                {
+                    newest = Some(t);
+                }
+            }
+        }
+        Ok(newest)
     }
 
     // -- reads -----------------------------------------------------------
 
-    /// The raw read (SPEC.md §5.3): current gloss slots by supersession,
-    /// plus the measurement slot of every witness-bound function, served
-    /// from the cache. `kind` is the aspect's kind.
-    pub async fn raw_read(
+    /// The current slots under a scope: gloss slots by supersession (one per
+    /// actor kind), plus the measurement slot of every witness-bound
+    /// function, from the cache. Both read shapes build from these.
+    async fn slots(
         &self,
         dataset: &str,
         scope: &Scope,
         aspect: Option<&str>,
-    ) -> Result<Vec<RawRow>> {
-        let kinds = self.aspect_kinds().await?;
-        let kind_of = |aspect: &str| kinds.get(aspect).cloned().unwrap_or_default();
-
+    ) -> Result<Vec<Slot>> {
         let (pred, binds) = scope.predicate("g.subject");
         let aspect_clause = if aspect.is_some() {
             "AND g.aspect = ? "
@@ -479,13 +653,13 @@ impl Store {
             ""
         };
         let sql = format!(
-            "SELECT g.subject, g.aspect, g.actor_id, g.body, g.written_at \
+            "SELECT g.subject, g.aspect, g.actor_kind, g.actor_id, g.body, g.written_at, \
+                    g.snapshot_id \
              FROM glossary g \
              WHERE g.dataset = ? AND {pred} {aspect_clause}AND NOT EXISTS (\
                SELECT 1 FROM glossary n \
                WHERE n.dataset = g.dataset AND n.subject = g.subject \
-                 AND n.aspect = g.aspect AND n.actor_kind = g.actor_kind AND n.id > g.id) \
-             ORDER BY g.subject, g.aspect, g.actor_kind"
+                 AND n.aspect = g.aspect AND n.actor_kind = g.actor_kind AND n.id > g.id)"
         );
         let mut q = sqlx::query(&sql).bind(dataset);
         for b in &binds {
@@ -494,57 +668,102 @@ impl Store {
         if let Some(a) = aspect {
             q = q.bind(a);
         }
-        let mut rows: Vec<RawRow> = q
+        let witnesses = self.witnesses_all().await?;
+        let witness_on = |aspect: &str| {
+            witnesses
+                .iter()
+                .find(|w| w.aspect == aspect)
+                .map(|w| w.name.clone())
+        };
+        let mut rows: Vec<Slot> = q
             .fetch_all(&self.pool)
             .await?
             .into_iter()
             .map(|r| {
                 let aspect: String = r.get("aspect");
-                RawRow {
+                Slot {
                     subject: r.get("subject"),
-                    kind: kind_of(&aspect),
-                    aspect,
-                    witness: None,
+                    rank: match r.get::<String, _>("actor_kind").as_str() {
+                        "human" => 0,
+                        _ => 1,
+                    },
                     actor: r.get("actor_id"),
+                    witness: witness_on(&aspect),
+                    aspect,
                     body: r.get("body"),
                     written_at: r.get("written_at"),
+                    snapshot_id: r.get("snapshot_id"),
                 }
             })
             .collect();
 
-        for w in self.witnesses_all().await? {
+        let (cpred, cbinds) = scope.predicate("c.subject");
+        for w in &witnesses {
             if let Some(a) = aspect
                 && w.aspect != a
             {
                 continue;
             }
             for f in &w.function_speakers {
-                for c in self.latest_cache(dataset, scope, f).await? {
-                    rows.push(RawRow {
-                        subject: c.subject,
-                        kind: kind_of(&w.aspect),
+                let sql = format!(
+                    "SELECT c.subject, c.body, c.computed_at, c.snapshot_id FROM cache c \
+                     WHERE c.dataset = ? AND c.function = ? AND {cpred} AND NOT EXISTS (\
+                       SELECT 1 FROM cache n \
+                       WHERE n.dataset = c.dataset AND n.subject = c.subject \
+                         AND n.function = c.function AND n.id > c.id)"
+                );
+                let mut q = sqlx::query(&sql).bind(dataset).bind(f.as_str());
+                for b in &cbinds {
+                    q = q.bind(b);
+                }
+                for c in q.fetch_all(&self.pool).await? {
+                    rows.push(Slot {
+                        subject: c.get("subject"),
                         aspect: w.aspect.clone(),
-                        witness: Some(w.name.clone()),
+                        rank: 2,
                         actor: f.clone(),
-                        body: c.body,
-                        written_at: c.computed_at,
+                        witness: Some(w.name.clone()),
+                        body: c.get("body"),
+                        written_at: c.get("computed_at"),
+                        snapshot_id: c.get("snapshot_id"),
                     });
                 }
-            }
-        }
-        // Stamp witness names onto gloss slots too, now that they are known.
-        let witnesses = self.witnesses_all().await?;
-        for row in &mut rows {
-            if row.witness.is_none()
-                && let Some(w) = witnesses.iter().find(|w| w.aspect == row.aspect)
-            {
-                row.witness = Some(w.name.clone());
             }
         }
         rows.sort_by(|a, b| {
             (&a.subject, &a.aspect, &a.actor).cmp(&(&b.subject, &b.aspect, &b.actor))
         });
         Ok(rows)
+    }
+
+    /// The raw read (SPEC.md §5.3): every current slot, one row each;
+    /// precedence is the reader's business here. `kind` is the aspect's kind.
+    pub async fn raw_read(
+        &self,
+        dataset: &str,
+        scope: &Scope,
+        aspect: Option<&str>,
+    ) -> Result<Vec<RawRow>> {
+        let kinds = self.aspect_kinds().await?;
+        Ok(self
+            .slots(dataset, scope, aspect)
+            .await?
+            .into_iter()
+            .map(|s| RawRow {
+                kind: kinds.get(&s.aspect).cloned().unwrap_or_default(),
+                speaker: match s.rank {
+                    0 => "human".into(),
+                    1 => "agent".into(),
+                    _ => "function".into(),
+                },
+                subject: s.subject,
+                aspect: s.aspect,
+                witness: s.witness,
+                actor: s.actor,
+                body: s.body,
+                written_at: s.written_at,
+            })
+            .collect())
     }
 
     async fn aspect_kinds(&self) -> Result<std::collections::HashMap<String, String>> {
@@ -557,38 +776,185 @@ impl Store {
             .collect())
     }
 
-    /// The collapsed read (SPEC.md §5.3). Detectors land in M4; until then
-    /// the minimal honest policy: one current slot value → serve it, more
-    /// than one → NULL (unadjudicated is contested). Provisional pending the
-    /// fixture-09 corpus test (SPEC.md §9).
+    /// When the typing decision for each column subject last changed: the
+    /// newest `type` gloss or type-speaker cache write, per subject. The
+    /// staleness comparison for every other aspect's slots.
+    async fn type_decision_times(
+        &self,
+        dataset: &str,
+    ) -> Result<std::collections::HashMap<String, String>> {
+        let mut times: std::collections::HashMap<String, String> = sqlx::query(
+            "SELECT subject, MAX(written_at) AS t FROM glossary \
+             WHERE dataset = ? AND aspect = ? GROUP BY subject",
+        )
+        .bind(dataset)
+        .bind(TYPE_ASPECT)
+        .fetch_all(&self.pool)
+        .await?
+        .into_iter()
+        .map(|r| (r.get("subject"), r.get("t")))
+        .collect();
+        for w in self.witnesses_on(TYPE_ASPECT).await? {
+            for f in &w.function_speakers {
+                let rows = sqlx::query(
+                    "SELECT subject, MAX(computed_at) AS t FROM cache \
+                     WHERE dataset = ? AND function = ? GROUP BY subject",
+                )
+                .bind(dataset)
+                .bind(f.as_str())
+                .fetch_all(&self.pool)
+                .await?;
+                for r in rows {
+                    let subject: String = r.get("subject");
+                    let t: String = r.get("t");
+                    let entry = times.entry(subject).or_default();
+                    if t > *entry {
+                        *entry = t;
+                    }
+                }
+            }
+        }
+        Ok(times)
+    }
+
+    /// The collapsed read (SPEC.md §5.3): value by precedence (human over
+    /// agent over function), withheld only when the detector's score exceeds
+    /// the witness threshold; `state` makes every gap visible — see
+    /// [`CollapsedRow`]. The `ReadContext` universe adds `unassessed` rows
+    /// for witnessed aspects nobody spoke to.
     pub async fn collapsed_read(
         &self,
         dataset: &str,
         scope: &Scope,
         aspect: Option<&str>,
+        ctx: &ReadContext,
     ) -> Result<Vec<CollapsedRow>> {
-        let raw = self.raw_read(dataset, scope, aspect).await?;
-        let mut grouped: std::collections::BTreeMap<(String, String), Vec<&RawRow>> =
+        let slots = self.slots(dataset, scope, aspect).await?;
+        let mut grouped: std::collections::BTreeMap<(String, String), Vec<&Slot>> =
             std::collections::BTreeMap::new();
-        for row in &raw {
+        for s in &slots {
             grouped
-                .entry((row.subject.clone(), row.aspect.clone()))
+                .entry((s.subject.clone(), s.aspect.clone()))
                 .or_default()
-                .push(row);
+                .push(s);
         }
-        Ok(grouped
-            .into_iter()
-            .map(|((subject, aspect), slots)| CollapsedRow {
+
+        let witnesses = self.witnesses_all().await?;
+        // The detector's verdicts, per subject: (band, score) from its
+        // latest cache rows.
+        let mut verdicts: std::collections::HashMap<(String, String), (String, f64)> =
+            std::collections::HashMap::new();
+        for w in &witnesses {
+            if let Some(a) = aspect
+                && w.aspect != a
+            {
+                continue;
+            }
+            let Some(detector) = &w.detector else { continue };
+            for c in self.latest_cache(dataset, scope, detector).await? {
+                let body: Value = serde_json::from_str(&c.body)
+                    .map_err(|e| Error::Corrupt(format!("attest body for `{detector}`: {e}")))?;
+                if let (Some(band), Some(score)) = (
+                    body.pointer("/band").and_then(Value::as_str),
+                    body.pointer("/score").and_then(Value::as_f64),
+                ) {
+                    verdicts.insert((c.subject.clone(), w.aspect.clone()), (band.into(), score));
+                }
+            }
+        }
+        let threshold_of = |aspect: &str| {
+            witnesses
+                .iter()
+                .find(|w| w.aspect == aspect)
+                .and_then(|w| w.threshold)
+        };
+
+        let decisions = self.type_decision_times(dataset).await?;
+        let mut rows = Vec::new();
+        for ((subject, aspect), mut group) in grouped {
+            let verdict = verdicts.get(&(subject.clone(), aspect.clone()));
+            let (band, score) = match verdict {
+                Some((b, s)) => (Some(b.clone()), Some(*s)),
+                None => (None, None),
+            };
+            let contested = matches!(
+                (verdict, threshold_of(&aspect)),
+                (Some((_, s)), Some(t)) if *s > t
+            );
+            if contested {
+                rows.push(CollapsedRow {
+                    subject,
+                    aspect,
+                    value: None,
+                    band,
+                    score,
+                    state: "contested".into(),
+                });
+                continue;
+            }
+            group.sort_by_key(|s| s.rank);
+            let serving = group[0];
+            // Serve-and-mark (project lead, 2026-08-04): staleness never
+            // suppresses a value, it shows beside it.
+            let snapshot_moved = serving.snapshot_id.is_some_and(|seen| {
+                table_of(&subject)
+                    .and_then(|t| ctx.snapshots.get(t))
+                    .is_some_and(|current| *current != seen)
+            });
+            let decision_moved = aspect != TYPE_ASPECT
+                && subject.contains('.')
+                && !subject.contains(' ')
+                && decisions
+                    .get(&subject)
+                    .is_some_and(|t| *t > serving.written_at);
+            rows.push(CollapsedRow {
                 subject,
                 aspect,
-                value: match slots.as_slice() {
-                    [only] => Some(only.body.clone()),
-                    _ => None,
+                value: Some(serving.body.clone()),
+                band,
+                score,
+                state: if snapshot_moved || decision_moved {
+                    "stale".into()
+                } else {
+                    "current".into()
                 },
-                band: None,
-                score: None,
-            })
-            .collect())
+            });
+        }
+
+        // Disclosure (fixture 09's benchmark): a witnessed aspect nobody
+        // spoke to is a visible row, not an omission.
+        let witnessed: Vec<&str> = witnesses
+            .iter()
+            .filter(|w| aspect.is_none_or(|a| w.aspect == a))
+            .map(|w| w.aspect.as_str())
+            .collect();
+        let present: std::collections::HashSet<(String, String)> = rows
+            .iter()
+            .map(|r| (r.subject.clone(), r.aspect.clone()))
+            .collect();
+        for subject in &ctx.universe {
+            let in_scope = match scope {
+                Scope::Dataset => true,
+                Scope::Subject(s) => subject == s || subject.starts_with(&format!("{s}.")),
+            };
+            if !in_scope {
+                continue;
+            }
+            for a in &witnessed {
+                if !present.contains(&(subject.clone(), (*a).to_string())) {
+                    rows.push(CollapsedRow {
+                        subject: subject.clone(),
+                        aspect: (*a).into(),
+                        value: None,
+                        band: None,
+                        score: None,
+                        state: "unassessed".into(),
+                    });
+                }
+            }
+        }
+        rows.sort_by(|a, b| (&a.subject, &a.aspect).cmp(&(&b.subject, &b.aspect)));
+        Ok(rows)
     }
 
     /// `ATTEST(...)` (SPEC.md §7.2): detector outputs, served from the
@@ -674,6 +1040,14 @@ impl Store {
         .bind(snapshot_id)
         .execute(&self.pool)
         .await?;
+        // A measurement's new value invalidates like a gloss would: through
+        // the aspect its witness binds it to. Detectors bind to no aspect as
+        // speakers, so their verdicts invalidate nothing.
+        for w in self.witnesses_all().await? {
+            if w.function_speakers.iter().any(|f| f == function) {
+                self.invalidate(dataset, &w.aspect, subject).await?;
+            }
+        }
         Ok(())
     }
 
@@ -853,6 +1227,15 @@ impl Store {
         }
         Ok(())
     }
+}
+
+/// The table a subject's snapshot rides on: its first path segment. Pair
+/// paths (they contain spaces) have none.
+fn table_of(subject: &str) -> Option<&str> {
+    if subject.contains(' ') {
+        return None;
+    }
+    Some(subject.split('.').next().unwrap_or(subject))
 }
 
 fn settings_json(settings: &[glossql_parser::Setting]) -> String {
