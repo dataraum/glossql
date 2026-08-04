@@ -23,6 +23,12 @@ use crate::types::{
 /// the table's cached evidence.
 pub const TYPE_ASPECT: &str = "type";
 
+/// The aspect that carries eligibility decisions (SPEC.md §3): a column
+/// whose current value is `{"value": false}` is dropped from the typed
+/// projection — raw and the glossary keep it, and a superseding gloss
+/// brings it back at the next read.
+pub const ELIGIBLE_ASPECT: &str = "eligible";
+
 /// The engine-owned suffix of the table behind a logical name (SPEC.md §3):
 /// recipes land `<t>_raw`; the bare name is the derived view. One
 /// definition — the session's naming and the scripts' `raw_of` both read it.

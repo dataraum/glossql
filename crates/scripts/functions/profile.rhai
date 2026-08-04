@@ -1,13 +1,49 @@
-// Column profile (fixture 11): the deterministic profile plane as a
-// measurement. Subject is a column path; the data is the raw table.
-let column = subject.split(".")[1];
-let t = db.query(`SELECT "${column}" AS v FROM "${raw_of(subject)}"`);
+// Column profile (fixture 11): the deterministic profile plane as one
+// measurement — counts, distribution shape, string lengths, top values.
+// It measures the served plane, the typed view under the bare name, so
+// null_ratio counts failed casts and min/max order as their types —
+// v0.3's gate exactly (statistics ran on the typed table). Before any
+// decision the view is identity, so the profile reads raw values then.
+// Numeric facts appear when the values read as numbers; skewness and
+// kurtosis stayed behind: nothing consumed them.
+let parts = subject.split(".");
+let column = parts[1];
+let t = db.query(`SELECT "${column}" AS v FROM "${parts[0]}"`);
 let c = t.col("v");
 let n = c.count();
 let nulls = c.null_count();
-#{
+let non_null = n - nulls;
+let distinct = c.distinct();
+
+let profile = #{
+    total: n,
     null_ratio: if n == 0 { 0.0 } else { nulls.to_float() / n.to_float() },
-    distinct: c.distinct(),
+    distinct: distinct,
+    cardinality_ratio: if non_null == 0 { 0.0 } else { distinct.to_float() / non_null.to_float() },
     min: c.min(),
     max: c.max(),
+    top_values: c.top_k(20),
+};
+
+let lengths = c.len_stats();
+if lengths != () {
+    profile.lengths = lengths;
 }
+
+let mean = c.mean();
+if mean != () {
+    profile.numeric = #{
+        mean: mean,
+        stddev: c.stddev(),
+        mad: c.mad(),
+        percentiles: #{
+            p01: c.percentile(0.01),
+            p25: c.percentile(0.25),
+            p50: c.percentile(0.5),
+            p75: c.percentile(0.75),
+            p99: c.percentile(0.99),
+        },
+    };
+}
+
+profile

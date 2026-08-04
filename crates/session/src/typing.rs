@@ -17,7 +17,7 @@ use datafusion::logical_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion::prelude::SessionContext;
-use glossql_glossary::{ReadContext, Scope, Store, TYPE_ASPECT};
+use glossql_glossary::{ELIGIBLE_ASPECT, ReadContext, Scope, Store, TYPE_ASPECT};
 use serde_json::Value;
 
 use crate::session::SessionError;
@@ -73,15 +73,51 @@ pub(crate) async fn decisions(
     Ok(decisions)
 }
 
+/// Columns whose current `eligible` decision is false (ruled 2026-08-04):
+/// dropped from the typed projection, because downstream readers scan every
+/// column they see and an all-null column trips each of them in turn. Raw
+/// and the glossary keep the column. A withheld (contested) value is no
+/// decision — the column stays.
+pub(crate) async fn ineligible(
+    store: &Store,
+    dataset: &str,
+    table: &str,
+) -> Result<std::collections::HashSet<String>, SessionError> {
+    let rows = store
+        .collapsed_read(
+            dataset,
+            &Scope::Subject(table.to_string()),
+            Some(ELIGIBLE_ASPECT),
+            &ReadContext::default(),
+        )
+        .await?;
+    let mut dropped = std::collections::HashSet::new();
+    for row in rows {
+        let Some(column) = row.subject.strip_prefix(&format!("{table}.")) else {
+            continue;
+        };
+        let Some(body) = row.value else { continue };
+        let Ok(body) = serde_json::from_str::<Value>(&body) else {
+            continue;
+        };
+        if body.pointer("/value").and_then(Value::as_bool) == Some(false) {
+            dropped.insert(column.to_string());
+        }
+    }
+    Ok(dropped)
+}
+
 /// The emitted pair, as SQL text — the inspectable record. v0.3 semantics
 /// (grounded 2026-08-04): typed keeps every row, a failed cast is a NULL
 /// cell; quarantine is the complement copy in raw shape, any column failing
-/// on a non-NULL value.
+/// on a non-NULL value. Ineligible columns leave the typed projection and
+/// its quarantine checks; the quarantine copy stays raw-shaped and whole.
 pub(crate) fn pair_sql(
     logical: &str,
     raw: &str,
     columns: &[String],
     decisions: &[Decision],
+    ineligible: &std::collections::HashSet<String>,
 ) -> (String, String) {
     let of = |c: &str| decisions.iter().find(|d| d.column == c);
     let cast = |d: &Decision| {
@@ -91,7 +127,13 @@ pub(crate) fn pair_sql(
             .unwrap_or_else(|| format!("\"{}\"", d.column));
         format!("TRY_CAST({inner} AS {})", d.target)
     };
-    let projection: Vec<String> = columns
+    let mut served: Vec<&String> = columns.iter().filter(|c| !ineligible.contains(*c)).collect();
+    if served.is_empty() {
+        // A view needs columns; a table with nothing eligible keeps its raw
+        // shape — every value it serves is one eligibility already ruled on.
+        served = columns.iter().collect();
+    }
+    let projection: Vec<String> = served
         .iter()
         .map(|c| match of(c) {
             Some(d) => format!("{} AS \"{c}\"", cast(d)),
@@ -102,7 +144,7 @@ pub(crate) fn pair_sql(
         "CREATE OR REPLACE VIEW \"{logical}\" AS SELECT {} FROM \"{raw}\"",
         projection.join(", ")
     );
-    let checks: Vec<String> = columns
+    let checks: Vec<String> = served
         .iter()
         .filter_map(|c| {
             of(c).map(|d| format!("(\"{c}\" IS NOT NULL AND {} IS NULL)", cast(d)))

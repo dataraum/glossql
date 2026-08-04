@@ -84,6 +84,77 @@ fn scope_carries_subject_context_and_the_door() {
 }
 
 #[test]
+fn distribution_kernels_compute_textbook_values() {
+    let dir = tempfile::tempdir().unwrap();
+    let rt = runtime_with(
+        dir.path(),
+        "t.rhai",
+        r#"
+        let c = db.query("ignored").col("v");
+        #{
+            mean: c.mean(),
+            stddev: c.stddev(),
+            p50: c.percentile(0.5),
+            mad: c.mad(),
+            top: c.top_k(1),
+            lengths: c.len_stats(),
+        }
+        "#,
+    );
+    let out = rt
+        .invoke(&function("t.rhai"), "s", &Value::Null, Arc::new(FakeDoor))
+        .unwrap();
+    // Parsed values are [12.5, 8.0]: mean 10.25, sample stddev 3.1820…,
+    // interpolated median 10.25, MAD 2.25.
+    assert!((out["mean"].as_f64().unwrap() - 10.25).abs() < 1e-9);
+    assert!((out["stddev"].as_f64().unwrap() - 3.181980515).abs() < 1e-6);
+    assert!((out["p50"].as_f64().unwrap() - 10.25).abs() < 1e-9);
+    assert!((out["mad"].as_f64().unwrap() - 2.25).abs() < 1e-9);
+    // Ties break alphabetically; every non-null value appears once.
+    assert_eq!(out["top"], json!([{"value": "12.50", "count": 1}]));
+    assert_eq!(out["lengths"], json!({"min": 3, "max": 5, "avg": 4.0}));
+}
+
+#[test]
+fn trial_casts_speak_the_substrates_type_spellings() {
+    let dir = tempfile::tempdir().unwrap();
+    let rt = runtime_with(
+        dir.path(),
+        "t.rhai",
+        r#"
+        let c = db.query("ignored").col("v");
+        #{
+            decimal: c.parse_rate("DECIMAL(12,2)"),
+            double: c.parse_rate("DOUBLE PRECISION"),
+            unsigned: c.parse_rate("INTEGER UNSIGNED"),
+            micros: c.parse_rate("TIMESTAMP(6)"),
+        }
+        "#,
+    );
+    let out = rt
+        .invoke(&function("t.rhai"), "s", &Value::Null, Arc::new(FakeDoor))
+        .unwrap();
+    // "12.50" and "8.00" read as decimals and doubles; neither is an
+    // unsigned integer or a timestamp.
+    assert!((out["decimal"].as_f64().unwrap() - 2.0 / 3.0).abs() < 1e-9);
+    assert!((out["double"].as_f64().unwrap() - 2.0 / 3.0).abs() < 1e-9);
+    assert_eq!(out["unsigned"], json!(0.0));
+    assert_eq!(out["micros"], json!(0.0));
+
+    // A spelling DataFusion rejects is refused, not silently trialed —
+    // the defect class v0.3's duckdb_types module exists to close.
+    let rt = runtime_with(
+        dir.path(),
+        "bad.rhai",
+        r#"db.query("ignored").col("v").parse_rate("TIMESTAMP_NS")"#,
+    );
+    let err = rt
+        .invoke(&function("bad.rhai"), "s", &Value::Null, Arc::new(FakeDoor))
+        .unwrap_err();
+    assert!(err.contains("not a cast target"), "{err}");
+}
+
+#[test]
 fn script_paths_stay_under_the_root() {
     let dir = tempfile::tempdir().unwrap();
     let rt = RhaiRuntime::new(dir.path());

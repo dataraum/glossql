@@ -3,7 +3,9 @@
 //! taught patterns; `decide_types`' pick fills the `type` slot; the typed
 //! view serves under the bare name with `orders_quarantined` beside it; an
 //! agent gloss supersedes the pick; writes invalidate dependent evidence;
-//! the detector adjudicates at read; the collapsed read discloses state.
+//! the detector adjudicates at read; the collapsed read discloses state;
+//! the quality plane (outliers, eligibility) chains on the profile through
+//! ACCEPTS; an ineligible column leaves the view and returns by gloss.
 
 use std::sync::Arc;
 
@@ -21,6 +23,7 @@ async fn parquet_fixture(root: &std::path::Path) {
         Field::new("order_id", DataType::Int64, true),
         Field::new("amount", DataType::Utf8, true),
         Field::new("order_date", DataType::Utf8, true),
+        Field::new("legacy_code", DataType::Utf8, true),
     ]));
     let batch = RecordBatch::try_new(Arc::clone(&schema), vec![
         Arc::new(Int64Array::from(vec![1, 2, 3, 4, 5])),
@@ -34,6 +37,7 @@ async fn parquet_fixture(root: &std::path::Path) {
             "18.01.2024",
             "19.01.2024",
         ])),
+        Arc::new(StringArray::from(vec![None::<&str>; 5])),
     ])
     .unwrap();
     let ctx = SessionContext::new();
@@ -95,6 +99,12 @@ DECLARE ASPECT behavior WITH $${
   "type": "object", "required": ["value"],
   "properties": {"value": {"enum": ["stock", "flow"]}}
 }$$ AS FACT;
+DECLARE ASPECT column_profile WITH $${"type": "object"}$$ AS MEASUREMENT;
+DECLARE ASPECT outlier_profile WITH $${"type": "object"}$$ AS MEASUREMENT;
+DECLARE ASPECT eligible WITH $${
+  "type": "object", "required": ["value"],
+  "properties": {"value": {"type": "boolean"}, "reason": {"type": "string"}}
+}$$ AS FACT;
 
 DECLARE FUNCTION infer_types FOR GLOBAL FROM 'functions/infer_types.rhai'
   ACCEPTS (type_patterns)
@@ -106,6 +116,13 @@ DECLARE FUNCTION decide_types FOR GLOBAL FROM 'functions/decide_types.rhai'
              "properties": {"value": {"type": "string"}, "expr": {"type": "string"}}}$$;
 DECLARE FUNCTION profile FOR GLOBAL FROM 'functions/profile.rhai'
   RETURNS $${"type": "object"}$$;
+DECLARE FUNCTION outliers FOR GLOBAL FROM 'functions/outliers.rhai'
+  ACCEPTS (column_profile)
+  RETURNS $${"type": "object", "required": ["applicable"]}$$;
+DECLARE FUNCTION decide_eligibility FOR GLOBAL FROM 'functions/decide_eligibility.rhai'
+  ACCEPTS (column_profile)
+  RETURNS $${"type": "object", "required": ["value"],
+             "properties": {"value": {"type": "boolean"}, "reason": {"type": "string"}}}$$;
 DECLARE FUNCTION slot_entropy FOR GLOBAL FROM 'functions/slot_entropy.rhai'
   RETURNS $${
     "type": "object",
@@ -119,6 +136,10 @@ DECLARE FUNCTION slot_entropy FOR GLOBAL FROM 'functions/slot_entropy.rhai'
   }$$;
 
 DECLARE WITNESS type_candidates_w ON type_candidates BY (FUNCTION infer_types);
+DECLARE WITNESS column_profile_w ON column_profile BY (FUNCTION profile);
+DECLARE WITNESS outlier_profile_w ON outlier_profile BY (FUNCTION outliers);
+DECLARE WITNESS eligible_w ON eligible BY (FUNCTION decide_eligibility, AGENT, HUMAN)
+  DETECTOR slot_entropy;
 DECLARE WITNESS type_w ON type BY (FUNCTION decide_types, AGENT, HUMAN)
   DETECTOR slot_entropy;
 DECLARE WITNESS behavior_w ON behavior BY (AGENT, HUMAN)
@@ -204,6 +225,19 @@ async fn fixture_11_with_real_scripts() {
         .unwrap();
     assert_eq!(one(&cached), "1");
 
+    // The outlier chain rides the profile: the fences come from the cached
+    // quartiles and MAD, the door only counts what lies beyond them.
+    agent
+        .execute("SELECT outliers() FROM orders.amount;")
+        .await
+        .unwrap();
+    let outlier = agent
+        .execute("SELECT value FROM GLOSSARY(orders.amount::outlier_profile);")
+        .await
+        .unwrap();
+    assert!(one(&outlier).contains("\"applicable\":true"), "{}", one(&outlier));
+    assert!(one(&outlier).contains("\"count\":1"), "99.90 is beyond both fences: {}", one(&outlier));
+
     // An agent gloss supersedes the function's pick — and the typing
     // decision changing kills the table's evidence, sparing the typing
     // machinery (writes invalidate, reads recompute).
@@ -217,7 +251,7 @@ async fn fixture_11_with_real_scripts() {
         .unwrap();
     assert!(one(&served).contains("DECIMAL(12,2)"));
     let profile_rows = agent
-        .execute("SELECT count(*) FROM cache WHERE function = 'profile';")
+        .execute("SELECT count(*) FROM cache WHERE function IN ('profile', 'outliers');")
         .await
         .unwrap();
     assert_eq!(one(&profile_rows), "0", "the table's evidence died with the decision");
@@ -334,4 +368,48 @@ async fn fixture_11_with_real_scripts() {
         "min_confidence 0.9 with no patterns falls back: {}",
         one(&redecided)
     );
+
+    // Eligibility is its own gloss (ruled 2026-08-04): the all-null
+    // column's pick drops it from the typed view — raw and the glossary
+    // keep it, and a superseding gloss brings it back. v0.3's irreversible
+    // ALTER-drop, respelled as a reversible projection.
+    human
+        .execute(
+            "SELECT profile() FROM orders.legacy_code;\n\
+             SELECT decide_eligibility() FROM orders.legacy_code;",
+        )
+        .await
+        .unwrap();
+    let pick = human
+        .execute("SELECT value FROM GLOSSARY(orders.legacy_code::eligible);")
+        .await
+        .unwrap();
+    assert!(one(&pick).contains("false"), "{}", one(&pick));
+    let gone = human
+        .execute("SELECT legacy_code FROM orders;")
+        .await
+        .unwrap_err();
+    assert!(gone.to_string().contains("legacy_code"), "{gone}");
+    let kept = human
+        .execute("SELECT count(legacy_code) FROM orders_raw;")
+        .await
+        .unwrap();
+    assert_eq!(one(&kept), "0", "raw keeps the column; every value is NULL");
+
+    human
+        .execute(
+            r#"GLOSS eligible ON orders.legacy_code AS $${"value": true, "reason": "kept for audit"}$$;"#,
+        )
+        .await
+        .unwrap();
+    let back = human
+        .execute("SELECT count(legacy_code) FROM orders;")
+        .await
+        .unwrap();
+    assert_eq!(one(&back), "0", "the superseding gloss restored the column");
+    let band = human
+        .execute("SELECT band FROM ATTEST(orders.legacy_code::eligible);")
+        .await
+        .unwrap();
+    assert_eq!(one(&band), "yellow", "the disagreement with the pick stays visible");
 }

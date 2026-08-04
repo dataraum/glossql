@@ -88,6 +88,38 @@ SELECT decide_types() FROM fin.orders.amount;
 SELECT sum(amount) FROM orders;
 ```
 
+The quality plane chains on the profile — the outlier fences reuse its
+quartiles and MAD, the eligibility pick reads its null ratio, and both
+caches die with a re-profile through the `ACCEPTS` rule. Eligibility is a
+witness slot like typing (ruled 2026-08-04): a `false` pick drops the
+column from the derived view, `orders_raw` and the glossary keep it, and
+a superseding gloss brings it back:
+
+```glossql
+DECLARE ASPECT outlier_profile WITH $${
+  "type": "object", "required": ["applicable"],
+  "properties": {"applicable": {"type": "boolean"},
+                 "iqr": {"type": "object"}, "zscore": {"type": "object"}}
+}$$ AS MEASUREMENT;
+DECLARE FUNCTION outliers FOR GLOBAL FROM 'functions/outliers.rhai'
+  ACCEPTS (column_profile)
+  RETURNS $${"type": "object", "required": ["applicable"]}$$;
+DECLARE WITNESS outlier_profile_w ON outlier_profile BY (FUNCTION outliers);
+
+DECLARE ASPECT eligible WITH $${
+  "type": "object", "required": ["value"],
+  "properties": {"value": {"type": "boolean"}, "reason": {"type": "string"}}
+}$$ AS FACT;
+DECLARE FUNCTION decide_eligibility FOR GLOBAL FROM 'functions/decide_eligibility.rhai'
+  ACCEPTS (column_profile)
+  RETURNS $${"type": "object", "required": ["value"],
+    "properties": {"value": {"type": "boolean"}, "reason": {"type": "string"}}}$$;
+DECLARE WITNESS eligible_w ON eligible BY (FUNCTION decide_eligibility, AGENT, HUMAN)
+  DETECTOR slot_entropy;
+
+SELECT outliers(), decide_eligibility() FROM fin.orders.amount;
+```
+
 Semantic annotation stays agent glosses (an agent connection, reading the
 measurements first); a typing correction is the same gesture on the `type`
 aspect — the override case, superseding the function's pick:
@@ -134,6 +166,18 @@ that the grammar knows about.
   exist), and `orders_quarantined` is the complement — v0.3's actual
   semantics (cell-NULL typed, full row count, audit-copy quarantine),
   regenerated at read from the `type` decisions.
+- **Eligibility is a gloss, and the gate is the projection** (ruled
+  2026-08-04): v0.3's phase `ALTER`-dropped the column from the lake table
+  and deleted its metadata rows — irreversible, with no override surface —
+  while its `WARN` tier and audit table were read by nobody. Here the pick
+  is a witness slot like typing: `false` drops the column from the derived
+  view, raw and the glossary keep it, and supersession is the override.
+  The rule set that was YAML behind an `eval()` is the script itself; the
+  one rule that ever fired on real data (all-null) is the one that ports.
+- **Benford's law dropped** (ruled 2026-08-04): the only domain-leaning
+  measurement in the deterministic plane — and the only numpy/scipy
+  dependency in it — consumed by nothing as a signal. It never ports;
+  whoever wants it writes a script.
 - `run_id` versioning and the promote/head flip are the cache and
   supersession mechanics — implementation by ground rule; the only surface
   is deleting cached rows to force recomputation (REFRESH was dropped

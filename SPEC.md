@@ -89,8 +89,12 @@ failed cast a NULL cell, never a lost row. `segments_quarantined` is the
 complement in raw shape: the rows where any decided column fails on a
 non-NULL value. A typing decision is the collapsed value of the `type`
 aspect per column (§5.3): the inference function's pick by default, agent
-and human glosses superseding it. Nothing regenerates on write — the pair
-follows the current decisions at the next read. The `_raw` and
+and human glosses superseding it. An eligibility decision is the collapsed
+`eligible` aspect the same way: a column whose current value is false
+leaves the typed projection and its quarantine checks — `segments_raw` and
+the glossary keep it, and a superseding gloss restores it. Nothing
+regenerates on write — the pair follows the current decisions at the next
+read. The `_raw` and
 `_quarantined` suffixes belong to the engine; subjects stay logical
 (`segments.amount`), and their snapshots ride the raw table.
 

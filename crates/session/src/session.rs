@@ -327,8 +327,10 @@ impl Session {
             }
             let decisions =
                 crate::typing::decisions(&self.shared.store, &dataset, logical).await?;
+            let ineligible =
+                crate::typing::ineligible(&self.shared.store, &dataset, logical).await?;
             let (typed, quarantine) =
-                crate::typing::pair_sql(logical, &raw, &columns, &decisions);
+                crate::typing::pair_sql(logical, &raw, &columns, &decisions, &ineligible);
             let emitted = format!("{typed}\n{quarantine}");
             if self.derived.read().expect("derived").get(logical) == Some(&emitted) {
                 continue;
