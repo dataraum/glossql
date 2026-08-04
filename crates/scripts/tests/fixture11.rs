@@ -78,37 +78,53 @@ fn one(outcomes: &[Outcome]) -> String {
     }
 }
 
+// The corpus block verbatim (fixture 11): shape-descriptive schemas on the
+// aspects — the one live contract — RETURNS as aspect references, and the
+// only witness the one with judgment in it. `slot_entropy` has no RETURNS:
+// that shape *is* the detector role.
 const DECLARATIONS: &str = r#"
 DECLARE ASPECT behavior WITH $${
   "type": "object", "required": ["value"],
   "properties": {"value": {"enum": ["stock", "flow"]}}
 }$$ AS FACT;
-DECLARE ASPECT column_profile WITH $${"type": "object"}$$ AS MEASUREMENT;
-DECLARE ASPECT outlier_profile WITH $${"type": "object"}$$ AS MEASUREMENT;
-DECLARE ASPECT temporal_profile WITH $${"type": "object"}$$ AS MEASUREMENT;
+DECLARE ASPECT column_profile WITH $${
+  "type": "object",
+  "required": ["total", "null_ratio", "distinct"],
+  "properties": {
+    "total": {"type": "integer"}, "null_ratio": {"type": "number"},
+    "distinct": {"type": "integer"}, "cardinality_ratio": {"type": "number"},
+    "min": {}, "max": {}, "top_values": {"type": "array"},
+    "lengths": {"type": "object"},
+    "numeric": {
+      "type": "object",
+      "required": ["mean", "mad", "percentiles"],
+      "properties": {"mean": {}, "stddev": {}, "mad": {},
+                     "percentiles": {"type": "object"}}
+    }
+  }
+}$$ AS MEASUREMENT;
+DECLARE ASPECT outlier_profile WITH $${
+  "type": "object", "required": ["applicable"],
+  "properties": {"applicable": {"type": "boolean"},
+                 "iqr": {"type": "object"}, "zscore": {"type": "object"}}
+}$$ AS MEASUREMENT;
+DECLARE ASPECT temporal_profile WITH $${
+  "type": "object", "required": ["applicable"],
+  "properties": {"applicable": {"type": "boolean"},
+                 "granularity": {"type": "string"},
+                 "confidence": {"type": "number"},
+                 "completeness": {"type": "object"}, "gaps": {"type": "object"}}
+}$$ AS MEASUREMENT;
 
 DECLARE FUNCTION profile FOR GLOBAL FROM 'functions/profile.rhai'
-  RETURNS $${"type": "object"}$$;
+  RETURNS column_profile;
 DECLARE FUNCTION outliers FOR GLOBAL FROM 'functions/outliers.rhai'
   ACCEPTS (column_profile)
-  RETURNS $${"type": "object", "required": ["applicable"]}$$;
+  RETURNS outlier_profile;
 DECLARE FUNCTION temporal FOR GLOBAL FROM 'functions/temporal.rhai'
-  RETURNS $${"type": "object", "required": ["applicable"]}$$;
-DECLARE FUNCTION slot_entropy FOR GLOBAL FROM 'functions/slot_entropy.rhai'
-  RETURNS $${
-    "type": "object",
-    "required": ["subject", "aspect", "witness", "band", "score", "computed_at"],
-    "properties": {
-      "subject": {"type": "string"}, "aspect": {"type": "string"},
-      "witness": {"type": "string"},
-      "band": {"enum": ["green", "yellow", "orange", "red"]},
-      "score": {"type": "number", "minimum": 0, "maximum": 1},
-      "computed_at": {"type": "string"}}
-  }$$;
+  RETURNS temporal_profile;
+DECLARE FUNCTION slot_entropy FOR GLOBAL FROM 'functions/slot_entropy.rhai';
 
-DECLARE WITNESS column_profile_w ON column_profile BY (FUNCTION profile);
-DECLARE WITNESS outlier_profile_w ON outlier_profile BY (FUNCTION outliers);
-DECLARE WITNESS temporal_profile_w ON temporal_profile BY (FUNCTION temporal);
 DECLARE WITNESS behavior_w ON behavior BY (AGENT, HUMAN)
   DETECTOR slot_entropy THRESHOLD 0.7;
 "#;

@@ -1,7 +1,5 @@
 //! Row and actor types served by the store.
 
-use serde_json::Value;
-
 pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug, thiserror::Error)]
@@ -24,12 +22,24 @@ pub enum Error {
         "the recipe for `{table}` changed — a different SQL is a different table; declare it under another name (replacement is postponed)"
     )]
     RecipeChanged { table: String },
-    #[error("witness on MEASUREMENT aspect `{0}` must be BY (FUNCTION fn) only")]
+    #[error(
+        "witness on MEASUREMENT aspect `{0}` cannot name BY — measurements are never glossed; only a DETECTOR applies"
+    )]
     MeasurementWitnessSpeakers(String),
     #[error(
-        "function `{function}` is not eligible as detector — its RETURNS must carry the attest shape (band, score)"
+        "function `{function}` is not eligible as detector — it RETURNS an aspect; a detector is a function without RETURNS"
     )]
     DetectorNotEligible { function: String },
+    #[error(
+        "aspect `{aspect}` is already returned by `{existing}` — a MEASUREMENT aspect has one producing function"
+    )]
+    MeasurementProducerTaken { aspect: String, existing: String },
+    #[error("witness `{0}` names neither BY nor DETECTOR — nothing to declare")]
+    WitnessNamesNothing(String),
+    #[error(
+        "function `{function}` RETURNS `{aspect}`, a QUERY aspect — metrics run as their SQL, functions never fill them"
+    )]
+    ReturnsQueryAspect { function: String, aspect: String },
     #[error("statement targets `{0}` — only the glossary and cache relations accept forwarded SQL")]
     ForwardRejected(String),
     #[error("stored JSON is corrupt: {0}")]
@@ -136,7 +146,9 @@ pub struct FunctionRow {
     /// `ACCEPTS (aspect, …)` — the aspects whose current values the server
     /// hands the script as its context document.
     pub accepts: Vec<String>,
-    pub returns: Value,
+    /// `RETURNS aspect` — the aspect the output fills, mirroring ACCEPTS;
+    /// output validates against that aspect's schema. `None` = detector.
+    pub returns: Option<String>,
 }
 
 /// What a `DECLARE RECIPE` amounted to (SPEC.md §3): the session
@@ -154,13 +166,12 @@ pub struct RecipeRow {
     pub sql: String,
 }
 
-/// A declared witness (SPEC.md §7.1).
+/// A declared witness (SPEC.md §7.1). Function voices are not here — they
+/// arrive through `RETURNS` (ruled 2026-08-04); `BY` gates actors only.
 #[derive(Debug, Clone)]
 pub struct WitnessRow {
     pub name: String,
     pub aspect: String,
-    /// Function speakers by name; the two non-function speakers are flags.
-    pub function_speakers: Vec<String>,
     pub admits_agent: bool,
     pub admits_human: bool,
     pub detector: Option<String>,

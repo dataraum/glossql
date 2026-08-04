@@ -98,14 +98,22 @@ author leaves it out of the recipe, or keeps it, deliberately:
 ```glossql
 DECLARE ASPECT column_profile WITH $${
   "type": "object",
-  "properties": {"null_ratio": {}, "distinct": {}, "min": {}, "max": {},
-                 "top_values": {"type": "array"}}
+  "required": ["total", "null_ratio", "distinct"],
+  "properties": {
+    "total": {"type": "integer"}, "null_ratio": {"type": "number"},
+    "distinct": {"type": "integer"}, "cardinality_ratio": {"type": "number"},
+    "min": {}, "max": {}, "top_values": {"type": "array"},
+    "lengths": {"type": "object"},
+    "numeric": {
+      "type": "object",
+      "required": ["mean", "mad", "percentiles"],
+      "properties": {"mean": {}, "stddev": {}, "mad": {},
+                     "percentiles": {"type": "object"}}
+    }
+  }
 }$$ AS MEASUREMENT;
 DECLARE FUNCTION profile FOR GLOBAL FROM 'functions/profile.rhai'
-  RETURNS $${"type": "object",
-    "properties": {"null_ratio": {}, "distinct": {}, "min": {}, "max": {},
-                   "top_values": {"type": "array"}}}$$;
-DECLARE WITNESS column_profile_w ON column_profile BY (FUNCTION profile);
+  RETURNS column_profile;
 
 DECLARE ASPECT outlier_profile WITH $${
   "type": "object", "required": ["applicable"],
@@ -114,18 +122,17 @@ DECLARE ASPECT outlier_profile WITH $${
 }$$ AS MEASUREMENT;
 DECLARE FUNCTION outliers FOR GLOBAL FROM 'functions/outliers.rhai'
   ACCEPTS (column_profile)
-  RETURNS $${"type": "object", "required": ["applicable"]}$$;
-DECLARE WITNESS outlier_profile_w ON outlier_profile BY (FUNCTION outliers);
+  RETURNS outlier_profile;
 
 DECLARE ASPECT temporal_profile WITH $${
   "type": "object", "required": ["applicable"],
   "properties": {"applicable": {"type": "boolean"},
                  "granularity": {"type": "string"},
+                 "confidence": {"type": "number"},
                  "completeness": {"type": "object"}, "gaps": {"type": "object"}}
 }$$ AS MEASUREMENT;
 DECLARE FUNCTION temporal FOR GLOBAL FROM 'functions/temporal.rhai'
-  RETURNS $${"type": "object", "required": ["applicable"]}$$;
-DECLARE WITNESS temporal_profile_w ON temporal_profile BY (FUNCTION temporal);
+  RETURNS temporal_profile;
 
 SELECT profile(), outliers() FROM fin.orders.amount;
 SELECT temporal() FROM fin.orders.order_date;
@@ -214,6 +221,19 @@ that the grammar knows about.
   measurement in the deterministic plane — and the only numpy/scipy
   dependency in it — consumed by nothing as a signal. It never ports;
   whoever wants it writes a script.
+- **`RETURNS` mirrors `ACCEPTS`** (ruled 2026-08-04): a function reads
+  aspects and fills an aspect — both clauses reference the vocabulary, and
+  the aspect's schema became the single, live contract (shape-descriptive:
+  `required` for what every value carries, `properties` for what readers
+  consume, open beyond that). The function witnesses died as ceremony —
+  the `RETURNS` binding is what wires a function's cache into the collapse
+  — and a function without `RETURNS` *is* a detector: role by shape, the
+  attest contract engine-owned. Detectors migrate only where adjudication
+  is real (same ruling): v0.3's readout detectors (`null_ratio`,
+  `unit_entropy`, `business_meaning`, `type_fidelity`) dissolve into
+  measurements agents read directly; unit detection dissolves into
+  authorship — a recipe splits a value-carried unit into two columns with
+  a regex.
 - **The temporal family ports as one ordinary function** (2026-08-04):
   with tables that never change under their evidence, temporal needs no
   machinery of its own — window, cadence, completeness and gaps are pure

@@ -39,8 +39,12 @@ pub enum SessionError {
     BadSubject(String),
     #[error("unknown function `{0}` — DECLARE it (or check its FOR scope)")]
     UnknownFunction(String),
-    #[error("output of `{function}` violates its RETURNS contract: {detail}")]
+    #[error("output of `{function}` violates the schema of the aspect it RETURNS: {detail}")]
     OutputRejected { function: String, detail: String },
+    #[error(
+        "function `{0}` has no RETURNS — a detector runs through its witness, never through extraction"
+    )]
+    DetectorNotExtractable(String),
     #[error("function runtime: {0}")]
     Runtime(String),
     #[error(transparent)]
@@ -464,6 +468,11 @@ impl Session {
                 .function(&name, Some(&resolved.dataset))
                 .await?
                 .ok_or_else(|| SessionError::UnknownFunction(name.clone()))?;
+            // Role by shape (ruled 2026-08-04): a function without RETURNS
+            // is a detector — it runs through its witness, never extraction.
+            let Some(returns) = function.returns.clone() else {
+                return Err(SessionError::DetectorNotExtractable(name.clone()));
+            };
             let cached = store
                 .cache_get(&resolved.dataset, &resolved.subject, &name)
                 .await?;
@@ -488,7 +497,15 @@ impl Session {
                             Arc::new(self.door()),
                         )
                         .map_err(SessionError::Runtime)?;
-                    schemas::validate_instance(&function.returns, &output).map_err(|detail| {
+                    // The aspect's schema is the one contract: nothing lands
+                    // under an aspect without validating against it.
+                    let (schema, _) = store.aspect(&returns).await?.ok_or_else(|| {
+                        SessionError::Store(glossql_glossary::Error::Unknown {
+                            what: "aspect",
+                            name: returns.clone(),
+                        })
+                    })?;
+                    schemas::validate_instance(&schema, &output).map_err(|detail| {
                         SessionError::OutputRejected {
                             function: name.clone(),
                             detail,

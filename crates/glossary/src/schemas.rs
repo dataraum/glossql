@@ -1,6 +1,6 @@
 //! The two fixed schemas the language nails down: the standard grounding
-//! schema (SPEC.md §5.2, validates every QUERY gloss) and the attest shape
-//! check for detector eligibility (SPEC.md §7.1).
+//! schema (SPEC.md §5.2, validates every QUERY gloss) and the standard
+//! attest contract (SPEC.md §7.2, validates every detector's output).
 
 use serde_json::Value;
 
@@ -31,16 +31,24 @@ pub fn grounding_schema() -> Value {
     serde_json::from_str(GROUNDING_SCHEMA).expect("SPEC §5.2 schema is valid JSON")
 }
 
-/// A function is eligible as detector only if its RETURNS conforms to the
-/// standard attest schema. Full subschema entailment is undecidable in
-/// general; the check here is the honest shallow version — RETURNS must
-/// declare both `band` and `score` properties.
-pub fn returns_carries_attest_shape(returns: &Value) -> bool {
-    let props = returns.pointer("/properties");
-    matches!(
-        props,
-        Some(Value::Object(map)) if map.contains_key("band") && map.contains_key("score")
-    )
+/// The standard attest schema, verbatim from SPEC.md §7.2 — the engine's
+/// contract for detector output. A detector is a function without RETURNS
+/// (role by shape, ruled 2026-08-04); nobody authors this shape.
+pub const ATTEST_CONTRACT: &str = r#"{
+  "type": "object",
+  "required": ["subject", "aspect", "witness", "band", "score", "computed_at"],
+  "properties": {
+    "subject": {"type": "string"},
+    "aspect": {"type": "string"},
+    "witness": {"type": "string"},
+    "band": {"enum": ["green", "yellow", "orange", "red"]},
+    "score": {"type": "number", "minimum": 0, "maximum": 1},
+    "computed_at": {"type": "string"}
+  }
+}"#;
+
+pub fn attest_contract() -> Value {
+    serde_json::from_str(ATTEST_CONTRACT).expect("SPEC §7.2 schema is valid JSON")
 }
 
 /// Validate `instance` against `schema`, first violation as the message.

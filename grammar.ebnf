@@ -120,16 +120,21 @@ gloss             = "GLOSS", name, "ON", subject, "AS", json ;
 function_decl     = "FUNCTION", name, "FOR", ( name | "GLOBAL" ),
                     "FROM", string,
                     [ "ACCEPTS", "(", name, { ",", name }, ")" ],
-                    "RETURNS", json ;
-                    (* a function is a measurement or a detector — the engine's
-                       analytical machinery as rhai scripts; never a metric
-                       (metrics are QUERY aspects run as their SQL). FROM names
-                       the script. ACCEPTS names the aspects whose current
-                       values the server hands the script as context —
-                       settings are context, never call arguments. Every
-                       function implicitly receives its subject with schema and
-                       neighborhood; scripts may run any SQL. RETURNS is a JSON
-                       Schema — results land in the cache relation *)
+                    [ "RETURNS", name ] ;
+                    (* the engine's analytical machinery as rhai scripts; never
+                       a metric (metrics are QUERY aspects run as their SQL).
+                       FROM names the script. ACCEPTS names the aspects whose
+                       current values the server hands the script as context —
+                       settings are context, never call arguments. RETURNS
+                       mirrors ACCEPTS (ruled 2026-08-04): it names the aspect
+                       the output fills, validated against that aspect's
+                       schema; a MEASUREMENT aspect has one returning function,
+                       a FACT aspect's returning functions are voices in its
+                       slots. No RETURNS declares a detector — role by shape;
+                       the attest contract is the engine's. Every function
+                       implicitly receives its subject with schema and
+                       neighborhood; scripts may run any SQL. Results land in
+                       the cache relation *)
 
 extract           = "SELECT", call, { ",", call }, "FROM", subject ;
 call              = name, "(", ")" ;
@@ -144,16 +149,18 @@ call              = name, "(", ")" ;
 (* -- witnesses ---------------------------------------------------------- *)
 
 witness_decl      = "WITNESS", name, "ON", name,
-                    "BY", "(", speaker, { ",", speaker }, ")",
+                    [ "BY", "(", speaker, { ",", speaker }, ")" ],
                     [ "DETECTOR", name ],
                     [ "THRESHOLD", number ] ;
-speaker           = "FUNCTION", name         (* fills the measurement slot *)
-                  | "AGENT"                  (* admits agent glosses *)
+speaker           = "AGENT"                  (* admits agent glosses *)
                   | "HUMAN" ;                (* admits human glosses *)
                     (* declared per aspect, dataset-wide; one current value per
-                       (subject, aspect) per speaker. DETECTOR names a function
-                       whose RETURNS conforms to the standard attest schema;
-                       THRESHOLD is the entropy cutoff in 0..1 *)
+                       (subject, aspect) per speaker — function voices arrive
+                       via RETURNS (function_decl), never through the gate.
+                       BY or DETECTOR must be named (checked at admission);
+                       on a MEASUREMENT aspect BY is refused. DETECTOR names
+                       a function without RETURNS; THRESHOLD is the entropy
+                       cutoff in 0..1 *)
 
 (* -- reading (table functions in substrate SQL) ------------------------- *)
 

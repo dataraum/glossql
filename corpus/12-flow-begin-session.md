@@ -35,9 +35,7 @@ DECLARE ASPECT relationship_candidates WITH $${
                      "overlap": {"type": "number"}}}}}
 }$$ AS MEASUREMENT;
 DECLARE FUNCTION detect_relationships FOR GLOBAL FROM 'functions/relationships.rhai'
-  RETURNS $${"type": "object", "properties": {"candidates": {"type": "array"}}}$$;
-DECLARE WITNESS rel_candidates_w ON relationship_candidates
-  BY (FUNCTION detect_relationships);
+  RETURNS relationship_candidates;
 
 SELECT detect_relationships() FROM fin;
 SELECT * FROM GLOSSARY(fin, all => true);
@@ -84,16 +82,19 @@ DECLARE ASPECT reconciliation WITH $${
   "properties": {"pairs": {"type": "array"}, "max_delta": {"type": "number"}}
 }$$ AS MEASUREMENT;
 DECLARE FUNCTION reconcile_aggregates FOR fin FROM 'functions/reconcile.rhai'
-  RETURNS $${"type": "object",
-    "properties": {"pairs": {"type": "array"}, "max_delta": {"type": "number"}}}$$;
+  RETURNS reconciliation;
+DECLARE FUNCTION reconcile_bands FOR fin FROM 'functions/reconcile_bands.rhai';
 DECLARE WITNESS reconciliation_w ON reconciliation
-  BY (FUNCTION reconcile_aggregates) DETECTOR reconcile_bands THRESHOLD 0.5;
+  DETECTOR reconcile_bands THRESHOLD 0.5;
 
 SELECT reconcile_aggregates() FROM fin;
 SELECT subject, band FROM ATTEST(fin::reconciliation) WHERE band = 'red';
 
+DECLARE ASPECT driver_rankings WITH $${
+  "type": "object", "properties": {"rankings": {"type": "array"}}
+}$$ AS MEASUREMENT;
 DECLARE FUNCTION drivers FOR fin FROM 'functions/drivers.rhai'
-  RETURNS $${"type": "object", "properties": {"rankings": {"type": "array"}}}$$;
+  RETURNS driver_rankings;
 SELECT drivers() FROM fin.orders;
 ```
 
@@ -102,6 +103,13 @@ SELECT drivers() FROM fin.orders;
 - **The flow transcribes as measure → read → declare/gloss → attest**, four
   general-purpose moves repeated per plane. No session construct, no phase
   list, no promote statement.
+- **The respell surfaced a hidden hole** (2026-08-04): `drivers` had a
+  RETURNS schema but no aspect — its output was cache-only, unreachable
+  through `GLOSSARY()`. With `RETURNS` an aspect reference the aspect had
+  to exist, so the rankings joined the vocabulary. The grain-check witness
+  became the model's cleanest form: a measurement aspect with only a
+  detector — `DECLARE WITNESS … ON reconciliation DETECTOR reconcile_bands`
+  — no `BY`, because nobody glosses a measurement.
 - The LLM/deterministic split in the real pipeline maps exactly onto actor
   kinds: every LLM phase becomes an agent connection writing glosses; every
   deterministic phase becomes a function; every teach a human connection.

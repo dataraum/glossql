@@ -53,7 +53,7 @@ fn temporal(door: CtxDoor, subject: &str) -> Value {
         scope_dataset: None,
         script: "functions/temporal.rhai".into(),
         accepts: vec![],
-        returns: json!({"type": "object", "required": ["applicable"]}),
+        returns: Some("temporal_profile".into()),
     };
     rt.invoke(&function, subject, &Value::Null, Arc::new(door))
         .unwrap()

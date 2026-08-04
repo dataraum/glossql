@@ -211,8 +211,13 @@ fn parse_declaration(p: &mut Parser) -> Result<Declaration, ParserError> {
             } else {
                 Vec::new()
             };
-            expect_word(p, "RETURNS")?;
-            let returns = parse_json_body(p)?;
+            // `RETURNS aspect` mirrors `ACCEPTS`; a function without it is
+            // a detector (role by shape, project lead 2026-08-04).
+            let returns = if consume_word(p, "RETURNS") {
+                Some(p.parse_identifier()?)
+            } else {
+                None
+            };
             Ok(Declaration::Function(FunctionDecl {
                 name,
                 scope,
@@ -226,15 +231,19 @@ fn parse_declaration(p: &mut Parser) -> Result<Declaration, ParserError> {
             let name = p.parse_identifier()?;
             expect_word(p, "ON")?;
             let aspect = p.parse_identifier()?;
-            expect_word(p, "BY")?;
-            p.expect_token(&Token::LParen)?;
+            // `BY` gates actor glosses and is optional: a witness on a
+            // MEASUREMENT aspect carries only a detector. That it names
+            // BY or DETECTOR (or both) is checked at admission.
             let mut speakers = Vec::new();
-            loop {
-                speakers.push(parse_speaker(p)?);
-                if p.consume_token(&Token::RParen) {
-                    break;
+            if consume_word(p, "BY") {
+                p.expect_token(&Token::LParen)?;
+                loop {
+                    speakers.push(parse_speaker(p)?);
+                    if p.consume_token(&Token::RParen) {
+                        break;
+                    }
+                    p.expect_token(&Token::Comma)?;
                 }
-                p.expect_token(&Token::Comma)?;
             }
             let detector = if consume_word(p, "DETECTOR") {
                 Some(p.parse_identifier()?)
@@ -288,9 +297,6 @@ fn parse_settings(p: &mut Parser) -> Result<Vec<Setting>, ParserError> {
 }
 
 fn parse_speaker(p: &mut Parser) -> Result<Speaker, ParserError> {
-    if consume_word(p, "FUNCTION") {
-        return Ok(Speaker::Function(p.parse_identifier()?));
-    }
     if consume_word(p, "AGENT") {
         return Ok(Speaker::Agent);
     }
@@ -298,7 +304,7 @@ fn parse_speaker(p: &mut Parser) -> Result<Speaker, ParserError> {
         return Ok(Speaker::Human);
     }
     let found = p.peek_token();
-    expected("FUNCTION <name>, AGENT, or HUMAN", &found)
+    expected("AGENT or HUMAN", &found)
 }
 
 /// `ACCEPTS (aspect, …)` — the aspects whose current values the server

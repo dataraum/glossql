@@ -38,6 +38,10 @@ documents:
   column kernels, the reference function library under
   `crates/scripts/functions/`). Typing is authored in recipes (ruled
   2026-08-04) — no derived views, no raw twin, no typing functions.
+  RETURNS mirrors ACCEPTS (ruled 2026-08-04): functions reference aspects
+  on both sides, the aspect schema is the one validated contract, a
+  function without RETURNS is a detector, and witnesses gate actors and
+  adjudicate only — function voices ride the RETURNS binding.
   Planned (a crate is created only when it has real content): `serverd`
   (Flight SQL + MCP shim).
 - `reports/` — pivot records, review verdicts, and evaluation records.

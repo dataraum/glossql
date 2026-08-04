@@ -1,36 +1,32 @@
 ---
 source: crates/parser/tests/statements.rs
-expression: "GlossqlParser ::\nparse_sql(r#\"DECLARE FUNCTION infer_types FOR GLOBAL FROM 'functions/infer_types.rhai' ACCEPTS (type_patterns, null_values) RETURNS $${\"type\": \"object\"}$$;\"#).expect(\"must parse\")"
+expression: "GlossqlParser ::\nparse_sql(\"DECLARE FUNCTION outliers FOR GLOBAL FROM 'functions/outliers.rhai' ACCEPTS (column_profile) RETURNS outlier_profile;\").expect(\"must parse\")"
 ---
 [
     Declare(
         Function(
             FunctionDecl {
                 name: Ident {
-                    value: "infer_types",
+                    value: "outliers",
                     quote_style: None,
-                    span: Span(Location(1,18)..Location(1,29)),
+                    span: Span(Location(1,18)..Location(1,26)),
                 },
                 scope: Global,
-                script: "functions/infer_types.rhai",
+                script: "functions/outliers.rhai",
                 accepts: [
                     Ident {
-                        value: "type_patterns",
+                        value: "column_profile",
                         quote_style: None,
-                        span: Span(Location(1,84)..Location(1,97)),
-                    },
-                    Ident {
-                        value: "null_values",
-                        quote_style: None,
-                        span: Span(Location(1,99)..Location(1,110)),
+                        span: Span(Location(1,78)..Location(1,92)),
                     },
                 ],
-                returns: JsonBody {
-                    value: Object {
-                        "type": String("object"),
+                returns: Some(
+                    Ident {
+                        value: "outlier_profile",
+                        quote_style: None,
+                        span: Span(Location(1,102)..Location(1,117)),
                     },
-                    raw: "{\"type\": \"object\"}",
-                },
+                ),
             },
         ),
     ),

@@ -12,7 +12,7 @@ use glossql_parser::{
     SourceDecl, Speaker, WitnessDecl,
 };
 
-use crate::schemas::{grounding_schema, returns_carries_attest_shape};
+use crate::schemas::grounding_schema;
 use crate::types::{
     Actor, ActorKind, AttestRow, CacheRow, CollapsedRow, Error, FunctionRow, RawRow,
     RecipeAdmission, RecipeRow, Result, WitnessRow,
@@ -113,7 +113,7 @@ CREATE TABLE IF NOT EXISTS functions (
   scope_dataset TEXT,
   script TEXT NOT NULL,
   accepts TEXT,
-  returns TEXT NOT NULL
+  returns TEXT
 );
 CREATE TABLE IF NOT EXISTS witnesses (
   name TEXT PRIMARY KEY,
@@ -320,6 +320,41 @@ impl Store {
             self.require("aspect", "aspects", aspect.value.as_str())
                 .await?;
         }
+        // RETURNS mirrors ACCEPTS (ruled 2026-08-04): it names the aspect
+        // the output fills. A MEASUREMENT aspect has one producer; a FACT
+        // aspect's returning functions are voices; a QUERY aspect is never
+        // function-filled. No RETURNS declares a detector.
+        if let Some(aspect) = &decl.returns {
+            let aspect = aspect.value.as_str();
+            let (_, kind) = self.aspect(aspect).await?.ok_or_else(|| Error::Unknown {
+                what: "aspect",
+                name: aspect.into(),
+            })?;
+            match kind.as_str() {
+                "query" => {
+                    return Err(Error::ReturnsQueryAspect {
+                        function: decl.name.value.clone(),
+                        aspect: aspect.into(),
+                    });
+                }
+                "measurement" => {
+                    let taken: Option<String> =
+                        sqlx::query("SELECT name FROM functions WHERE returns = ? AND name != ?")
+                            .bind(aspect)
+                            .bind(decl.name.value.as_str())
+                            .fetch_optional(&self.pool)
+                            .await?
+                            .map(|r| r.get("name"));
+                    if let Some(existing) = taken {
+                        return Err(Error::MeasurementProducerTaken {
+                            aspect: aspect.into(),
+                            existing,
+                        });
+                    }
+                }
+                _fact => {}
+            }
+        }
         let accepts = if decl.accepts.is_empty() {
             None
         } else {
@@ -343,7 +378,7 @@ impl Store {
         .bind(scope)
         .bind(decl.script.as_str())
         .bind(accepts)
-        .bind(decl.returns.raw.as_str())
+        .bind(decl.returns.as_ref().map(|a| a.value.clone()))
         .execute(&self.pool)
         .await?;
         // A re-declared function is a different function; its cached results
@@ -366,28 +401,23 @@ impl Store {
             })?
             .1;
 
-        let mut speakers = Vec::new();
-        let mut functions = Vec::new();
-        for s in &decl.speakers {
-            match s {
-                Speaker::Function(f) => {
-                    let name = f.value.clone();
-                    self.function(&name, None)
-                        .await?
-                        .ok_or_else(|| Error::Unknown {
-                            what: "function",
-                            name: name.clone(),
-                        })?;
-                    functions.push(name.clone());
-                    speakers.push(serde_json::json!({ "function": name }));
-                }
-                Speaker::Agent => speakers.push(Value::String("agent".into())),
-                Speaker::Human => speakers.push(Value::String("human".into())),
-            }
-        }
-        // A MEASUREMENT aspect is BY (FUNCTION fn) only (SPEC.md §7.1).
-        if kind == "measurement" && (functions.len() != 1 || speakers.len() != 1) {
+        // BY gates actor glosses only — function voices arrive via RETURNS
+        // (ruled 2026-08-04). Measurements are never glossed, so a witness
+        // on one carries only a detector; a witness naming neither BY nor
+        // DETECTOR declares nothing.
+        let speakers: Vec<Value> = decl
+            .speakers
+            .iter()
+            .map(|s| match s {
+                Speaker::Agent => Value::String("agent".into()),
+                Speaker::Human => Value::String("human".into()),
+            })
+            .collect();
+        if kind == "measurement" && !speakers.is_empty() {
             return Err(Error::MeasurementWitnessSpeakers(aspect.into()));
+        }
+        if speakers.is_empty() && decl.detector.is_none() {
+            return Err(Error::WitnessNamesNothing(decl.name.value.clone()));
         }
 
         if let Some(detector) = &decl.detector {
@@ -399,7 +429,8 @@ impl Store {
                     what: "function",
                     name: name.clone(),
                 })?;
-            if !returns_carries_attest_shape(&f.returns) {
+            // Role by shape: a detector is a function without RETURNS.
+            if f.returns.is_some() {
                 return Err(Error::DetectorNotEligible { function: name });
             }
         }
@@ -595,6 +626,24 @@ impl Store {
         Ok(names)
     }
 
+    /// `(function, aspect)` for every function whose `RETURNS` names an
+    /// aspect — the producer of a MEASUREMENT, the voices of a FACT. This
+    /// binding is what wires a function's cache into the slots (ruled
+    /// 2026-08-04; the function witnesses it replaced were ceremony).
+    async fn returning(&self, aspect: Option<&str>) -> Result<Vec<(String, String)>> {
+        let q = match aspect {
+            Some(a) => {
+                sqlx::query("SELECT name, returns FROM functions WHERE returns = ?").bind(a)
+            }
+            None => sqlx::query("SELECT name, returns FROM functions WHERE returns IS NOT NULL"),
+        };
+        Ok(q.fetch_all(&self.pool)
+            .await?
+            .into_iter()
+            .map(|r| (r.get("name"), r.get("returns")))
+            .collect())
+    }
+
     /// The newest write into (subject, aspect) across all slots — what a
     /// detector's verdict must be at least as fresh as.
     pub async fn newest_slot_write(
@@ -613,23 +662,21 @@ impl Store {
         .fetch_one(&self.pool)
         .await?
         .get("t");
-        for w in self.witnesses_on(aspect).await? {
-            for f in &w.function_speakers {
-                let t: Option<String> = sqlx::query(
-                    "SELECT MAX(computed_at) AS t FROM cache \
-                     WHERE dataset = ? AND subject = ? AND function = ?",
-                )
-                .bind(dataset)
-                .bind(subject)
-                .bind(f.as_str())
-                .fetch_one(&self.pool)
-                .await?
-                .get("t");
-                if let Some(t) = t
-                    && newest.as_deref().is_none_or(|n| t.as_str() > n)
-                {
-                    newest = Some(t);
-                }
+        for (f, _) in self.returning(Some(aspect)).await? {
+            let t: Option<String> = sqlx::query(
+                "SELECT MAX(computed_at) AS t FROM cache \
+                 WHERE dataset = ? AND subject = ? AND function = ?",
+            )
+            .bind(dataset)
+            .bind(subject)
+            .bind(f.as_str())
+            .fetch_one(&self.pool)
+            .await?
+            .get("t");
+            if let Some(t) = t
+                && newest.as_deref().is_none_or(|n| t.as_str() > n)
+            {
+                newest = Some(t);
             }
         }
         Ok(newest)
@@ -698,36 +745,29 @@ impl Store {
             .collect();
 
         let (cpred, cbinds) = scope.predicate("c.subject");
-        for w in &witnesses {
-            if let Some(a) = aspect
-                && w.aspect != a
-            {
-                continue;
+        for (f, a) in self.returning(aspect).await? {
+            let sql = format!(
+                "SELECT c.subject, c.body, c.computed_at, c.snapshot_id FROM cache c \
+                 WHERE c.dataset = ? AND c.function = ? AND {cpred} AND NOT EXISTS (\
+                   SELECT 1 FROM cache n \
+                   WHERE n.dataset = c.dataset AND n.subject = c.subject \
+                     AND n.function = c.function AND n.id > c.id)"
+            );
+            let mut q = sqlx::query(&sql).bind(dataset).bind(f.as_str());
+            for b in &cbinds {
+                q = q.bind(b);
             }
-            for f in &w.function_speakers {
-                let sql = format!(
-                    "SELECT c.subject, c.body, c.computed_at, c.snapshot_id FROM cache c \
-                     WHERE c.dataset = ? AND c.function = ? AND {cpred} AND NOT EXISTS (\
-                       SELECT 1 FROM cache n \
-                       WHERE n.dataset = c.dataset AND n.subject = c.subject \
-                         AND n.function = c.function AND n.id > c.id)"
-                );
-                let mut q = sqlx::query(&sql).bind(dataset).bind(f.as_str());
-                for b in &cbinds {
-                    q = q.bind(b);
-                }
-                for c in q.fetch_all(&self.pool).await? {
-                    rows.push(Slot {
-                        subject: c.get("subject"),
-                        aspect: w.aspect.clone(),
-                        rank: 2,
-                        actor: f.clone(),
-                        witness: Some(w.name.clone()),
-                        body: c.get("body"),
-                        written_at: c.get("computed_at"),
-                        snapshot_id: c.get("snapshot_id"),
-                    });
-                }
+            for c in q.fetch_all(&self.pool).await? {
+                rows.push(Slot {
+                    subject: c.get("subject"),
+                    aspect: a.clone(),
+                    rank: 2,
+                    actor: f.clone(),
+                    witness: witness_on(&a),
+                    body: c.get("body"),
+                    written_at: c.get("computed_at"),
+                    snapshot_id: c.get("snapshot_id"),
+                });
             }
         }
         rows.sort_by(|a, b| {
@@ -873,13 +913,15 @@ impl Store {
             });
         }
 
-        // Disclosure (fixture 09's benchmark): a witnessed aspect nobody
-        // spoke to is a visible row, not an omission.
-        let witnessed: Vec<&str> = witnesses
+        // Disclosure (fixture 09's benchmark): an aspect somebody is bound
+        // to speak to — witnessed, or produced by a function's RETURNS —
+        // that nobody spoke to is a visible row, not an omission.
+        let mut witnessed: std::collections::BTreeSet<String> = witnesses
             .iter()
             .filter(|w| aspect.is_none_or(|a| w.aspect == a))
-            .map(|w| w.aspect.as_str())
+            .map(|w| w.aspect.clone())
             .collect();
+        witnessed.extend(self.returning(aspect).await?.into_iter().map(|(_, a)| a));
         let present: std::collections::HashSet<(String, String)> = rows
             .iter()
             .map(|r| (r.subject.clone(), r.aspect.clone()))
@@ -893,10 +935,10 @@ impl Store {
                 continue;
             }
             for a in &witnessed {
-                if !present.contains(&(subject.clone(), (*a).to_string())) {
+                if !present.contains(&(subject.clone(), a.clone())) {
                     rows.push(CollapsedRow {
                         subject: subject.clone(),
-                        aspect: (*a).into(),
+                        aspect: a.clone(),
                         value: None,
                         band: None,
                         score: None,
@@ -992,13 +1034,16 @@ impl Store {
         .bind(snapshot_id)
         .execute(&self.pool)
         .await?;
-        // A measurement's new value invalidates like a gloss would: through
-        // the aspect its witness binds it to. Detectors bind to no aspect as
-        // speakers, so their verdicts invalidate nothing.
-        for w in self.witnesses_all().await? {
-            if w.function_speakers.iter().any(|f| f == function) {
-                self.invalidate(dataset, &w.aspect, subject).await?;
-            }
+        // A function's new value invalidates like a gloss would: through
+        // the aspect its RETURNS names. Detectors return no aspect, so
+        // their verdicts invalidate nothing.
+        let returns: Option<String> = sqlx::query("SELECT returns FROM functions WHERE name = ?")
+            .bind(function)
+            .fetch_optional(&self.pool)
+            .await?
+            .and_then(|r| r.get("returns"));
+        if let Some(aspect) = returns {
+            self.invalidate(dataset, &aspect, subject).await?;
         }
         Ok(())
     }
@@ -1117,8 +1162,7 @@ impl Store {
         {
             return Ok(None);
         }
-        let returns: Value = serde_json::from_str(&row.get::<String, _>("returns"))
-            .map_err(|e| Error::Corrupt(format!("function `{name}` RETURNS: {e}")))?;
+        let returns: Option<String> = row.get("returns");
         let accepts = match row.get::<Option<String>, _>("accepts") {
             None => Vec::new(),
             Some(text) => serde_json::from_str::<Vec<String>>(&text)
@@ -1156,12 +1200,6 @@ impl Store {
                 Ok(WitnessRow {
                     name: r.get("name"),
                     aspect: r.get("aspect"),
-                    function_speakers: list
-                        .iter()
-                        .filter_map(|s| s.pointer("/function"))
-                        .filter_map(Value::as_str)
-                        .map(String::from)
-                        .collect(),
                     admits_agent: list.iter().any(|s| s.as_str() == Some("agent")),
                     admits_human: list.iter().any(|s| s.as_str() == Some("human")),
                     detector: r.get("detector"),

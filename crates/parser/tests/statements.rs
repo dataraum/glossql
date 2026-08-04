@@ -51,19 +51,19 @@ snap!(
 );
 snap!(
     function_decl_accepts_aspects,
-    r#"DECLARE FUNCTION infer_types FOR GLOBAL FROM 'functions/infer_types.rhai' ACCEPTS (type_patterns, null_values) RETURNS $${"type": "object"}$$;"#
+    "DECLARE FUNCTION outliers FOR GLOBAL FROM 'functions/outliers.rhai' ACCEPTS (column_profile) RETURNS outlier_profile;"
 );
 snap!(
-    function_decl_no_accepts,
-    r#"DECLARE FUNCTION profile_min_max FOR fin FROM 'functions/profile_min_max.rhai' RETURNS $${"type": "object", "required": ["value"]}$$;"#
+    function_decl_detector,
+    "DECLARE FUNCTION slot_entropy FOR fin FROM 'functions/slot_entropy.rhai';"
 );
 snap!(
     witness_decl_full,
-    "DECLARE WITNESS behavior_w ON behavior BY (FUNCTION temporal_behavior, AGENT, HUMAN) DETECTOR behavior_entropy THRESHOLD 0.7;"
+    "DECLARE WITNESS behavior_w ON behavior BY (AGENT, HUMAN) DETECTOR behavior_entropy THRESHOLD 0.7;"
 );
 snap!(
-    witness_decl_minimal,
-    "DECLARE WITNESS min_max_w ON min_max BY (FUNCTION profile_min_max);"
+    witness_decl_detector_only,
+    "DECLARE WITNESS reconciliation_w ON reconciliation DETECTOR reconcile_bands THRESHOLD 0.5;"
 );
 snap!(
     extract_two_calls,

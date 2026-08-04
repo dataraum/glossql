@@ -46,23 +46,11 @@ DECLARE ASPECT behavior WITH $${
 }$$ AS FACT;
 
 DECLARE FUNCTION temporal_behavior FOR GLOBAL FROM 'functions/temporal_behavior.rhai'
-  RETURNS $${"type": "object", "properties": {"value": {"enum": ["stock", "flow"]},
-           "evidence": {"type": "string"}}}$$;
+  RETURNS behavior;
 
-DECLARE FUNCTION behavior_entropy FOR GLOBAL FROM 'functions/behavior_entropy.rhai'
-  RETURNS $${
-    "type": "object",
-    "required": ["subject", "aspect", "witness", "band", "score", "computed_at"],
-    "properties": {
-      "subject": {"type": "string"}, "aspect": {"type": "string"},
-      "witness": {"type": "string"},
-      "band": {"enum": ["green", "yellow", "orange", "red"]},
-      "score": {"type": "number", "minimum": 0, "maximum": 1},
-      "computed_at": {"type": "string"}
-    }
-  }$$;
+DECLARE FUNCTION behavior_entropy FOR GLOBAL FROM 'functions/behavior_entropy.rhai';
 
-DECLARE WITNESS behavior_w ON behavior BY (FUNCTION temporal_behavior, AGENT, HUMAN)
+DECLARE WITNESS behavior_w ON behavior BY (AGENT, HUMAN)
   DETECTOR behavior_entropy THRESHOLD 0.7;
 
 SELECT * FROM ATTEST(orders.amount::behavior);
@@ -76,6 +64,13 @@ SELECT * FROM ATTEST(orders.amount::behavior);
 - **Slots TRANSCRIBE.** target→subject, claim_field→aspect, the detector's
   verdict→(band, score). A human re-gloss supersedes the human slot; a
   contested state is a red/orange band, not a flag.
+- **The data-grounded voice is a `RETURNS` binding** (respelled
+  2026-08-04): `temporal_behavior` speaks the `behavior` aspect by
+  returning it — v0.3's `structural_reconciliation` witness, made a typed
+  function instead of a `BY (FUNCTION …)` entry. Its output validates
+  against the aspect it speaks; the `BY` gate is for actors only. The
+  detector lost its RETURNS transcription: no RETURNS *is* the detector
+  shape, and the attest contract is the engine's.
 - **DROPPED BY DESIGN — the calibration theater.** Per-witness calibrated
   reliabilities, calibration provenance (corpus id, estimator, Brier),
   placeholder priors, pooling math: all of it is the DETECTOR function's

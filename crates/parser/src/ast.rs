@@ -124,7 +124,10 @@ pub struct FunctionDecl {
     /// `ACCEPTS (aspect, …)` — aspects whose current values the server
     /// hands the script as its context document; empty = no context.
     pub accepts: Vec<Ident>,
-    pub returns: JsonBody,
+    /// `RETURNS aspect` — the aspect this function's output fills,
+    /// mirroring `ACCEPTS` (project lead, 2026-08-04). Absent, the
+    /// function is a detector: role is declared by shape.
+    pub returns: Option<Ident>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -144,9 +147,11 @@ pub struct WitnessDecl {
     pub threshold: Option<String>,
 }
 
+/// A speaker in a witness's `BY` list — actor kinds only. A function's
+/// voice comes from its `RETURNS` binding, never from the gate (project
+/// lead, 2026-08-04).
 #[derive(Debug, Clone, PartialEq)]
 pub enum Speaker {
-    Function(Ident),
     Agent,
     Human,
 }

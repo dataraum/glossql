@@ -51,21 +51,12 @@ GLOSS trial_balance ON fin AS $${
 }$$;
 
 DECLARE FUNCTION trial_balance_check FOR fin FROM 'functions/trial_balance.rhai'
-  RETURNS $${
-    "type": "object",
-    "required": ["subject", "aspect", "witness", "band", "score", "computed_at"],
-    "properties": {
-      "subject": {"type": "string"},
-      "aspect": {"type": "string"},
-      "witness": {"type": "string"},
-      "band": {"enum": ["green", "yellow", "orange", "red"]},
-      "score": {"type": "number", "minimum": 0, "maximum": 1},
-      "computed_at": {"type": "string", "format": "date-time"}
-    }
-  }$$;
+  RETURNS trial_balance;
 
-DECLARE WITNESS tb ON trial_balance BY (FUNCTION trial_balance_check, HUMAN)
-  DETECTOR trial_balance_check;
+DECLARE FUNCTION balance_bands FOR fin FROM 'functions/balance_bands.rhai';
+
+DECLARE WITNESS tb ON trial_balance BY (HUMAN)
+  DETECTOR balance_bands;
 
 SELECT * FROM ATTEST(fin.trial_balance);
 ```
@@ -79,7 +70,13 @@ SELECT * FROM ATTEST(fin.trial_balance);
   general-purpose constructs.
 - The check reads its own expectation (tolerance, cycles) from the glossary —
   the function implicitly receives its subject; the gloss is data.
-- `trial_balance_check` doubles as value function and detector: legal because
-  its RETURNS conforms to the standard attest schema.
+- **Role is declared by shape** (respelled 2026-08-04): the original
+  transcription had `trial_balance_check` doubling as value function and
+  detector, legal because its RETURNS transcribed the attest schema. With
+  `RETURNS` an aspect reference, the roles separate: the check is a
+  *voice* — `RETURNS trial_balance`, full SQL door, its verdict lands as a
+  slot beside the human's expectation — and `balance_bands` (no RETURNS)
+  is the detector that reads both slots and bands. The attest schema left
+  the author's hands: it is the engine's contract, no longer transcribed.
 - **INFORMATION LOST (accepted):** category, tags, version — browsing
   metadata, same relocation as fixture 03.

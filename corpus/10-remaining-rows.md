@@ -61,16 +61,16 @@ GLOSS calendar ON fin AS $${"fiscal_year_starts": "april"}$$;
 
 ## Statistics / profiling (`column_statistics`, `relationship_candidates`)
 
-Measurements are never glossed — a MEASUREMENT aspect binds a function via a
-witness and fills from its cache:
+Measurements are never glossed — a function `RETURNS` the aspect
+(respelled 2026-08-04: the reference is the binding, no witness ceremony)
+and fills it from its cache:
 
 ```glossql
 DECLARE ASPECT min_max WITH $${
   "type": "object", "properties": {"min": {}, "max": {}}
 }$$ AS MEASUREMENT;
 DECLARE FUNCTION profile_min_max FOR GLOBAL FROM 'functions/profile.rhai'
-  RETURNS $${"type": "object", "properties": {"min": {}, "max": {}}}$$;
-DECLARE WITNESS min_max_w ON min_max BY (FUNCTION profile_min_max);
+  RETURNS min_max;
 
 SELECT profile_min_max() FROM fin.orders.amount;
 SELECT * FROM GLOSSARY(fin.orders.amount);

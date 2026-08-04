@@ -155,12 +155,14 @@ async fn ensure_verdicts(
                 .runtime()
                 .invoke(&function, subject, &context, Arc::new(DeniedDoor))
                 .map_err(SessionError::Runtime)?;
-            schemas::validate_instance(&function.returns, &output).map_err(|detail| {
-                SessionError::OutputRejected {
+            // A detector's output answers to the engine's attest contract
+            // (SPEC.md §7.2) — role by shape, nothing authored.
+            schemas::validate_instance(&schemas::attest_contract(), &output).map_err(
+                |detail| SessionError::OutputRejected {
                     function: detector.clone(),
                     detail,
-                }
-            })?;
+                },
+            )?;
             let snapshot = match (shared.lake(), glossary_table_of(subject)) {
                 (Some(lake), Some(table)) => lake.snapshot_id(dataset, table).await?,
                 _ => None,

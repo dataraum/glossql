@@ -312,18 +312,13 @@ recipe carries the casts (§3).
 
 ```sql
 DECLARE FUNCTION profile_min_max FOR fin FROM 'functions/profile_min_max.rhai'
-  RETURNS $${
-    "type": "object",
-    "properties": {"min": {}, "max": {}}
-  }$$;
+  RETURNS min_max;
 
 DECLARE FUNCTION outliers FOR GLOBAL FROM 'functions/outliers.rhai'
   ACCEPTS (column_profile)
-  RETURNS $${
-    "type": "object",
-    "required": ["applicable"],
-    "properties": {"applicable": {"type": "boolean"}}
-  }$$;
+  RETURNS outlier_profile;
+
+DECLARE FUNCTION reconcile_bands FOR fin FROM 'functions/reconcile_bands.rhai';
 ```
 
 - `FOR` scopes the function to a dataset, or `GLOBAL`.
@@ -332,16 +327,22 @@ DECLARE FUNCTION outliers FOR GLOBAL FROM 'functions/outliers.rhai'
   script as its context document — settings are context, never call
   arguments; calls are always bare `f()`. Absent `ACCEPTS`, the script
   receives no context.
-- `RETURNS` is a JSON Schema; functions return JSON per it. Results land in
-  the `cache` relation below.
+- `RETURNS` names the aspect the function's output fills, mirroring
+  `ACCEPTS`: functions read aspects and write an aspect, and the aspect's
+  schema is the one contract — output is validated against it at
+  extraction, and `GLOSSARY()` serves it as-is. A MEASUREMENT aspect has
+  exactly one returning function (its producer); a FACT aspect may be
+  returned by functions too — each is a data-grounded *voice* whose cached
+  output joins the spoken slots (§7). Results land in the `cache` relation
+  below.
+- **No `RETURNS` declares a detector** — role by shape. A detector is
+  named only in a witness's `DETECTOR` clause; it receives the witness's
+  slots and threshold, never table data, and its output must satisfy the
+  standard attest schema (§7.2) — the engine's contract, not authored.
 - Every function implicitly receives its subject, with its SQL schema and
   neighborhood (parent, siblings, children) as metadata. Scripts run
   against the dataset — any SQL; determinism is the script's contract, the
   workspace its boundary.
-- A detector receives the witness's slots and threshold, never table data
-  (§7.1).
-- A function bound to a MEASUREMENT aspect (§7) has that aspect's schema as
-  its RETURNS — `GLOSSARY()` serves its output as-is.
 
 Extraction:
 
@@ -382,28 +383,32 @@ in the cache.
 ## 7. Witnesses
 
 A witness is declared per aspect, dataset-wide. Per (subject, aspect) it
-holds one slot per speaker: the measurement's reading (served from the value
-function's cache), the agent's gloss, the human's gloss — one current value
-each.
+holds one slot per speaker: each function voice (served from the cache of
+a function whose `RETURNS` names the aspect, §6), the agent's gloss, the
+human's gloss — one current value each.
 
 ### 7.1 Declaration
 
 ```sql
 DECLARE WITNESS behavior_w ON behavior
-  BY (FUNCTION temporal_behavior, AGENT, HUMAN)
+  BY (AGENT, HUMAN)
   DETECTOR behavior_entropy
   THRESHOLD 0.7;
 
-DECLARE WITNESS min_max_w ON min_max BY (FUNCTION profile_min_max);
+DECLARE WITNESS reconciliation_w ON reconciliation
+  DETECTOR reconcile_bands THRESHOLD 0.5;
 ```
 
-- `BY` lists who may speak to the aspect. A MEASUREMENT aspect is
-  `BY (FUNCTION fn)` only — the witness is its function binding. FACT and
-  QUERY aspects may admit all three.
-- `DETECTOR` names the function that examines the slots and returns band +
-  score. A function is eligible as detector only if its RETURNS conforms to
-  the standard attest schema. `DETECTOR` and `THRESHOLD` are optional — a
-  pure measurement with nothing to adjudicate needs neither.
+- `BY` lists the actor kinds admitted to gloss the aspect — `AGENT`,
+  `HUMAN`. Function voices are not gated here: a function speaks by
+  `RETURNS` (§6). `BY` is refused on a MEASUREMENT aspect — measurements
+  are never glossed.
+- `DETECTOR` names a function without `RETURNS` (§6) that examines the
+  slots and returns band + score.
+- Both clauses are optional, but not together: a witness names `BY`, or
+  `DETECTOR`, or both. On a MEASUREMENT aspect only the detector form is
+  possible — judgment applied to a measurement's output, as in the second
+  example.
 - `THRESHOLD` (0..1) is the entropy cutoff used by the collapsed
   `GLOSSARY()` read (§5.3).
 

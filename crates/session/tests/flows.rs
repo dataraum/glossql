@@ -31,7 +31,12 @@ impl FunctionRuntime for Fake {
         self.invocations.fetch_add(1, Ordering::SeqCst);
         *self.last_context.lock().unwrap() = Some(context.clone());
         Ok(match function.name.as_str() {
-            "tb_check" => json!({"band": "red", "score": 0.9}),
+            "tb_check" => json!({"delta": 0.4}),
+            "tb_bands" => json!({
+                "subject": "trial_balance", "aspect": "reconciliation",
+                "witness": "tb_w", "band": "red", "score": 0.9,
+                "computed_at": "2026-08-04T00:00:00Z"
+            }),
             "outliers" => json!({"rows": [1]}),
             _ => json!({"ok": true}),
         })
@@ -164,8 +169,10 @@ async fn extraction_computes_once_then_reads_the_cache() {
     run(&session, SETUP).await;
     run(
         &session,
-        r#"DECLARE FUNCTION outliers FOR fin FROM 'functions/outliers.rhai'
-           RETURNS $${"type": "object", "required": ["rows"], "properties": {"rows": {"type": "array"}}}$$;"#,
+        r#"DECLARE ASPECT outlier_rows WITH $${"type": "object",
+             "required": ["rows"], "properties": {"rows": {"type": "array"}}}$$ AS MEASUREMENT;
+           DECLARE FUNCTION outliers FOR fin FROM 'functions/outliers.rhai'
+           RETURNS outlier_rows;"#,
     )
     .await;
 
@@ -196,9 +203,10 @@ async fn context_arrives_from_the_accepts_aspects() {
         r##"
         DECLARE ASPECT null_values WITH $${"type": "object"}$$ AS FACT;
         GLOSS null_values ON fin AS $${"values": ["#N/A", "TBD"]}$$;
+        DECLARE ASPECT inferred WITH $${"type": "object"}$$ AS MEASUREMENT;
         DECLARE FUNCTION infer_types FOR GLOBAL FROM 'functions/infer_types.rhai'
           ACCEPTS (null_values)
-          RETURNS $${"type": "object"}$$;
+          RETURNS inferred;
         SELECT infer_types() FROM orders;
         "##,
     )
@@ -217,7 +225,7 @@ async fn accepts_must_name_declared_aspects() {
     run(&session, SETUP).await;
     let e = session
         .execute(
-            r#"DECLARE FUNCTION f FOR fin FROM 'f.rhai' ACCEPTS (nope) RETURNS $${"type": "object"}$$;"#,
+            r#"DECLARE FUNCTION f FOR fin FROM 'f.rhai' ACCEPTS (nope);"#,
         )
         .await
         .unwrap_err();
@@ -233,9 +241,9 @@ async fn attest_serves_detector_outputs_in_the_fixed_shape() {
         r#"
         DECLARE ASPECT reconciliation WITH $${"type": "object"}$$ AS MEASUREMENT;
         DECLARE FUNCTION tb_check FOR fin FROM 'functions/tb.rhai'
-          RETURNS $${"type": "object", "required": ["band", "score"],
-                     "properties": {"band": {"type": "string"}, "score": {"type": "number"}}}$$;
-        DECLARE WITNESS tb_w ON reconciliation BY (FUNCTION tb_check) DETECTOR tb_check THRESHOLD 0.7;
+          RETURNS reconciliation;
+        DECLARE FUNCTION tb_bands FOR fin FROM 'functions/tb_bands.rhai';
+        DECLARE WITNESS tb_w ON reconciliation DETECTOR tb_bands THRESHOLD 0.7;
         SELECT tb_check() FROM fin.trial_balance;
         "#,
     )

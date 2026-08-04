@@ -170,7 +170,7 @@ async fn witness_by_list_gates_actor_kinds() {
 }
 
 #[tokio::test]
-async fn measurement_witness_is_single_function_only() {
+async fn measurement_aspects_take_one_producer_and_no_speaker_gate() {
     let s = store().await;
     let Declaration::Aspect(m) =
         decl(r#"DECLARE ASPECT min_max WITH $${"type": "object"}$$ AS MEASUREMENT;"#)
@@ -178,15 +178,24 @@ async fn measurement_witness_is_single_function_only() {
         unreachable!()
     };
     s.declare_aspect(&m).await.unwrap();
-    let Declaration::Function(f) = decl(
-        r#"DECLARE FUNCTION profile_min_max FOR fin FROM 'p.rhai' RETURNS $${"type": "object"}$$;"#,
-    ) else {
+    let Declaration::Function(f) =
+        decl("DECLARE FUNCTION profile_min_max FOR fin FROM 'p.rhai' RETURNS min_max;")
+    else {
         unreachable!()
     };
     s.declare_function(&f).await.unwrap();
-    let Declaration::Witness(bad) =
-        decl("DECLARE WITNESS m_w ON min_max BY (FUNCTION profile_min_max, AGENT);")
+
+    // One producer per MEASUREMENT aspect — a second function is refused.
+    let Declaration::Function(rival) =
+        decl("DECLARE FUNCTION other_min_max FOR fin FROM 'o.rhai' RETURNS min_max;")
     else {
+        unreachable!()
+    };
+    let e = s.declare_function(&rival).await.unwrap_err();
+    assert!(matches!(e, Error::MeasurementProducerTaken { .. }), "{e}");
+
+    // Nobody glosses a measurement, so BY is refused on its witness.
+    let Declaration::Witness(bad) = decl("DECLARE WITNESS m_w ON min_max BY (AGENT);") else {
         unreachable!()
     };
     let e = s.declare_witness(&bad).await.unwrap_err();
@@ -194,14 +203,14 @@ async fn measurement_witness_is_single_function_only() {
 }
 
 #[tokio::test]
-async fn detector_returns_must_carry_the_attest_shape() {
+async fn a_detector_is_a_function_without_returns() {
     let s = store().await;
-    let Declaration::Function(f) = decl(
-        r#"DECLARE FUNCTION vibes FOR fin FROM 'v.rhai' RETURNS $${"type": "object", "properties": {"mood": {}}}$$;"#,
-    ) else {
+    let Declaration::Function(f) = decl("DECLARE FUNCTION vibes FOR fin FROM 'v.rhai' RETURNS unit;")
+    else {
         unreachable!()
     };
     s.declare_function(&f).await.unwrap();
+    // A function that RETURNS an aspect is a voice, never a detector.
     let Declaration::Witness(w) =
         decl("DECLARE WITNESS unit_w ON unit BY (AGENT, HUMAN) DETECTOR vibes;")
     else {
@@ -209,6 +218,13 @@ async fn detector_returns_must_carry_the_attest_shape() {
     };
     let e = s.declare_witness(&w).await.unwrap_err();
     assert!(matches!(e, Error::DetectorNotEligible { .. }), "{e}");
+
+    // A witness naming neither BY nor DETECTOR declares nothing.
+    let Declaration::Witness(empty) = decl("DECLARE WITNESS unit_w ON unit;") else {
+        unreachable!()
+    };
+    let e = s.declare_witness(&empty).await.unwrap_err();
+    assert!(matches!(e, Error::WitnessNamesNothing(_)), "{e}");
 }
 
 #[tokio::test]
@@ -345,7 +361,7 @@ async fn collapse_serves_by_precedence_human_over_agent() {
 async fn accepts_names_must_be_declared_aspects() {
     let s = store().await;
     let Declaration::Function(good) = decl(
-        r#"DECLARE FUNCTION f FOR fin FROM 'f.rhai' ACCEPTS (unit) RETURNS $${"type": "object"}$$;"#,
+        r#"DECLARE FUNCTION f FOR fin FROM 'f.rhai' ACCEPTS (unit);"#,
     ) else {
         unreachable!()
     };
@@ -354,7 +370,7 @@ async fn accepts_names_must_be_declared_aspects() {
     assert_eq!(row.accepts, vec!["unit"]);
 
     let Declaration::Function(bad) = decl(
-        r#"DECLARE FUNCTION g FOR fin FROM 'g.rhai' ACCEPTS (nope) RETURNS $${"type": "object"}$$;"#,
+        r#"DECLARE FUNCTION g FOR fin FROM 'g.rhai' ACCEPTS (nope);"#,
     ) else {
         unreachable!()
     };
@@ -366,7 +382,7 @@ async fn accepts_names_must_be_declared_aspects() {
 async fn function_scope_gates_visibility() {
     let s = store().await;
     let Declaration::Function(f) =
-        decl(r#"DECLARE FUNCTION profile FOR fin FROM 'p.rhai' RETURNS $${"type": "object"}$$;"#)
+        decl(r#"DECLARE FUNCTION profile FOR fin FROM 'p.rhai';"#)
     else {
         unreachable!()
     };
@@ -467,7 +483,7 @@ async fn recipe_redeclare_is_content_idempotent_and_change_is_refused() {
 async fn a_gloss_invalidates_the_caches_of_functions_accepting_its_aspect() {
     let s = store().await;
     let Declaration::Function(f) = decl(
-        r#"DECLARE FUNCTION conv FOR GLOBAL FROM 'conv.rhai' ACCEPTS (unit) RETURNS $${"type": "object"}$$;"#,
+        r#"DECLARE FUNCTION conv FOR GLOBAL FROM 'conv.rhai' ACCEPTS (unit);"#,
     ) else {
         unreachable!()
     };

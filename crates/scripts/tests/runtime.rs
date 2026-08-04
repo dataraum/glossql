@@ -34,7 +34,7 @@ fn function(script: &str) -> FunctionRow {
         scope_dataset: None,
         script: script.into(),
         accepts: vec![],
-        returns: json!({"type": "object"}),
+        returns: Some("t_out".into()),
     }
 }
 
