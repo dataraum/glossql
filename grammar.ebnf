@@ -27,7 +27,8 @@ statement         = declaration
                   | use
                   | gloss
                   | extract
-                  | substrate_sql ;          (* allowlisted: SELECT and probes,
+                  | probe_stmt
+                  | substrate_sql ;          (* allowlisted: SELECT,
                                                 DROP TABLE, DELETE FROM
                                                 glossary|cache — the rest of
                                                 DDL/DML is refused *)
@@ -39,6 +40,13 @@ declaration       = "DECLARE", ( source_decl
                                | aspect_decl
                                | function_decl
                                | witness_decl ) ;
+
+probe_stmt        = "PROBE", name, "AS", dollar ;
+                    (* PROBE source AS $$ <sql> $$ — the recipe rehearsal
+                       (ruled 2026-08-04): same SQL surface, same path
+                       resolution, executed at the source, landing nothing.
+                       The result always carries its schema; LIMIT 0
+                       rehearses the identity a DECLARE RECIPE would stamp *)
 
 (* -- sources ------------------------------------------------------------ *)
 

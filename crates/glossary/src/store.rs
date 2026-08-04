@@ -244,21 +244,6 @@ impl Store {
         }))
     }
 
-    /// Every declared source, for the probe surface (paths' first segment
-    /// names one of these).
-    pub async fn sources_all(&self) -> Result<Vec<(String, Value)>> {
-        let rows = sqlx::query("SELECT name, settings FROM sources ORDER BY name")
-            .fetch_all(&self.pool)
-            .await?;
-        rows.into_iter()
-            .map(|r| {
-                let settings = serde_json::from_str(&r.get::<String, _>("settings"))
-                    .map_err(|e| Error::Corrupt(e.to_string()))?;
-                Ok((r.get("name"), settings))
-            })
-            .collect()
-    }
-
     pub async fn source_settings(&self, name: &str) -> Result<Option<Value>> {
         let row = sqlx::query("SELECT settings FROM sources WHERE name = ?")
             .bind(name)

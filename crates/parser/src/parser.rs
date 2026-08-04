@@ -80,6 +80,9 @@ impl<'a> GlossqlParser<'a> {
                 _ if w.value.eq_ignore_ascii_case("GLOSS") => {
                     return Ok(Statement::Gloss(parse_gloss(&mut self.df.parser)?));
                 }
+                _ if w.value.eq_ignore_ascii_case("PROBE") => {
+                    return Ok(Statement::Probe(parse_probe(&mut self.df.parser)?));
+                }
                 _ => {}
             }
         }
@@ -115,6 +118,14 @@ fn expect_word(p: &mut Parser, word: &str) -> Result<(), ParserError> {
         let found = p.peek_token();
         expected(&format!("`{word}`"), &found)
     }
+}
+
+fn parse_probe(p: &mut Parser) -> Result<Probe, ParserError> {
+    expect_word(p, "PROBE")?;
+    let source = p.parse_identifier()?;
+    expect_word(p, "AS")?;
+    let sql = parse_dollar(p, "dollar-quoted probe SQL — AS $$ SELECT … $$")?;
+    Ok(Probe { source, sql })
 }
 
 fn parse_declaration(p: &mut Parser) -> Result<Declaration, ParserError> {

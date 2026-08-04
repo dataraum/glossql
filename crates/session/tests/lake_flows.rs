@@ -89,19 +89,19 @@ async fn fixture_11_add_source_flow() {
         .await
         .unwrap();
 
-    // The probe: recipe-shaped SQL at the source, landing nothing — the
-    // path's first segment names the source.
+    // The probe: a recipe rehearsal — same SQL surface, same path
+    // resolution, landing nothing.
     let filled = session
         .execute(
-            "SELECT count(\"amount\") FROM read_parquet('erp_export/orders/*.parquet');",
+            "PROBE erp_export AS $$SELECT count(\"amount\") FROM read_parquet('orders/*.parquet')$$;",
         )
         .await
         .unwrap();
     assert_eq!(single_value(&filled), "3");
     let parsed = session
         .execute(
-            "SELECT count(try_cast(\"amount\" AS DOUBLE)) \
-             FROM read_parquet('erp_export/orders/*.parquet');",
+            "PROBE erp_export AS $$SELECT count(try_cast(\"amount\" AS DOUBLE)) \
+             FROM read_parquet('orders/*.parquet')$$;",
         )
         .await
         .unwrap();
@@ -118,7 +118,11 @@ async fn fixture_11_add_source_flow() {
         )
         .await
         .unwrap();
-    assert_eq!(done(&outcomes[0]), "DECLARE RECIPE orders ON fin (2 rows)");
+    assert_eq!(
+        done(&outcomes[0]),
+        "DECLARE RECIPE orders ON fin (2 rows landed, 1 dropped)",
+        "the count arrives at the decision moment"
+    );
 
     // The landed table is the typed table — no view, no raw twin.
     let total = session
@@ -248,5 +252,5 @@ async fn drop_table_removes_an_empty_misdeclaration_whole() {
         )
         .await
         .unwrap();
-    assert_eq!(done(&outcomes[0]), "DECLARE RECIPE mistake ON fin (3 rows)");
+    assert_eq!(done(&outcomes[0]), "DECLARE RECIPE mistake ON fin (3 rows landed, 0 dropped)");
 }

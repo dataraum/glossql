@@ -84,7 +84,18 @@ Witnesses, detectors, bands, the collapse and serve-and-mark; `ACCEPTS`
 invalidation; `profile` and `outliers` (reading the landed table);
 `slot_entropy`; snapshot stamping; fixture 13's patterns as FACT glosses.
 
-## Open spellings (transcribed one way, not ruled)
+## The two spellings, ruled same day
 
-- Probe source binding: source name as path prefix vs. a scoped form.
-- `imports` as a relation beside `cache` vs. a table-grain glossary row.
+- **`PROBE source AS $$sql$$`** replaced the path-prefix convention: one
+  grammar head, mirroring the recipe — one concept for the agent to know
+  (recipe-shaped SQL runs FROM a source; PROBE rehearses, RECIPE lands).
+  The router stopped sniffing SELECTs for `read_*` references; the
+  path-prefix magic and the multi-source probe resolver were deleted. The
+  deciding advantage (project lead): the result carries the schema it
+  would land — an empty result still ships one empty batch with the full
+  schema, so `LIMIT 0` of the final recipe SQL rehearses exactly the
+  identity `DECLARE RECIPE` will stamp.
+- **`imports` stays a relation** — a third name in a convention agents
+  already know (the store's relations read as plain tables), not a new
+  convention — and the count additionally arrives in the `DECLARE RECIPE`
+  outcome at the decision moment: `(2 rows landed, 1 dropped)`.

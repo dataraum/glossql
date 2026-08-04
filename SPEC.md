@@ -77,14 +77,17 @@ The recipe SQL runs **at the source**: a relational source executes it in
 its own dialect; at a file source the server runs it, with `read_parquet` /
 `read_csv` / `read_json` resolving paths under the source's location and
 `try_to_date` / `try_to_timestamp` registered. **The recipe carries the
-casts** (ruled 2026-08-04): typing is authored, not decided — the author
-probes the source first (the same SQL surface, landing nothing; a probe
-path's first segment names the source), writes the casts and the column
-choices into the recipe, and the result lands as table `segments` — the
-typed table, snapshotted by Iceberg on every import. The default recipe is
+casts** (ruled 2026-08-04): typing is authored, not decided. The author
+probes the source first — `PROBE source AS $$sql$$` is the recipe
+rehearsal: the same SQL surface and path resolution, executed at the
+source, landing nothing, its result always carrying its schema (a
+`LIMIT 0` probe of the final SQL rehearses exactly the identity the
+recipe will stamp). Then the recipe lands as table `segments` — the typed
+table, snapshotted by Iceberg on every import. The default recipe is
 `SELECT *`. The engine keeps one number per import — `dropped_rows_count`,
-source rows minus landed rows, readable through the `imports` relation;
-which rows were dropped is the author's question, answered at the source.
+source rows minus landed rows — in the declaration's outcome at the
+decision moment and in the `imports` relation for history; which rows
+were dropped is the author's question, answered at the source.
 
 Statement identity is content: the recipe SQL and the schema it produces.
 An unchanged re-declaration is a no-op; a changed one is refused outright —

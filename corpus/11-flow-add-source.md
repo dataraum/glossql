@@ -27,18 +27,21 @@ are **agent glosses**, teaches and parks are **human glosses**. The typing
 phase maps to none of them — it becomes **authorship**, the
 probe-and-recipe conversation below.
 
-Human registers the source; the agent probes it through the same statement
-door — recipe-shaped SQL, executed at the source, landing nothing (v0.3's
-"probe query" step, returned to its place):
+Human registers the source; the agent probes it — `PROBE` is the recipe
+rehearsal (ruled 2026-08-04): the same SQL surface, the same path
+resolution, executed at the source, landing nothing (v0.3's "probe query"
+step, returned to its place). The result always carries its schema, so a
+`LIMIT 0` probe of the final recipe SQL rehearses exactly the identity a
+`DECLARE RECIPE` would stamp:
 
 ```glossql
 USE fin;
 DECLARE SOURCE erp_export SET (type: parquet, location: 'lake/erp');
 
-SELECT * FROM read_parquet('erp_export/orders/*.parquet') LIMIT 50;
-SELECT count("order_date") AS filled,
+PROBE erp_export AS $$SELECT * FROM read_parquet('orders/*.parquet') LIMIT 50$$;
+PROBE erp_export AS $$SELECT count("order_date") AS filled,
        count(try_to_date("order_date", '%d.%m.%Y')) AS parsed
-FROM read_parquet('erp_export/orders/*.parquet');
+FROM read_parquet('orders/*.parquet')$$;
 ```
 
 Typing is authored, not decided (ruled 2026-08-04): the recipe carries the
@@ -60,9 +63,10 @@ SELECT sum(amount) FROM orders;
 
 The table is its recipe's result — identity is content, the hash of the
 SQL and the schema it produces (the v0.3 engine already keys recipes this
-way). A data update re-runs the same recipe and appends a snapshot; it
-must reproduce the schema or it errors. Correcting a wrong recipe is
-removal first:
+way). The declaration's outcome carries the counts at the decision moment
+(`DECLARE RECIPE orders ON fin (2 rows landed, 1 dropped)`). A data update
+re-runs the same recipe and appends a snapshot; it must reproduce the
+schema or it errors. Correcting a wrong recipe is removal first:
 
 ```glossql
 DROP TABLE orders;
@@ -178,14 +182,21 @@ that the grammar knows about.
   and snapshot staleness are the only freshness mechanisms.
 - **Filtered rows are the author's judgment** (ruled 2026-08-04): the
   engine keeps one number, `dropped_rows_count` — source rows minus
-  landed rows — transcribed here as an `imports` relation beside `cache`
-  (spelling open: relation, or a table-grain glossary row). Which rows
-  were dropped is the agent's question, answered on the files.
-- **Probe queries need a source binding** (open fork): a probe is
-  recipe-shaped SQL executed at the source without landing, transcribed
-  here with the source name as the path's first segment
-  (`read_parquet('erp_export/orders/*.parquet')`). The alternative is a
-  scoped form naming the source outside the path. Undecided.
+  landed rows. It arrives twice, deliberately: in the `DECLARE RECIPE`
+  outcome at the decision moment, and in the `imports` relation beside
+  `glossary` and `cache` for history — a third name in a convention
+  agents already know (the store's relations read as plain tables), not
+  a new convention. Which rows were dropped is the agent's question,
+  answered on the files.
+- **`PROBE` is a statement head** (ruled 2026-08-04, closing the fork):
+  the first transcription bound probes by a path-prefix convention (the
+  source name as the path's first segment) — magic an agent must be told.
+  The ruled form mirrors the recipe: `PROBE source AS $$sql$$`, one
+  concept (recipe-shaped SQL runs FROM a source; PROBE rehearses, RECIPE
+  lands). The grammar grew by one head and lost a convention; the router
+  stopped sniffing SELECTs for `read_*` references. The deciding
+  advantage: a probe's result carries the schema it would land — `LIMIT 0`
+  rehearses the identity.
 - **Benford's law dropped** (ruled 2026-08-04): the only domain-leaning
   measurement in the deterministic plane — and the only numpy/scipy
   dependency in it — consumed by nothing as a signal. It never ports;

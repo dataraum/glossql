@@ -137,28 +137,48 @@ async fn fixture_11_with_real_scripts() {
     // trial casts through the same statement door, landing nothing.
     let parsed = agent
         .execute(
-            "SELECT count(try_cast(\"amount\" AS DOUBLE)) \
-             FROM read_parquet('erp_export/orders/*.parquet');",
+            "PROBE erp_export AS $$SELECT count(try_cast(\"amount\" AS DOUBLE)) \
+             FROM read_parquet('orders/*.parquet')$$;",
         )
         .await
         .unwrap();
     assert_eq!(one(&parsed), "4", "one amount does not read as a number");
     let dates = agent
         .execute(
-            "SELECT count(try_to_date(\"order_date\", '%d.%m.%Y')) \
-             FROM read_parquet('erp_export/orders/*.parquet');",
+            "PROBE erp_export AS $$SELECT count(try_to_date(\"order_date\", '%d.%m.%Y')) \
+             FROM read_parquet('orders/*.parquet')$$;",
         )
         .await
         .unwrap();
     assert_eq!(one(&dates), "5", "the EU date pattern parses every row");
     let legacy = agent
         .execute(
-            "SELECT count(\"legacy_code\") \
-             FROM read_parquet('erp_export/orders/*.parquet');",
+            "PROBE erp_export AS $$SELECT count(\"legacy_code\") \
+             FROM read_parquet('orders/*.parquet')$$;",
         )
         .await
         .unwrap();
     assert_eq!(one(&legacy), "0", "all null — the author will leave it out");
+
+    // LIMIT 0 rehearses the identity: the probe's empty result carries
+    // exactly the schema the recipe will land.
+    let shape = agent
+        .execute(
+            "PROBE erp_export AS $$\
+               SELECT order_id, \
+                      try_cast(amount AS DOUBLE) AS amount, \
+                      try_to_date(order_date, '%d.%m.%Y') AS order_date \
+               FROM read_parquet('orders/*.parquet') LIMIT 0$$;",
+        )
+        .await
+        .unwrap();
+    let Outcome::Rows(batches) = shape.last().unwrap() else {
+        panic!("expected Rows");
+    };
+    let schema = batches[0].schema();
+    assert_eq!(schema.field(1).data_type().to_string(), "Float64");
+    assert_eq!(schema.field(2).data_type().to_string(), "Date32");
+    assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 0);
 
     // Typing is authored: the recipe carries the casts, keeps every row
     // (a bad amount is a NULL cell), and leaves the all-null column out.

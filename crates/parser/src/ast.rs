@@ -22,9 +22,20 @@ pub enum Statement {
     Use(Use),
     Gloss(Gloss),
     Extract(Extract),
+    Probe(Probe),
     /// Host SQL, parsed by `DFParser` — includes `GLOSSARY()` / `ATTEST()`
-    /// reads, views, and glossary/cache DELETEs.
+    /// reads and glossary/cache DELETEs.
     Substrate(Box<DFStatement>),
+}
+
+/// `PROBE source AS $$sql$$` — a recipe rehearsal (ruled 2026-08-04): the
+/// same SQL surface as a recipe, executed at the source, landing nothing.
+/// The result carries the schema the recipe would land, so `LIMIT 0`
+/// rehearses the identity a `DECLARE RECIPE` would stamp.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Probe {
+    pub source: Ident,
+    pub sql: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]

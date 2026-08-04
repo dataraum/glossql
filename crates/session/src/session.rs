@@ -18,7 +18,9 @@ use serde_json::Value;
 use glossql_catalog::Lake;
 use glossql_glossary::{Actor, FunctionRow, RecipeAdmission, Store, schemas};
 use glossql_import::SourceSpec;
-use glossql_parser::{Declaration, Extract, Gloss, GlossqlParser, RelOp, Statement, Subject};
+use glossql_parser::{
+    Declaration, Extract, Gloss, GlossqlParser, Probe, RelOp, Statement, Subject,
+};
 
 use crate::reads::{GlossqlReads, Shared};
 use crate::subject::{Resolved, pair_subject, resolve_endpoint, resolve_path};
@@ -218,6 +220,7 @@ impl Session {
                 Statement::Use(u) => self.use_dataset(&u.dataset.value).await?,
                 Statement::Gloss(g) => self.gloss(g).await?,
                 Statement::Extract(e) => self.extract(e).await?,
+                Statement::Probe(p) => self.probe(p).await?,
                 Statement::Substrate(s) => self.substrate(*s).await?,
             });
         }
@@ -251,10 +254,15 @@ impl Session {
                         format!("DECLARE RECIPE {table} ON {dataset} (unchanged)")
                     }
                     Some(_) => {
-                        let rows = self
+                        let (rows, dropped) = self
                             .materialize(dataset, table, &d.source.value, &d.sql)
                             .await?;
-                        format!("DECLARE RECIPE {table} ON {dataset} ({rows} rows)")
+                        // The count arrives at the decision moment: whether
+                        // the dropped rows are acceptable is the author's
+                        // call, made now, on the files.
+                        format!(
+                            "DECLARE RECIPE {table} ON {dataset} ({rows} rows landed, {dropped} dropped)"
+                        )
                     }
                 }
             }
@@ -316,12 +324,13 @@ impl Session {
         table: &str,
         source: &str,
         sql: &str,
-    ) -> Result<usize, SessionError> {
+    ) -> Result<(usize, u64), SessionError> {
         const STAGED: &str = "__glossql_staged";
         let lake = self.lake().expect("caller holds a lake");
         let spec = self.source_spec(source).await?;
         let landed = glossql_import::run_recipe(&spec, sql).await?;
         let rows: usize = landed.batches.iter().map(|b| b.num_rows()).sum();
+        let dropped = landed.source_rows.saturating_sub(rows as u64);
 
         lake.ensure_namespace(dataset).await?;
         let mounted = self.mount_schema(dataset).await?;
@@ -349,7 +358,16 @@ impl Session {
         if self.shared.dataset.read().expect("state lock").as_deref() == Some(dataset) {
             self.alias(table, &mounted).await?;
         }
-        Ok(rows)
+        Ok((rows, dropped))
+    }
+
+    /// A probe (SPEC.md §3): the recipe rehearsal, executed at its source,
+    /// landing nothing.
+    async fn probe(&self, probe: Probe) -> Result<Outcome, SessionError> {
+        let spec = self.source_spec(&probe.source.value).await?;
+        Ok(Outcome::Rows(
+            glossql_import::run_probe(&spec, &probe.sql).await?,
+        ))
     }
 
     async fn source_spec(&self, source: &str) -> Result<SourceSpec, SessionError> {
@@ -523,11 +541,6 @@ impl Session {
             }
             other => return Err(SessionError::SubstrateClosed(verb_of(other))),
         }
-        if let Some(sql) = probe_sql(inner) {
-            let specs = self.file_source_specs().await?;
-            let batches = glossql_import::run_probe(&specs, &sql).await?;
-            return Ok(Outcome::Rows(batches));
-        }
         let plan = self.ctx.state().statement_to_plan(statement).await?;
         let frame = self.ctx.execute_logical_plan(plan).await?;
         Ok(Outcome::Rows(frame.collect().await?))
@@ -592,15 +605,6 @@ impl Session {
         Ok(Outcome::Done(format!("DROP TABLE {table}")))
     }
 
-    async fn file_source_specs(&self) -> Result<Vec<SourceSpec>, SessionError> {
-        let mut specs = Vec::new();
-        for (name, settings) in self.shared.store.sources_all().await? {
-            if let Ok(spec) = SourceSpec::from_settings(&name, &settings) {
-                specs.push(spec);
-            }
-        }
-        Ok(specs)
-    }
 
     async fn subject(&self, subject: &Subject) -> Result<Resolved, SessionError> {
         let use_dataset = self.shared.dataset.read().expect("state lock").clone();
@@ -718,26 +722,6 @@ fn verb_of(statement: &SQLStatement) -> String {
         .take(2)
         .collect::<Vec<_>>()
         .join(" ")
-}
-
-/// A probe is a query over the source files themselves: any reference to
-/// `read_parquet` / `read_csv` / `read_json` routes the whole statement to
-/// the import context, where paths' first segment names the source.
-fn probe_sql(statement: &SQLStatement) -> Option<String> {
-    let SQLStatement::Query(_) = statement else {
-        return None;
-    };
-    let mut is_probe = false;
-    let _ = datafusion::sql::sqlparser::ast::visit_relations(statement, |name| {
-        if let Some(ident) = name.0.last().and_then(|p| p.as_ident()) {
-            let n = ident.value.to_lowercase();
-            if n == "read_parquet" || n == "read_csv" || n == "read_json" {
-                is_probe = true;
-            }
-        }
-        std::ops::ControlFlow::<()>::Continue(())
-    });
-    is_probe.then(|| statement.to_string())
 }
 
 /// `DELETE FROM glossary … | DELETE FROM cache …` → (target, verbatim SQL).
