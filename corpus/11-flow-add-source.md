@@ -81,7 +81,8 @@ DECLARE FUNCTION decide_types FOR GLOBAL FROM 'functions/decide_types.rhai'
   ACCEPTS (type_candidates, type_patterns)
   RETURNS $${"type": "object", "required": ["value"],
     "properties": {"value": {"type": "string"}, "expr": {"type": "string"}}}$$;
-DECLARE WITNESS type_w ON type BY (FUNCTION decide_types, AGENT, HUMAN);
+DECLARE WITNESS type_w ON type BY (FUNCTION decide_types, AGENT, HUMAN)
+  DETECTOR slot_entropy;
 
 SELECT decide_types() FROM fin.orders.amount;
 SELECT sum(amount) FROM orders;

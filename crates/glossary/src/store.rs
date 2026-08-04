@@ -23,6 +23,11 @@ use crate::types::{
 /// the table's cached evidence.
 pub const TYPE_ASPECT: &str = "type";
 
+/// The engine-owned suffix of the table behind a logical name (SPEC.md §3):
+/// recipes land `<t>_raw`; the bare name is the derived view. One
+/// definition — the session's naming and the scripts' `raw_of` both read it.
+pub const RAW_SUFFIX: &str = "_raw";
+
 /// What a read sweeps over (SPEC.md §5.3, §7.2): the whole dataset, or a
 /// subject and everything under it (columns of a table, relationships rooted
 /// at it).

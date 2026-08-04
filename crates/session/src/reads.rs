@@ -23,7 +23,9 @@ use datafusion::sql::sqlparser::ast::{
 };
 
 use glossql_catalog::Lake;
-use glossql_glossary::{AttestRow, CollapsedRow, RawRow, ReadContext, Scope, Store, schemas};
+use glossql_glossary::{
+    AttestRow, CollapsedRow, RAW_SUFFIX, RawRow, ReadContext, Scope, Store, schemas,
+};
 use serde_json::{Value, json};
 
 use crate::session::{FunctionRuntime, SessionError, SqlDoor};
@@ -38,6 +40,9 @@ pub(crate) struct Shared {
     pub handle: tokio::runtime::Handle,
     pub lake: RwLock<Option<Lake>>,
     pub runtime: RwLock<Arc<dyn FunctionRuntime>>,
+    /// The read context is rebuilt from Iceberg metadata only when the data
+    /// plane changed — materialization and `USE` clear it; reads reuse it.
+    pub read_cache: RwLock<Option<ReadContext>>,
 }
 
 impl Shared {
@@ -54,6 +59,9 @@ impl Shared {
     /// and each table's current snapshot. The disclosure grid and the
     /// staleness comparison ride on this.
     pub async fn read_context(&self) -> Result<ReadContext, SessionError> {
+        if let Some(cached) = self.read_cache.read().expect("read cache").clone() {
+            return Ok(cached);
+        }
         let mut ctx = ReadContext::default();
         let (Some(lake), Some(dataset)) = (
             self.lake(),
@@ -62,7 +70,7 @@ impl Shared {
             return Ok(ctx);
         };
         for raw in lake.table_names(&dataset).await? {
-            let logical = raw.strip_suffix("_raw").unwrap_or(&raw).to_string();
+            let logical = raw.strip_suffix(RAW_SUFFIX).unwrap_or(&raw).to_string();
             if let Some(snapshot) = lake.snapshot_id(&dataset, &raw).await? {
                 ctx.snapshots.insert(logical.clone(), snapshot);
             }
@@ -71,6 +79,7 @@ impl Shared {
             }
             ctx.universe.push(logical);
         }
+        *self.read_cache.write().expect("read cache") = Some(ctx.clone());
         Ok(ctx)
     }
 }

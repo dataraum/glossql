@@ -2,10 +2,9 @@
 // verify — never column names. Patterns arrive as context (ACCEPTS
 // type_patterns); their exprs carry a `{col}` placeholder in the
 // substrate's SQL spelling.
-let parts = subject.split(".");
-let table = parts[0];
-let column = parts[1];
-let t = db.query(`SELECT "${column}" AS v FROM "${table}_raw"`);
+let raw = raw_of(subject);
+let column = subject.split(".")[1];
+let t = db.query(`SELECT "${column}" AS v FROM "${raw}"`);
 let c = t.col("v");
 let candidates = [];
 
@@ -18,7 +17,7 @@ if cfg != () {
                 // The pattern quotes its own `{col}` placeholder.
                 let expr = p.standardization_expr;
                 expr.replace("{col}", column);
-                let trial = db.query(`SELECT count("${column}") AS nn, count(TRY_CAST(${expr} AS ${p.inferred_type})) AS ok FROM "${table}_raw"`);
+                let trial = db.query(`SELECT count("${column}") AS nn, count(TRY_CAST(${expr} AS ${p.inferred_type})) AS ok FROM "${raw}"`);
                 let nn = trial.col("nn").value_at(0).parse_int();
                 let ok = trial.col("ok").value_at(0).parse_int();
                 let pr = if nn == 0 { 1.0 } else { ok.to_float() / nn.to_float() };

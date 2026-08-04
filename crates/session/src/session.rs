@@ -140,6 +140,7 @@ impl Session {
             handle: tokio::runtime::Handle::current(),
             lake: RwLock::new(None),
             runtime: RwLock::new(Arc::new(NoRuntime)),
+            read_cache: RwLock::new(None),
         });
         let config = SessionConfig::new()
             .set_str("datafusion.sql_parser.dialect", "postgres")
@@ -295,6 +296,7 @@ impl Session {
                 let _ = self.ctx.deregister_table(old.as_str());
             }
             self.derived.write().expect("derived").clear();
+            *self.shared.read_cache.write().expect("read cache") = None;
             for table in lake.table_names(name).await? {
                 self.alias(&table, &schema).await?;
             }
@@ -316,7 +318,7 @@ impl Session {
             return Ok(());
         };
         for raw in lake.table_names(&dataset).await? {
-            let Some(logical) = raw.strip_suffix("_raw") else {
+            let Some(logical) = raw.strip_suffix(glossql_glossary::RAW_SUFFIX) else {
                 continue;
             };
             let columns = lake.table_columns(&dataset, &raw).await?;
@@ -386,6 +388,7 @@ impl Session {
             let _ = self.ctx.deregister_table(STAGED);
             inserted?;
         }
+        *self.shared.read_cache.write().expect("read cache") = None;
         if self.shared.dataset.read().expect("state lock").as_deref() == Some(dataset) {
             self.alias(&raw, &mounted).await?;
             self.refresh_derived().await?;
@@ -425,6 +428,50 @@ impl Session {
         Ok(())
     }
 
+    /// A `type` gloss carrying an `expr` becomes executable view SQL — a
+    /// malformed one would brick every read at the next derivation, so it
+    /// is refused at admission: the emitted cast is probed as a zero-row
+    /// query against the raw table (syntax, column references, target type
+    /// — all checked; the probe is skipped when the table has no data yet).
+    async fn admit_type_expr(
+        &self,
+        gloss: &Gloss,
+        resolved: &Resolved,
+    ) -> Result<(), SessionError> {
+        if gloss.aspect.value != glossql_glossary::TYPE_ASPECT {
+            return Ok(());
+        }
+        let Ok(body) = serde_json::from_str::<Value>(&gloss.body.raw) else {
+            return Ok(()); // schema validation rejects it downstream
+        };
+        let (Some(expr), Some(target)) = (
+            body.pointer("/expr").and_then(Value::as_str),
+            body.pointer("/value").and_then(Value::as_str),
+        ) else {
+            return Ok(());
+        };
+        let Some((table, _column)) = resolved.subject.split_once('.') else {
+            return Ok(());
+        };
+        let raw = raw_name(table);
+        let probe = format!(
+            "SELECT TRY_CAST(({expr}) AS {target}) FROM \"{raw}\" LIMIT 0"
+        );
+        match self.ctx.sql(&probe).await {
+            Ok(df) => {
+                df.collect().await.map_err(|e| SessionError::BadSubject(
+                    format!("type expr for `{}` fails: {e}", resolved.subject),
+                ))?;
+                Ok(())
+            }
+            Err(e) if e.to_string().contains(&raw) => Ok(()), // no table yet
+            Err(e) => Err(SessionError::BadSubject(format!(
+                "type expr for `{}` fails: {e}",
+                resolved.subject
+            ))),
+        }
+    }
+
     /// The subject's table snapshot at write time — `None` for dataset-level
     /// subjects, pair paths, tables the lake does not hold, or no lake.
     /// Subjects are logical names; the snapshot rides on the `_raw` table.
@@ -447,6 +494,7 @@ impl Session {
 
     async fn gloss(&self, gloss: Gloss) -> Result<Outcome, SessionError> {
         let resolved = self.subject(&gloss.subject).await?;
+        self.admit_type_expr(&gloss, &resolved).await?;
         let snapshot = self.stamp(&resolved).await?;
         self.shared
             .store
@@ -592,7 +640,7 @@ impl Session {
 /// The Iceberg table behind a logical name (project lead, 2026-08-04):
 /// recipes land `<t>_raw`; the bare name is always the derived view.
 pub(crate) fn raw_name(table: &str) -> String {
-    format!("{table}_raw")
+    format!("{table}{}", glossql_glossary::RAW_SUFFIX)
 }
 
 fn endpoint_segments(path: &glossql_parser::ColumnPath) -> Vec<String> {

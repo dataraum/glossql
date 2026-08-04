@@ -119,7 +119,8 @@ DECLARE FUNCTION slot_entropy FOR GLOBAL FROM 'functions/slot_entropy.rhai'
   }$$;
 
 DECLARE WITNESS type_candidates_w ON type_candidates BY (FUNCTION infer_types);
-DECLARE WITNESS type_w ON type BY (FUNCTION decide_types, AGENT, HUMAN);
+DECLARE WITNESS type_w ON type BY (FUNCTION decide_types, AGENT, HUMAN)
+  DETECTOR slot_entropy;
 DECLARE WITNESS behavior_w ON behavior BY (AGENT, HUMAN)
   DETECTOR slot_entropy THRESHOLD 0.7;
 
@@ -230,6 +231,22 @@ async fn fixture_11_with_real_scripts() {
         .await
         .unwrap();
     assert_eq!(one(&total), "127.65", "the view followed the override");
+
+    // No THRESHOLD on the type witness: an override never withholds the
+    // value, but the disagreement with the function's pick shows as a band.
+    let band = agent
+        .execute("SELECT band FROM ATTEST(orders.amount::type);")
+        .await
+        .unwrap();
+    assert_eq!(one(&band), "yellow", "override visible, never blocking");
+
+    // A malformed expr is refused at admission — it would otherwise become
+    // view SQL and brick every read.
+    let err = agent
+        .execute(r#"GLOSS type ON orders.amount AS $${"value": "DATE", "expr": "try_to_date(("}$$;"#)
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("type expr"), "{err}");
 
     // The detector adjudicates at read: one slot is green, a human
     // disagreement turns it red and the collapsed value withholds.

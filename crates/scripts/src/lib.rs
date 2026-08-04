@@ -187,6 +187,13 @@ impl RhaiRuntime {
                 d.0.sql(sql).map(|b| Table(Arc::new(b))).map_err(Into::into)
             });
 
+        // The raw table behind a subject — the naming convention lives in
+        // glossql-glossary, not in every script.
+        engine.register_fn("raw_of", |subject: &str| -> String {
+            let table = subject.split('.').next().unwrap_or(subject);
+            format!("{table}{}", glossql_glossary::RAW_SUFFIX)
+        });
+
         RhaiRuntime {
             root: root.into(),
             engine,
