@@ -172,7 +172,7 @@ async fn ensure_verdicts(
             };
             shared
                 .store
-                .cache_put(dataset, subject, &detector, &output.to_string(), snapshot)
+                .cache_put(dataset, subject, &detector, &output.to_string(), snapshot, &[])
                 .await?;
         }
     }

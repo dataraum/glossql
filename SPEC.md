@@ -369,12 +369,15 @@ DELETE FROM cache WHERE function = 'dso';
 value for an aspect — glossed, or a bound measurement's fresh output —
 deletes the cached results of every function that `ACCEPTS` it, at and
 under the subject: the declaration that names a script's inputs also names
-what kills its cache. A changed `type` decision additionally deletes the
-table's evidence — everything that analyzed its served shape — sparing the
-typing machinery itself, whose input is the raw table and whose output is
-the decision. Nothing recomputes at write time, and no machinery ever
-deletes a gloss: stale judgment is served and marked (§5.3), superseded
-only by whoever owns the slot.
+what kills its cache. Data dependencies are recorded, not declared: each
+cached run remembers which tables it actually queried, and the store holds
+each table's emitted view SQL; when a refresh finds the served shape
+changed — a typing decision, an eligibility decision, any input to the
+derivation — every cache that read that table dies, once. No curated
+exemption: inference survives a re-typing because it reads the raw table,
+the deciders because they read no table at all. Nothing recomputes at
+write time, and no machinery ever deletes a gloss: stale judgment is
+served and marked (§5.3), superseded only by whoever owns the slot.
 
 Whether multi-function
 extraction fans out or runs one call after another is the caller's choice —

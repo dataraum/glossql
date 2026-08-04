@@ -238,9 +238,9 @@ async fn fixture_11_with_real_scripts() {
     assert!(one(&outlier).contains("\"applicable\":true"), "{}", one(&outlier));
     assert!(one(&outlier).contains("\"count\":1"), "99.90 is beyond both fences: {}", one(&outlier));
 
-    // An agent gloss supersedes the function's pick — and the typing
-    // decision changing kills the table's evidence, sparing the typing
-    // machinery (writes invalidate, reads recompute).
+    // An agent gloss supersedes the function's pick — and the served shape
+    // changing kills exactly the caches that read the table, by their
+    // recorded reads (writes invalidate, reads recompute).
     agent
         .execute(r#"GLOSS type ON orders.amount AS $${"value": "DECIMAL(12,2)"}$$;"#)
         .await
@@ -259,7 +259,7 @@ async fn fixture_11_with_real_scripts() {
         .execute("SELECT count(*) FROM cache WHERE function = 'infer_types';")
         .await
         .unwrap();
-    assert_eq!(one(&machinery_rows), "2", "the typing machinery is exempt");
+    assert_eq!(one(&machinery_rows), "2", "it reads the raw table, not the view");
     let total = agent
         .execute("SELECT sum(amount) FROM orders;")
         .await

@@ -117,6 +117,51 @@ impl SqlDoor for CtxDoor {
     }
 }
 
+/// A door that remembers which tables each query touched — the recorded
+/// read-set stored beside the cached result, so a change to a table's
+/// served shape kills exactly the results that read it (project lead
+/// ruling, 2026-08-04). Recorded, never declared: a run that branches
+/// invalidates by what it actually did.
+struct RecordingDoor {
+    inner: CtxDoor,
+    seen: std::sync::Mutex<std::collections::BTreeSet<String>>,
+}
+
+impl RecordingDoor {
+    fn new(inner: CtxDoor) -> Self {
+        RecordingDoor {
+            inner,
+            seen: std::sync::Mutex::new(std::collections::BTreeSet::new()),
+        }
+    }
+
+    /// The tables read so far, bare names — `fin.orders` and `orders` both
+    /// record as `orders`, the name the derivation advances under.
+    fn reads(&self) -> Vec<String> {
+        self.seen.lock().expect("reads").iter().cloned().collect()
+    }
+}
+
+impl SqlDoor for RecordingDoor {
+    fn sql(&self, query: &str) -> Result<Vec<RecordBatch>, String> {
+        // The same parser the context uses: a query it cannot parse cannot
+        // execute either, so an unrecorded read cannot produce a result.
+        if let Ok(statements) = datafusion::sql::parser::DFParser::parse_sql(query) {
+            let mut seen = self.seen.lock().expect("reads");
+            for statement in &statements {
+                if let Ok((relations, _ctes)) =
+                    datafusion::sql::resolve::resolve_table_references(statement, true)
+                {
+                    for r in relations {
+                        seen.insert(r.table().to_string());
+                    }
+                }
+            }
+        }
+        self.inner.sql(query)
+    }
+}
+
 pub struct Session {
     ctx: SessionContext,
     shared: Arc<Shared>,
@@ -309,7 +354,11 @@ impl Session {
     /// always a view — identity while nothing is decided, the typed
     /// projection as decisions land — with `<t>_quarantined` beside it.
     /// Nothing regenerates on write; before statements plan, the emitted SQL
-    /// is recompared and `CREATE OR REPLACE VIEW` runs only on change.
+    /// is recompared and `CREATE OR REPLACE VIEW` runs only on change. The
+    /// authoritative comparison lives in the store (`advance_derived`), so
+    /// a served-shape change invalidates its readers exactly once however
+    /// many sessions notice it; the session-local map only decides whether
+    /// this context's views need re-creating.
     async fn refresh_derived(&self) -> Result<(), SessionError> {
         let (Some(lake), Some(dataset)) = (
             self.lake(),
@@ -335,6 +384,10 @@ impl Session {
             if self.derived.read().expect("derived").get(logical) == Some(&emitted) {
                 continue;
             }
+            self.shared
+                .store
+                .advance_derived(&dataset, logical, &emitted)
+                .await?;
             self.ctx.sql(&typed).await?.collect().await?;
             self.ctx.sql(&quarantine).await?.collect().await?;
             self.derived
@@ -545,6 +598,7 @@ impl Session {
                         context.insert(aspect.clone(), value);
                     }
                     let context = Value::Object(context);
+                    let door = Arc::new(RecordingDoor::new(self.door()));
                     let output = self
                         .shared
                         .runtime()
@@ -552,7 +606,7 @@ impl Session {
                             &function,
                             &resolved.subject,
                             &context,
-                            Arc::new(self.door()),
+                            Arc::clone(&door) as Arc<dyn SqlDoor>,
                         )
                         .map_err(SessionError::Runtime)?;
                     schemas::validate_instance(&function.returns, &output).map_err(|detail| {
@@ -569,6 +623,7 @@ impl Session {
                             &name,
                             &output.to_string(),
                             snapshot,
+                            &door.reads(),
                         )
                         .await?;
                     store

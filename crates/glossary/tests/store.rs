@@ -378,10 +378,10 @@ async fn function_scope_gates_visibility() {
 #[tokio::test]
 async fn cache_serves_the_latest_row_per_subject_and_function() {
     let s = store().await;
-    s.cache_put("fin", "orders", "profile", r#"{"n": 1}"#, None)
+    s.cache_put("fin", "orders", "profile", r#"{"n": 1}"#, None, &[])
         .await
         .unwrap();
-    s.cache_put("fin", "orders", "profile", r#"{"n": 2}"#, None)
+    s.cache_put("fin", "orders", "profile", r#"{"n": 2}"#, None, &[])
         .await
         .unwrap();
     let row = s
@@ -484,10 +484,10 @@ async fn a_gloss_invalidates_the_caches_of_functions_accepting_its_aspect() {
         unreachable!()
     };
     s.declare_function(&f).await.unwrap();
-    s.cache_put("fin", "orders.amount", "conv", "{}", None)
+    s.cache_put("fin", "orders.amount", "conv", "{}", None, &[])
         .await
         .unwrap();
-    s.cache_put("fin", "invoices.total", "conv", "{}", None)
+    s.cache_put("fin", "invoices.total", "conv", "{}", None, &[])
         .await
         .unwrap();
 
@@ -527,55 +527,59 @@ async fn a_gloss_invalidates_the_caches_of_functions_accepting_its_aspect() {
 }
 
 #[tokio::test]
-async fn a_type_decision_kills_the_tables_evidence_but_spares_the_machinery() {
+async fn a_served_shape_change_kills_exactly_what_read_the_table() {
     let s = store().await;
-    for d in [
-        r#"DECLARE ASPECT type WITH $${"type": "object", "required": ["value"], "properties": {"value": {"type": "string"}, "expr": {"type": "string"}}}$$ AS FACT;"#,
-        r#"DECLARE ASPECT type_candidates WITH $${"type": "object", "required": ["candidates"], "properties": {"candidates": {"type": "array"}}}$$ AS MEASUREMENT;"#,
+    // The real lifecycle: the derivation exists before any extraction can
+    // cache against it (every statement refreshes first).
+    let first = s
+        .advance_derived("fin", "orders", "CREATE OR REPLACE VIEW ...v1")
+        .await
+        .unwrap();
+    assert!(first, "the first emitted shape is a change");
+
+    // Three cached runs with recorded reads: profile read the served view,
+    // infer_types read the raw table, decide_types read nothing.
+    for (f, reads) in [
+        ("profile", vec!["orders".to_string()]),
+        ("infer_types", vec!["orders_raw".to_string()]),
+        ("decide_types", vec![]),
     ] {
-        let Declaration::Aspect(a) = decl(d) else { unreachable!() };
-        s.declare_aspect(&a).await.unwrap();
-    }
-    for d in [
-        r#"DECLARE FUNCTION infer_types FOR GLOBAL FROM 'i.rhai' RETURNS $${"type": "object"}$$;"#,
-        r#"DECLARE FUNCTION decide_types FOR GLOBAL FROM 'd.rhai' ACCEPTS (type_candidates) RETURNS $${"type": "object"}$$;"#,
-        r#"DECLARE FUNCTION profile FOR GLOBAL FROM 'p.rhai' RETURNS $${"type": "object"}$$;"#,
-    ] {
-        let Declaration::Function(f) = decl(d) else { unreachable!() };
-        s.declare_function(&f).await.unwrap();
-    }
-    for d in [
-        "DECLARE WITNESS tc_w ON type_candidates BY (FUNCTION infer_types);",
-        "DECLARE WITNESS type_w ON type BY (FUNCTION decide_types, AGENT, HUMAN);",
-    ] {
-        let Declaration::Witness(w) = decl(d) else { unreachable!() };
-        s.declare_witness(&w).await.unwrap();
-    }
-    for f in ["infer_types", "decide_types", "profile"] {
-        s.cache_put("fin", "orders.amount", f, r#"{"candidates": []}"#, None)
+        s.cache_put("fin", "orders.amount", f, r#"{"candidates": []}"#, None, &reads)
             .await
             .unwrap();
     }
-
-    let g = gloss(r#"GLOSS type ON orders.amount AS $${"value": "DECIMAL(12,2)"}$$;"#);
-    s.gloss("fin", &agent(), "type", "orders.amount", &g.body, None)
+    let again = s
+        .advance_derived("fin", "orders", "CREATE OR REPLACE VIEW ...v1")
         .await
         .unwrap();
+    assert!(!again, "an unchanged shape advances nothing");
+    assert!(
+        s.cache_get("fin", "orders.amount", "profile")
+            .await
+            .unwrap()
+            .is_some(),
+        "unchanged shape, the reader's result stands"
+    );
 
+    let changed = s
+        .advance_derived("fin", "orders", "CREATE OR REPLACE VIEW ...v2")
+        .await
+        .unwrap();
+    assert!(changed);
     assert!(
         s.cache_get("fin", "orders.amount", "profile")
             .await
             .unwrap()
             .is_none(),
-        "analysis of the table's served shape is stale evidence"
+        "it read the table whose served shape moved"
     );
-    for machinery in ["infer_types", "decide_types"] {
+    for survivor in ["infer_types", "decide_types"] {
         assert!(
-            s.cache_get("fin", "orders.amount", machinery)
+            s.cache_get("fin", "orders.amount", survivor)
                 .await
                 .unwrap()
                 .is_some(),
-            "`{machinery}` reads raw; its output is the decision chain"
+            "`{survivor}` did not read the served view — recorded fact, not a curated list"
         );
     }
 }

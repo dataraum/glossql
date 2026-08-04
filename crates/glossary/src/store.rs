@@ -156,7 +156,14 @@ CREATE TABLE IF NOT EXISTS cache (
   function TEXT NOT NULL,
   body TEXT NOT NULL,
   computed_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-  snapshot_id INTEGER
+  snapshot_id INTEGER,
+  reads TEXT NOT NULL DEFAULT '[]'
+);
+CREATE TABLE IF NOT EXISTS derived (
+  dataset TEXT NOT NULL,
+  table_name TEXT NOT NULL,
+  emitted TEXT NOT NULL,
+  PRIMARY KEY (dataset, table_name)
 );
 "#;
 
@@ -516,10 +523,9 @@ impl Store {
 
     /// Writes invalidate, reads recompute, judgment only supersedes (project
     /// lead, 2026-08-04). A new value for an aspect kills the cached output
-    /// of every function that `ACCEPTS` it, at and under the subject; a new
-    /// typing decision additionally kills the table's evidence — everything
-    /// that analyzed its served shape — sparing the typing machinery itself,
-    /// whose output *is* the decision and whose input is the raw table.
+    /// of every function that `ACCEPTS` it, at and under the subject — the
+    /// context-in dependency. The data-in dependency is not declared but
+    /// recorded: see [`Store::advance_derived`].
     async fn invalidate(&self, dataset: &str, aspect: &str, subject: &str) -> Result<()> {
         let dependents = self.functions_accepting(aspect).await?;
         if !dependents.is_empty() {
@@ -543,30 +549,51 @@ impl Store {
             q.execute(&self.pool).await?;
         }
 
-        if aspect == TYPE_ASPECT
-            && let Some(table) = table_of(subject)
-        {
-            let exempt = self.typing_machinery().await?;
-            let marks = vec!["?"; exempt.len()].join(", ");
-            let not_in = if exempt.is_empty() {
-                String::new()
-            } else {
-                format!("AND function NOT IN ({marks}) ")
-            };
-            let sql = format!(
-                "DELETE FROM cache WHERE dataset = ? {not_in}\
-                 AND (subject = ? OR subject LIKE ?)"
-            );
-            let mut q = sqlx::query(&sql).bind(dataset);
-            for f in &exempt {
-                q = q.bind(f.as_str());
-            }
-            q.bind(table.to_string())
-                .bind(format!("{table}.%"))
-                .execute(&self.pool)
-                .await?;
-        }
         Ok(())
+    }
+
+    /// The served shape of a table, advanced (project lead ruling,
+    /// 2026-08-04): the store holds each table's emitted view SQL — plain
+    /// text, the inspectable record, diffable when an invalidation
+    /// surprises. When a refresh finds it changed — a typing decision, an
+    /// eligibility decision, any future derivation input — every cache
+    /// whose run recorded reading that table dies, once, store-wide. No
+    /// curated exemption: `infer_types` survives because it factually reads
+    /// the raw table, `decide_types` because it reads no table at all.
+    pub async fn advance_derived(
+        &self,
+        dataset: &str,
+        table: &str,
+        emitted: &str,
+    ) -> Result<bool> {
+        let current: Option<String> = sqlx::query_scalar(
+            "SELECT emitted FROM derived WHERE dataset = ? AND table_name = ?",
+        )
+        .bind(dataset)
+        .bind(table)
+        .fetch_optional(&self.pool)
+        .await?;
+        if current.as_deref() == Some(emitted) {
+            return Ok(false);
+        }
+        sqlx::query(
+            "INSERT INTO derived (dataset, table_name, emitted) VALUES (?, ?, ?) \
+             ON CONFLICT (dataset, table_name) DO UPDATE SET emitted = excluded.emitted",
+        )
+        .bind(dataset)
+        .bind(table)
+        .bind(emitted)
+        .execute(&self.pool)
+        .await?;
+        sqlx::query(
+            "DELETE FROM cache WHERE dataset = ? AND EXISTS \
+             (SELECT 1 FROM json_each(cache.reads) WHERE json_each.value = ?)",
+        )
+        .bind(dataset)
+        .bind(table)
+        .execute(&self.pool)
+        .await?;
+        Ok(true)
     }
 
     async fn functions_accepting(&self, aspect: &str) -> Result<Vec<String>> {
@@ -582,28 +609,6 @@ impl Store {
             }
         }
         Ok(names)
-    }
-
-    /// The typing machinery, derived from declarations: speakers on the
-    /// `type` witness, plus speakers on the aspects those functions
-    /// `ACCEPTS` (the evidence they decide from).
-    async fn typing_machinery(&self) -> Result<Vec<String>> {
-        let mut set = std::collections::BTreeSet::new();
-        let mut evidence_aspects = std::collections::BTreeSet::new();
-        for w in self.witnesses_on(TYPE_ASPECT).await? {
-            for f in &w.function_speakers {
-                set.insert(f.clone());
-                if let Some(row) = self.function(f, None).await? {
-                    evidence_aspects.extend(row.accepts);
-                }
-            }
-        }
-        for a in evidence_aspects {
-            for w in self.witnesses_on(&a).await? {
-                set.extend(w.function_speakers.iter().cloned());
-            }
-        }
-        Ok(set.into_iter().collect())
     }
 
     /// The newest write into (subject, aspect) across all slots — what a
@@ -1032,6 +1037,9 @@ impl Store {
         row.map(cache_row).transpose()
     }
 
+    /// `reads` is the set of tables the run actually queried through its
+    /// door — recorded, not declared, so [`Store::advance_derived`] kills
+    /// exactly the results the change can have falsified.
     pub async fn cache_put(
         &self,
         dataset: &str,
@@ -1039,16 +1047,18 @@ impl Store {
         function: &str,
         body: &str,
         snapshot_id: Option<i64>,
+        reads: &[String],
     ) -> Result<()> {
         sqlx::query(
-            "INSERT INTO cache (dataset, subject, function, body, snapshot_id) \
-             VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO cache (dataset, subject, function, body, snapshot_id, reads) \
+             VALUES (?, ?, ?, ?, ?, ?)",
         )
         .bind(dataset)
         .bind(subject)
         .bind(function)
         .bind(body)
         .bind(snapshot_id)
+        .bind(serde_json::to_string(reads).map_err(|e| Error::Corrupt(e.to_string()))?)
         .execute(&self.pool)
         .await?;
         // A measurement's new value invalidates like a gloss would: through
