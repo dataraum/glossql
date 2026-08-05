@@ -98,11 +98,13 @@ GLOSS meaning ON orders.zip -> orders.city AS $${"value": "postal drill-down; g3
 
 ## 4. The enriched read
 
-The substrate does not persist views — `CREATE VIEW` is refused
-(2026-08-06; a persistent enriched-view construct is an open language
-question, not yours to improvise). The deliverable is the *judged
-join*: which joins extend a fact without corrupting it, recorded so
-every later query can use them. Before trusting any join, run the
+The substrate does not persist views — `CREATE VIEW` is refused, and
+that is the ruling, not a gap (project lead, confirmed 2026-08-06:
+grain-checked joins are the construct, in the spirit of the language;
+the one flow that once needed a view — the composite cure — was
+retired by the tuple ruling). The deliverable is the *judged join*:
+which joins extend a fact without corrupting it, recorded so every
+later query can use them. Before trusting any join, run the
 grain check — the cheapest verification of the most consequential
 property a join has:
 
