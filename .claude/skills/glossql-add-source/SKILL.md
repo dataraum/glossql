@@ -88,30 +88,41 @@ trying.
 
 ## 5. Frame the semantic vocabulary
 
-The workspace ships with measurements only. Declare the column-grain
-vocabulary before glossing — send once, verbatim:
+The workspace ships with measurements only. Declare the vocabulary
+before glossing — send once, verbatim. The `ON` list is each aspect's
+grain: glosses outside it are refused, and the `unassessed` grid stays
+within it.
 
 ```glossql
 DECLARE ASPECT meaning WITH $${
   "type": "object", "required": ["value"],
   "properties": {"value": {"type": "string"}, "term": {"type": "string"}}
-}$$ AS FACT;
+}$$ AS FACT ON TABLE, COLUMN, RELATIONSHIP;
+DECLARE ASPECT entity WITH $${
+  "type": "object", "required": ["value"],
+  "properties": {"value": {"type": "string"},
+                 "role": {"enum": ["fact", "dimension"]},
+                 "grain": {"type": "array", "items": {"type": "string"}},
+                 "time_axis": {"type": "string"},
+                 "identity_columns": {"type": "array", "items": {"type": "string"}}}
+}$$ AS FACT ON TABLE;
 DECLARE ASPECT role WITH $${
   "type": "object", "required": ["value"],
   "properties": {"value": {"enum": ["key", "measure", "dimension",
                                     "timestamp", "attribute"]}}
-}$$ AS FACT;
+}$$ AS FACT ON COLUMN;
 DECLARE ASPECT behavior WITH $${
   "type": "object", "required": ["value"],
   "properties": {"value": {"enum": ["stock", "flow"]}}
-}$$ AS FACT;
+}$$ AS FACT ON COLUMN;
 DECLARE ASPECT unit WITH $${
   "type": "object", "required": ["value"],
   "properties": {"value": {"type": "string"},
                  "source_column": {"type": "string"}}
-}$$ AS FACT;
+}$$ AS FACT ON COLUMN;
 
 DECLARE WITNESS meaning_w ON meaning BY (AGENT, HUMAN);
+DECLARE WITNESS entity_w ON entity BY (AGENT, HUMAN);
 DECLARE WITNESS role_w ON role BY (AGENT, HUMAN)
   DETECTOR slot_entropy THRESHOLD 0.7;
 DECLARE WITNESS behavior_w ON behavior BY (AGENT, HUMAN)
@@ -120,7 +131,35 @@ DECLARE WITNESS unit_w ON unit BY (AGENT, HUMAN)
   DETECTOR slot_entropy THRESHOLD 0.7;
 ```
 
-## 6. Gloss every column
+## 6. Gloss every table — the entity verdict
+
+Before the columns, say what each table *is*. Every correct aggregate
+downstream depends on this verdict, and it is judged from the data,
+never from the table's name:
+
+- **value** — what one row is, in business words ("one journal line",
+  "a customer master record").
+- **role** — `fact` (events/measures at volume, carrying the numbers)
+  or `dimension` (descriptive, referenced by others). Read it from the
+  evidence: measures, an event date, row counts, who references whom.
+- **grain** — the columns that identify one row. Verify, never assert:
+  `COUNT(*)` vs `COUNT(DISTINCT (col, …))` must agree. A table whose
+  real grain is composite gets the composite; a table with no key gets
+  none — say so in `meaning` rather than inventing one. Watch for
+  document-header values repeated onto every line (constant within the
+  document id): summing them at row grain multiplies by line count.
+- **time_axis** — the column recording *when the row's event
+  happened*. Attribute dates (due_date, hire_date) are not an axis;
+  one anchor at most; a table with only attribute dates has none.
+- **identity_columns** — structural observation only: which columns
+  identify entities (theirs or another table's).
+
+```glossql
+GLOSS entity ON orders AS $${"value": "sales order line", "role": "fact",
+  "grain": ["order_id", "line_no"], "time_axis": "order_date"}$$;
+```
+
+## 7. Gloss every column
 
 This is the content the flow exists to produce. Read the measurements
 first (`SELECT * FROM GLOSSARY(orders.amount)` serves the profile),
@@ -158,7 +197,7 @@ GLOSS behavior ON orders.amount AS $${"value": "flow"}$$;
 GLOSS unit ON orders.amount AS $${"value": "EUR", "source_column": "currency_code"}$$;
 ```
 
-## 7. Read back what's open
+## 8. Read back what's open
 
 ```glossql
 SELECT count(*) FROM GLOSSARY(fin) WHERE state = 'unassessed';

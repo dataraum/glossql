@@ -57,10 +57,10 @@ documents:
   Sessions live in the plane keyed by actor; actor rides the connection
   via initialize clientInfo with a boot-flag fallback. The door tells,
   skills teach — agent knowledge is statically written into
-  `.claude/skills/` (glossql, glossql-add-source with the framing block
-  and per-column glossing rules, glossql-functions,
-  glossql-relationships), the one teaching layer (MCP resources tried
-  and reversed 2026-08-04). Skills follow deliverables, never v0.3
+  `.claude/skills/` (glossql, glossql-add-source with the framing block,
+  the table entity verdict — ported 2026-08-05 — and per-column glossing
+  rules, glossql-functions, glossql-relationships), the one teaching
+  layer (MCP resources tried and reversed 2026-08-04). Skills follow deliverables, never v0.3
   phase names (ruled 2026-08-05); the judge pattern — measurements
   optimize recall, the agent judge removes false positives —
   is taught in the core glossql skill, detect_relationships is its
