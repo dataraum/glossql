@@ -114,17 +114,16 @@ for the project lead, not something to decide in passing.
 The lead's rule for this area: v0.3's complexity is not the thing to
 keep; what could be *realities in actual data* is.
 
-- **The stock-flow judge** (lead's candidate, 2026-08-05): v0.3's
-  temporal-behavior detector pools the *claimed* behavior against the
-  *measured* one — the first measurement-based judge. Candidate
-  glossql shape, needing a ruling before build: a function that
-  RETURNS the `behavior` FACT aspect would put a measured voice into
-  the same witness's slots (function voices ride RETURNS, ruled
-  2026-08-04; collapse already ranks human > agent > function), and
-  `slot_entropy` — or a sharper detector — would band
-  claim-vs-data disagreement with no new machinery. RETURNS onto a
-  FACT aspect is legal by shape today but unexercised; whether it is
-  *intended* is the lead's call.
+- **The stock-flow judge** — ruled 2026-08-05: *not* a function voice
+  in the `behavior` slots. In v0.3 the function was typically right
+  and the agent wrong, but that was before agents could explore; run
+  3's agent out-judged the static rule by testing against the ledger.
+  The shape is an evidence MEASUREMENT (`behavior_evidence`: tie the
+  column to period movements, test summability) that helps the agent
+  write the verdict — and `contested` stays what it means, human vs
+  agent. A measured voice ranked against claims would smuggle back
+  the calibration question the 2026-08-03 pivot dropped. RETURNS onto
+  a FACT aspect stays unexercised.
 - **booksql** (`../testdata/booksql`, research-use dataset): the
   SQLite (`accounting.sqlite`, 810k-row `master_txn_table`, five
   composite FKs all shaped `(businessID, X)`) is the designated test
@@ -133,12 +132,43 @@ keep; what could be *realities in actual data* is.
   before that — broken exports are exactly what probes and authored
   recipes exist for.
 
-## Next: run 3
+## Run 3 (2026-08-05): the plane live — the decline muscle works
 
-The populated run-2 workspace, a fresh agent, the new skill. The
-dataset holds exactly the traps this plane is for: the dangling
-`invoices.vendor_id` (20 vendors, no vendor table — an edge that must
-be *declined* for a missing endpoint), unused `fx_rates` (candidates
-with no business meaning), and the chart-of-accounts self-hierarchy.
-The interesting outcome is the decline muscle: what the agent
-declares matters less than what it leaves in the measurement.
+Fresh workspace, the eight finance CSVs, the new skills, the
+pre-composite script (the rescue landed the same day, after this
+run). What the agent did:
+
+- Landed all eight tables, 0 rows dropped, typing authored — this
+  time DECIMAL(18,2) for money (exact arithmetic for a ledger that
+  must balance; the agent verified Decimal128 reads as numeric in the
+  column kernels before committing), DECIMAL(18,6) fx rates, BIGINT
+  account numbers, BOOLEAN reconciled.
+- 51 profiles, 9 outliers, 6 temporals; meaning + role on all 51
+  columns, behavior + unit on the 9 measures, meaning on all 8
+  tables — 203 slots current, all bands green, nothing contested.
+  The trial-balance-is-turnover finding recurred, tied to the ledger
+  and glossed against the column names, contradiction stated in
+  prose.
+- **`detect_relationships` proposed 12 candidates → 9 distinct edges
+  (reverse duplicates folded) → 8 declared, 1 rejected.** Every
+  declared edge anti-joins to zero orphans in the declared direction,
+  and every reverse-side gap is a business population, to the row:
+  the 415 unpaid invoices are exactly open 219 + overdue 56 +
+  cancelled 140; the 140 unposted invoices are exactly the cancelled
+  ones; the 33 never-posted accounts are the roll-up parents. One
+  mutual edge (`bank_transactions.payment_id <-> payments.payment_id`).
+- **The rejection is the plane's proof**: `payments.amount ↔
+  invoices.amount` scores 0.99 overlap *because the business process
+  causes it* (payments settle invoices in full) — a harder false
+  positive than parallel sequences. The agent refused it on join
+  semantics: 2,566 joined rows with 12 wrong pairings, all 31 partial
+  payments missed. Left undeclared and visible in the measurement.
+- `trial_balance`'s real grain surfaced as composite —
+  `(account_id, period)`, no key alone. The agent glossed
+  dimension/timestamp and declined to invent a key: the live argument
+  for the composite rescue, which the next run's measurement will
+  propose instead of leaving the judge empty-handed.
+
+Still unexercised by this run: composite candidates live (booksql is
+the designated next dataset), and the contested arc with a real human
+voice.
