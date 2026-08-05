@@ -27,7 +27,8 @@ documents:
   workspace `Cargo.toml` comment and the M2/M3 reports). Built: `parser`
   (GlossqlParser wrapping DataFusion's DFParser; the corpus is its
   acceptance suite) · `glossary` (sqlx store, supersession, admission,
-  collapse states, ACCEPTS-invalidation, imports counters) · `session`
+  collapse states, ACCEPTS-invalidation, glossary-delete verdict
+  invalidation — 2026-08-05, imports counters) · `session`
   (SessionContext assembly, RelationPlanner reads, statement router with
   the substrate allowlist, recipe materialization, probe routing,
   DROP TABLE lifecycle, detector-at-read) · `catalog` (the workspace Lake:

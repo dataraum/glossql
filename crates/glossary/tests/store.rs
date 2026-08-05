@@ -433,6 +433,62 @@ async fn forwarded_deletes_only_touch_the_two_relations() {
     assert!(matches!(e, Error::ForwardRejected(_)), "{e}");
 }
 
+#[tokio::test]
+async fn a_glossary_delete_invalidates_detector_verdicts() {
+    let s = store().await;
+    // One detector (no RETURNS), one extraction function (RETURNS) —
+    // only the detector's cache is a verdict about slots.
+    let Declaration::Function(det) = decl("DECLARE FUNCTION entropy FOR fin FROM 'e.rhai';")
+    else {
+        unreachable!()
+    };
+    s.declare_function(&det).await.unwrap();
+    let Declaration::Function(prod) =
+        decl("DECLARE FUNCTION vibes FOR fin FROM 'v.rhai' RETURNS unit;")
+    else {
+        unreachable!()
+    };
+    s.declare_function(&prod).await.unwrap();
+
+    write(
+        &s,
+        &agent(),
+        r#"GLOSS unit ON orders.amount AS $${"value": "EUR"}$$;"#,
+    )
+    .await
+    .unwrap();
+    s.cache_put("fin", "orders.amount", "entropy", r#"{"band": "red"}"#, None)
+        .await
+        .unwrap();
+    s.cache_put("fin", "orders.amount", "vibes", r#"{"n": 1}"#, None)
+        .await
+        .unwrap();
+
+    // Striking the slot invalidates the verdict about it: deletion makes
+    // the slot set smaller, never newer, so timestamp freshness alone
+    // would keep serving a verdict about slots that no longer exist.
+    s.forward_delete(
+        "glossary",
+        "DELETE FROM glossary WHERE subject = 'orders.amount' AND actor_kind = 'agent'",
+    )
+    .await
+    .unwrap();
+    assert!(
+        s.cache_get("fin", "orders.amount", "entropy")
+            .await
+            .unwrap()
+            .is_none(),
+        "the detector verdict is gone — it recomputes at the next read"
+    );
+    assert!(
+        s.cache_get("fin", "orders.amount", "vibes")
+            .await
+            .unwrap()
+            .is_some(),
+        "extraction caches answer to ACCEPTS invalidation, not slot deletion"
+    );
+}
+
 // -- recipe admission (SPEC.md §3) ----------------------------------------
 
 #[tokio::test]

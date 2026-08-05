@@ -1167,11 +1167,26 @@ impl Store {
     /// `DELETE FROM glossary … / DELETE FROM cache …` — removal is SQL
     /// (SPEC.md §5.2, §6). The session routes only these two relations here;
     /// the target is re-checked because this executes verbatim.
+    ///
+    /// A glossary delete also drops every detector verdict (2026-08-05):
+    /// verdict freshness is a timestamp comparison against the newest slot,
+    /// and deletion makes the slot set smaller, never newer — without this a
+    /// contested verdict would keep withholding a value after the disputed
+    /// slot was struck. The SQL runs verbatim, so which subjects changed is
+    /// unknown here; verdicts recompute at the next read.
     pub async fn forward_delete(&self, target: &str, sql: &str) -> Result<u64> {
         if target != "glossary" && target != "cache" {
             return Err(Error::ForwardRejected(target.into()));
         }
         let done = sqlx::raw_sql(sql).execute(&self.pool).await?;
+        if target == "glossary" && done.rows_affected() > 0 {
+            sqlx::query(
+                "DELETE FROM cache WHERE function IN \
+                 (SELECT name FROM functions WHERE returns IS NULL)",
+            )
+            .execute(&self.pool)
+            .await?;
+        }
         Ok(done.rows_affected())
     }
 

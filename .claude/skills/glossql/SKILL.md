@@ -74,3 +74,16 @@ is always current:
 - `ATTEST(…)` — `(subject, aspect, witness, band, score, computed_at)`,
   band in green/yellow/orange/red.
 - ordinary SELECT over tables and views for the data itself.
+
+## When a slot contests
+
+`state = 'contested'` means voices differ on one slot and the
+detector's score crossed the witness threshold — the value is withheld,
+never adjudicated for you. Read the slots
+(`GLOSSARY(subject, all => true)`), re-ground the question in the data,
+and re-gloss only if the evidence moved you: your new gloss supersedes
+your old one, and converged voices turn the band green. If the evidence
+still says you were right, leave the slot contested — a human closes
+it, by conceding in their own slot or by striking one
+(`DELETE FROM glossary WHERE subject = '…' AND aspect = '…'
+AND actor_kind = 'agent'`). Never change a gloss just to end a contest.
