@@ -163,7 +163,7 @@ DECLARE ASPECT revenue WITH $${
 DECLARE ASPECT min_max WITH $${
   "type": "object",
   "properties": {"min": {}, "max": {}}
-}$$ AS MEASUREMENT;
+}$$ AS MEASUREMENT ON COLUMN;
 ```
 
 The kind fixes the aspect's role:
@@ -182,6 +182,11 @@ The kind fixes the aspect's role:
   relationship_candidates). Never glossed: its value is the bound function's
   cached JSON output (§6, §7), served by `GLOSSARY()` beside facts and
   groundings, from the `cache` relation (§6).
+
+The optional `ON DATASET | TABLE | COLUMN | RELATIONSHIP, …` list is the
+aspect's **grain**: the subject classes glosses (and a `RETURNS` binding)
+may attach to. Absent, the aspect speaks to all grains. Disclosure (§5.3)
+stays within it: absence shows only on subjects the aspect is declared for.
 
 Multiplicity lives inside the blob — array-typed schemas — never in extra
 statements or slots.

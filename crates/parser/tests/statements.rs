@@ -46,6 +46,10 @@ snap!(
     r#"DECLARE ASPECT min_max WITH $${"type": "object", "properties": {"min": {}, "max": {}}}$$ AS MEASUREMENT;"#
 );
 snap!(
+    aspect_decl_with_grain,
+    r#"DECLARE ASPECT meaning WITH $${"type": "object"}$$ AS FACT ON TABLE, COLUMN, RELATIONSHIP;"#
+);
+snap!(
     gloss_fact,
     r#"GLOSS unit ON orders.amount AS $${"value": "EUR", "source_column": "currency_code"}$$;"#
 );

@@ -40,6 +40,15 @@ pub enum Error {
         "function `{function}` RETURNS `{aspect}`, a QUERY aspect — metrics run as their SQL, functions never fill them"
     )]
     ReturnsQueryAspect { function: String, aspect: String },
+    #[error(
+        "aspect `{aspect}` is declared ON {declared} — `{subject}` is a {grain} subject"
+    )]
+    GrainRefused {
+        aspect: String,
+        subject: String,
+        grain: &'static str,
+        declared: String,
+    },
     #[error("statement targets `{0}` — only the glossary and cache relations accept forwarded SQL")]
     ForwardRejected(String),
     #[error("stored JSON is corrupt: {0}")]

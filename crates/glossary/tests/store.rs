@@ -585,3 +585,70 @@ async fn a_gloss_invalidates_the_caches_of_functions_accepting_its_aspect() {
             .is_none()
     );
 }
+
+// -- aspect grain (ruled 2026-08-05) --------------------------------------
+
+#[tokio::test]
+async fn grain_gates_glosses_and_bounds_disclosure() {
+    let s = store().await;
+    let Declaration::Aspect(role) = decl(
+        r#"DECLARE ASPECT role WITH $${
+            "type": "object", "properties": {"value": {"type": "string"}}
+        }$$ AS FACT ON COLUMN;"#,
+    ) else {
+        unreachable!()
+    };
+    s.declare_aspect(&role).await.unwrap();
+    // A witness puts the aspect on the disclosure grid.
+    let Declaration::Witness(w) = decl("DECLARE WITNESS role_w ON role BY (AGENT, HUMAN);")
+    else {
+        unreachable!()
+    };
+    s.declare_witness(&w).await.unwrap();
+
+    // In-grain lands; a table subject is refused with the grain named.
+    let g = gloss(r#"GLOSS role ON orders.amount AS $${"value": "measure"}$$;"#);
+    s.gloss("fin", &agent(), "role", "orders.amount", &g.body, None)
+        .await
+        .unwrap();
+    let e = s
+        .gloss("fin", &agent(), "role", "orders", &g.body, None)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(e, Error::GrainRefused { grain: "table", .. }),
+        "{e}"
+    );
+
+    // Disclosure stays within grain: the unglossed column is a visible
+    // absence, the table never shows a role row at all.
+    let ctx = ReadContext {
+        universe: vec![
+            "orders".into(),
+            "orders.amount".into(),
+            "orders.qty".into(),
+        ],
+        ..Default::default()
+    };
+    let rows = s
+        .collapsed_read("fin", &Scope::Dataset, None, &ctx)
+        .await
+        .unwrap();
+    let states: Vec<(String, String)> = rows
+        .iter()
+        .filter(|r| r.aspect == "role")
+        .map(|r| (r.subject.clone(), r.state.clone()))
+        .collect();
+    assert!(
+        states.contains(&("orders.amount".into(), "current".into())),
+        "{states:?}"
+    );
+    assert!(
+        states.contains(&("orders.qty".into(), "unassessed".into())),
+        "{states:?}"
+    );
+    assert!(
+        !states.iter().any(|(subject, _)| subject == "orders"),
+        "{states:?}"
+    );
+}

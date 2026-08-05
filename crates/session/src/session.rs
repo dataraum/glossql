@@ -512,12 +512,21 @@ impl Session {
                         .map_err(SessionError::Runtime)?;
                     // The aspect's schema is the one contract: nothing lands
                     // under an aspect without validating against it.
-                    let (schema, _) = store.aspect(&returns).await?.ok_or_else(|| {
+                    let (schema, _, grains) = store.aspect(&returns).await?.ok_or_else(|| {
                         SessionError::Store(glossql_glossary::Error::Unknown {
                             what: "aspect",
                             name: returns.clone(),
                         })
                     })?;
+                    // RETURNS lands under the aspect too: the extraction
+                    // subject must sit in the aspect's declared grain.
+                    glossql_glossary::admit_grain(
+                        &returns,
+                        grains.as_deref(),
+                        &resolved.dataset,
+                        &resolved.subject,
+                    )
+                    .map_err(SessionError::Store)?;
                     schemas::validate_instance(&schema, &output).map_err(|detail| {
                         SessionError::OutputRejected {
                             function: name.clone(),

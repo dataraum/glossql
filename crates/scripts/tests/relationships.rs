@@ -107,7 +107,7 @@ async fn candidates_are_generous_and_declaration_records_the_survivor() {
              DECLARE ASPECT relationship_candidates WITH $${{\n\
                \"type\": \"object\",\n\
                \"properties\": {{\"candidates\": {{\"type\": \"array\"}}}}\n\
-             }}$$ AS MEASUREMENT;\n\
+             }}$$ AS MEASUREMENT ON DATASET;\n\
              DECLARE FUNCTION detect_relationships FOR GLOBAL \
              FROM 'functions/relationships.rhai' RETURNS relationship_candidates;\n\
              DECLARE RECIPE customers ON fin FROM erp_export AS \
@@ -239,7 +239,7 @@ async fn a_scoped_key_is_rescued_as_a_composite_candidate() {
              DECLARE ASPECT relationship_candidates WITH $${{\n\
                \"type\": \"object\",\n\
                \"properties\": {{\"candidates\": {{\"type\": \"array\"}}}}\n\
-             }}$$ AS MEASUREMENT;\n\
+             }}$$ AS MEASUREMENT ON DATASET;\n\
              DECLARE FUNCTION detect_relationships FOR GLOBAL \
              FROM 'functions/relationships.rhai' RETURNS relationship_candidates;\n\
              DECLARE RECIPE parties ON fin FROM erp_export AS \
@@ -285,7 +285,7 @@ async fn a_scoped_key_is_rescued_as_a_composite_candidate() {
         .execute(
             "DECLARE RELATIONSHIP txns.(business_id, party) -> parties.(business_id, name);\n\
              DECLARE ASPECT meaning WITH $${\"type\": \"object\", \
-             \"properties\": {\"value\": {\"type\": \"string\"}}}$$ AS FACT;\n\
+             \"properties\": {\"value\": {\"type\": \"string\"}}}$$ AS FACT ON RELATIONSHIP;\n\
              GLOSS meaning ON txns.(business_id, party) -> parties.(business_id, name) AS \
              $${\"value\": \"party names repeat across businesses; the scope leg carries the tenant\"}$$;",
         )

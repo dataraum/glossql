@@ -8,7 +8,7 @@ use sqlx::Row as _;
 use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
 
 use glossql_parser::{
-    AspectDecl, AspectKind, DatasetDecl, FunctionDecl, FunctionScope, JsonBody, RecipeDecl,
+    AspectDecl, AspectKind, DatasetDecl, FunctionDecl, FunctionScope, Grain, JsonBody, RecipeDecl,
     SourceDecl, Speaker, WitnessDecl,
 };
 
@@ -106,7 +106,8 @@ CREATE TABLE IF NOT EXISTS relationships (
 CREATE TABLE IF NOT EXISTS aspects (
   name TEXT PRIMARY KEY,
   schema TEXT NOT NULL,
-  kind TEXT NOT NULL
+  kind TEXT NOT NULL,
+  grains TEXT
 );
 CREATE TABLE IF NOT EXISTS functions (
   name TEXT PRIMARY KEY,
@@ -214,8 +215,8 @@ pub const RELATIONS: &[Relation] = &[
     },
     Relation {
         name: "aspects",
-        columns: &["name", "kind", "schema"],
-        sql: "SELECT name, kind, schema FROM aspects ORDER BY name",
+        columns: &["name", "kind", "grains", "schema"],
+        sql: "SELECT name, kind, grains, schema FROM aspects ORDER BY name",
     },
     Relation {
         name: "witnesses",
@@ -246,6 +247,54 @@ pub fn relation_columns(name: &str) -> Option<&'static [&'static str]> {
         .map(|r| r.columns)
 }
 
+async fn migrate(pool: &SqlitePool) -> Result<()> {
+    sqlx::raw_sql(MIGRATION).execute(pool).await?;
+    // Pre-grain stores lack the column (2026-08-05); the failed ALTER on a
+    // current schema is the idempotence check.
+    let _ = sqlx::query("ALTER TABLE aspects ADD COLUMN grains TEXT")
+        .execute(pool)
+        .await;
+    Ok(())
+}
+
+/// The grain of a canonical subject spelling: the dataset itself, a pair
+/// path, `table.column` (a composite endpoint's tuple counts as its pair's
+/// grain, never a column), or a bare table.
+pub fn grain_of(dataset: &str, subject: &str) -> &'static str {
+    if subject == dataset {
+        "dataset"
+    } else if subject.contains(" -> ") || subject.contains(" <-> ") {
+        "relationship"
+    } else if subject.contains('.') {
+        "column"
+    } else {
+        "table"
+    }
+}
+
+/// Grain admission (ruled 2026-08-05): an aspect declared `ON grain, …`
+/// only accepts subjects of those grains; `None` (no clause) admits all.
+pub fn admit_grain(
+    aspect: &str,
+    grains: Option<&str>,
+    dataset: &str,
+    subject: &str,
+) -> Result<()> {
+    let Some(declared) = grains else {
+        return Ok(());
+    };
+    let grain = grain_of(dataset, subject);
+    if declared.split(',').any(|g| g == grain) {
+        return Ok(());
+    }
+    Err(Error::GrainRefused {
+        aspect: aspect.into(),
+        subject: subject.into(),
+        grain,
+        declared: declared.to_uppercase().replace(',', ", "),
+    })
+}
+
 #[derive(Debug, Clone)]
 pub struct Store {
     pool: SqlitePool,
@@ -254,7 +303,7 @@ pub struct Store {
 impl Store {
     pub async fn open(url: &str) -> Result<Self> {
         let pool = SqlitePoolOptions::new().connect(url).await?;
-        sqlx::raw_sql(MIGRATION).execute(&pool).await?;
+        migrate(&pool).await?;
         Ok(Store { pool })
     }
 
@@ -265,7 +314,7 @@ impl Store {
             .max_connections(1)
             .connect("sqlite::memory:")
             .await?;
-        sqlx::raw_sql(MIGRATION).execute(&pool).await?;
+        migrate(&pool).await?;
         Ok(Store { pool })
     }
 
@@ -382,8 +431,12 @@ impl Store {
             });
         }
         let name = decl.name.value.as_str();
-        if let Some((schema, kind)) = self.aspect(name).await? {
-            if schema == decl.schema.value && kind == kind_str(decl.kind) {
+        let declared_grains = grains_str(&decl.grains);
+        if let Some((schema, kind, grains)) = self.aspect(name).await? {
+            if schema == decl.schema.value
+                && kind == kind_str(decl.kind)
+                && grains == declared_grains
+            {
                 return Ok(());
             }
             let glosses: i64 = sqlx::query("SELECT count(*) AS n FROM glossary WHERE aspect = ?")
@@ -398,10 +451,11 @@ impl Store {
                 });
             }
         }
-        sqlx::query("INSERT OR REPLACE INTO aspects (name, schema, kind) VALUES (?, ?, ?)")
+        sqlx::query("INSERT OR REPLACE INTO aspects (name, schema, kind, grains) VALUES (?, ?, ?, ?)")
             .bind(decl.name.value.as_str())
             .bind(decl.schema.raw.as_str())
             .bind(kind_str(decl.kind))
+            .bind(declared_grains)
             .execute(&self.pool)
             .await?;
         Ok(())
@@ -420,7 +474,7 @@ impl Store {
         // function-filled. No RETURNS declares a detector.
         if let Some(aspect) = &decl.returns {
             let aspect = aspect.value.as_str();
-            let (_, kind) = self.aspect(aspect).await?.ok_or_else(|| Error::Unknown {
+            let (_, kind, _) = self.aspect(aspect).await?.ok_or_else(|| Error::Unknown {
                 what: "aspect",
                 name: aspect.into(),
             })?;
@@ -572,7 +626,7 @@ impl Store {
         body: &JsonBody,
         snapshot_id: Option<i64>,
     ) -> Result<()> {
-        let (schema, kind) = self.aspect(aspect).await?.ok_or_else(|| Error::Unknown {
+        let (schema, kind, grains) = self.aspect(aspect).await?.ok_or_else(|| Error::Unknown {
             what: "aspect",
             name: aspect.into(),
         })?;
@@ -585,6 +639,7 @@ impl Store {
                 "standard grounding".into(),
             )?,
         }
+        admit_grain(aspect, grains.as_deref(), dataset, subject)?;
         // Where a witness exists, its BY list is the speaker gate (§7.1).
         let witnesses = self.witnesses_on(aspect).await?;
         if !witnesses.is_empty() {
@@ -1009,13 +1064,23 @@ impl Store {
 
         // Disclosure (fixture 09's benchmark): an aspect somebody is bound
         // to speak to — witnessed, or produced by a function's RETURNS —
-        // that nobody spoke to is a visible row, not an omission.
+        // that nobody spoke to is a visible row, not an omission. Grain
+        // (ruled 2026-08-05) bounds the grid: absence only shows on
+        // subjects the aspect is declared to speak to.
         let mut witnessed: std::collections::BTreeSet<String> = witnesses
             .iter()
             .filter(|w| aspect.is_none_or(|a| w.aspect == a))
             .map(|w| w.aspect.clone())
             .collect();
         witnessed.extend(self.returning(aspect).await?.into_iter().map(|(_, a)| a));
+        let mut grain_map: std::collections::HashMap<String, Option<String>> =
+            std::collections::HashMap::new();
+        for row in sqlx::query("SELECT name, grains FROM aspects")
+            .fetch_all(&self.pool)
+            .await?
+        {
+            grain_map.insert(row.get("name"), row.get("grains"));
+        }
         let present: std::collections::HashSet<(String, String)> = rows
             .iter()
             .map(|r| (r.subject.clone(), r.aspect.clone()))
@@ -1029,6 +1094,15 @@ impl Store {
                 continue;
             }
             for a in &witnessed {
+                let in_grain = match grain_map.get(a).and_then(|g| g.as_deref()) {
+                    None => true,
+                    Some(declared) => declared
+                        .split(',')
+                        .any(|g| g == grain_of(dataset, subject)),
+                };
+                if !in_grain {
+                    continue;
+                }
                 if !present.contains(&(subject.clone(), a.clone())) {
                     rows.push(CollapsedRow {
                         subject: subject.clone(),
@@ -1223,8 +1297,11 @@ impl Store {
             .is_some())
     }
 
-    pub async fn aspect(&self, name: &str) -> Result<Option<(Value, String)>> {
-        let Some(row) = sqlx::query("SELECT schema, kind FROM aspects WHERE name = ?")
+    /// `(schema, kind, grains)` — grains is the declared `ON` list
+    /// (comma-joined, lowercase), `None` when the aspect speaks to all
+    /// grains.
+    pub async fn aspect(&self, name: &str) -> Result<Option<(Value, String, Option<String>)>> {
+        let Some(row) = sqlx::query("SELECT schema, kind, grains FROM aspects WHERE name = ?")
             .bind(name)
             .fetch_optional(&self.pool)
             .await?
@@ -1233,7 +1310,7 @@ impl Store {
         };
         let schema: Value = serde_json::from_str(&row.get::<String, _>("schema"))
             .map_err(|e| Error::Corrupt(format!("aspect `{name}` schema: {e}")))?;
-        Ok(Some((schema, row.get("kind"))))
+        Ok(Some((schema, row.get("kind"), row.get("grains"))))
     }
 
     /// Resolve a function visible from `dataset` (`FOR` scope or GLOBAL,
@@ -1352,6 +1429,28 @@ fn kind_str(kind: AspectKind) -> &'static str {
         AspectKind::Fact => "fact",
         AspectKind::Query => "query",
     }
+}
+
+/// Canonical grains text: fixed order, deduped — idempotent redeclaration
+/// compares this string. Empty list (no `ON` clause) is `None`: all grains.
+fn grains_str(grains: &[Grain]) -> Option<String> {
+    if grains.is_empty() {
+        return None;
+    }
+    let order = [
+        (Grain::Dataset, "dataset"),
+        (Grain::Table, "table"),
+        (Grain::Column, "column"),
+        (Grain::Relationship, "relationship"),
+    ];
+    Some(
+        order
+            .iter()
+            .filter(|(g, _)| grains.contains(g))
+            .map(|(_, name)| *name)
+            .collect::<Vec<_>>()
+            .join(","),
+    )
 }
 
 fn validate(schema: &Value, instance: &Value, which: String) -> Result<()> {

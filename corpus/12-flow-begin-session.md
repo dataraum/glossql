@@ -33,7 +33,7 @@ DECLARE ASPECT relationship_candidates WITH $${
       "properties": {"from": {"type": "string"}, "to": {"type": "string"},
                      "cardinality": {"type": "string"},
                      "overlap": {"type": "number"}}}}}
-}$$ AS MEASUREMENT;
+}$$ AS MEASUREMENT ON DATASET;
 DECLARE FUNCTION detect_relationships FOR GLOBAL FROM 'functions/relationships.rhai'
   RETURNS relationship_candidates;
 

@@ -193,7 +193,33 @@ fn parse_declaration(p: &mut Parser) -> Result<Declaration, ParserError> {
             } else {
                 return expected("MEASUREMENT, FACT, or QUERY", &kind_token);
             };
-            Ok(Declaration::Aspect(AspectDecl { name, schema, kind }))
+            let mut grains = Vec::new();
+            if consume_word(p, "ON") {
+                loop {
+                    let grain_token = p.peek_token();
+                    let grain = if consume_word(p, "DATASET") {
+                        Grain::Dataset
+                    } else if consume_word(p, "TABLE") {
+                        Grain::Table
+                    } else if consume_word(p, "COLUMN") {
+                        Grain::Column
+                    } else if consume_word(p, "RELATIONSHIP") {
+                        Grain::Relationship
+                    } else {
+                        return expected("DATASET, TABLE, COLUMN, or RELATIONSHIP", &grain_token);
+                    };
+                    grains.push(grain);
+                    if !p.consume_token(&Token::Comma) {
+                        break;
+                    }
+                }
+            }
+            Ok(Declaration::Aspect(AspectDecl {
+                name,
+                schema,
+                kind,
+                grains,
+            }))
         }
         "FUNCTION" => {
             p.next_token();

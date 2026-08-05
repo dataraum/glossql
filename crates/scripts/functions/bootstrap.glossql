@@ -18,13 +18,13 @@ DECLARE ASPECT column_profile WITH $${
                      "percentiles": {"type": "object"}}
     }
   }
-}$$ AS MEASUREMENT;
+}$$ AS MEASUREMENT ON COLUMN;
 
 DECLARE ASPECT outlier_profile WITH $${
   "type": "object", "required": ["applicable"],
   "properties": {"applicable": {"type": "boolean"},
                  "iqr": {"type": "object"}, "zscore": {"type": "object"}}
-}$$ AS MEASUREMENT;
+}$$ AS MEASUREMENT ON COLUMN;
 
 DECLARE ASPECT relationship_candidates WITH $${
   "type": "object",
@@ -33,7 +33,7 @@ DECLARE ASPECT relationship_candidates WITH $${
       "properties": {"from": {"type": "string"}, "to": {"type": "string"},
                      "cardinality": {"type": "string"},
                      "overlap": {"type": "number"}}}}}
-}$$ AS MEASUREMENT;
+}$$ AS MEASUREMENT ON DATASET;
 
 DECLARE ASPECT temporal_profile WITH $${
   "type": "object", "required": ["applicable"],
@@ -41,7 +41,7 @@ DECLARE ASPECT temporal_profile WITH $${
                  "granularity": {"type": "string"},
                  "confidence": {"type": "number"},
                  "completeness": {"type": "object"}, "gaps": {"type": "object"}}
-}$$ AS MEASUREMENT;
+}$$ AS MEASUREMENT ON COLUMN;
 
 DECLARE FUNCTION profile FOR GLOBAL FROM 'functions/profile.rhai'
   RETURNS column_profile;

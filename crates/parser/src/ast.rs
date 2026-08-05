@@ -106,6 +106,17 @@ pub struct AspectDecl {
     pub name: Ident,
     pub schema: JsonBody,
     pub kind: AspectKind,
+    /// `ON grain, …` — the subject classes glosses may attach to (ruled
+    /// 2026-08-05); empty = all grains.
+    pub grains: Vec<Grain>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Grain {
+    Dataset,
+    Table,
+    Column,
+    Relationship,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

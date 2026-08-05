@@ -1,5 +1,6 @@
 ---
 source: crates/parser/tests/statements.rs
+assertion_line: 40
 expression: "GlossqlParser ::\nparse_sql(r#\"DECLARE ASPECT unit WITH $${\"type\": \"object\", \"properties\": {\"value\": {\"type\": \"string\"}}}$$ AS FACT;\"#).expect(\"must parse\")"
 ---
 [
@@ -23,6 +24,7 @@ expression: "GlossqlParser ::\nparse_sql(r#\"DECLARE ASPECT unit WITH $${\"type\
                     raw: "{\"type\": \"object\", \"properties\": {\"value\": {\"type\": \"string\"}}}",
                 },
                 kind: Fact,
+                grains: [],
             },
         ),
     ),
