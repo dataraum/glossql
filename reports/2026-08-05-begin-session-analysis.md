@@ -184,3 +184,93 @@ entities, edges, dimensions, behavior, units, formula candidates —
 and `../dataraum-testdata/output/clean/ground_truth.yaml` (monthly
 revenue, DSO/DPO, balances, invariants) is a ready oracle for scoring
 what the agent defines on top.
+
+## Well built vs brittle — the risk map (added same day)
+
+The lead's follow-up ask: what in v0.3 is built well and brings
+value, what is brittle and brings risk — against a stated hesitation
+about moving into the statistical field at all. The sweeps answer it,
+and the answer is bimodal: **quality concentrates in the
+deterministic statistical cores; brittleness concentrates in the
+plumbing between them.** The two populations barely overlap.
+
+### Well built — and how we know
+
+The trust evidence is not that the code looks clean; it is that each
+core carries its own falsification history and validation record:
+
+- **Falsification-driven design.** Every strong statistic documents
+  what was tried and failed, in place: the relevance score records
+  the normalized-perplexity variant it replaced and why; the
+  reconcile module records that a time-series persistence statistic
+  and an LLM trajectory read were both falsified before the
+  cross-table design; temporal completeness records the
+  unit-mismatch bug that forced calendar counting and *deleted* the
+  clamp that had hidden it. Code that remembers its failures is code
+  whose thresholds mean something.
+- **Pre-registration and validation.** The hierarchy stack's
+  vacuousness floor was pre-registered before its benchmark run
+  (48 false positives killed, zero truth lost); the gate stack
+  scores 32/32 on an adversarial matrix; the role check validated
+  9/9 on wild role-playing FK data; the alias-identity merge floor
+  sits in a measured bimodal gap (true aliases 0.95–0.98,
+  coincidences 0.03–0.10, the middle empty).
+- **Determinism discipline, everywhere.** Fixed seeds with derived
+  per-pair generators, bottom-k-by-hash sampling (justified twice,
+  independently), sorted enumeration behind every streaming argmax.
+  Reruns reproduce; flakiness cannot hide.
+- **Loud failure.** The grain check fails the run rather than ship a
+  fan-out view; drivers persist abstentions as rows ("born loud,
+  never silently absent"); no TODO/FIXME anywhere — caveats are
+  prose comments at the point of risk.
+
+These are the parts the port list takes.
+
+### Brittle — five patterns, not five bugs
+
+1. **Identity by name across boundaries.** The enrichment lane keys
+   table identity on names and its own comment admits a collision
+   "aliases silently"; the surrogate column prefix is hand-mirrored
+   into the other package as an unchecked cross-package contract.
+2. **Shadow authority in aggregators.** The property graph COALESCEs
+   the lineage pattern *ahead of* the pooled behavior verdict, so a
+   secondary output silently becomes the materialization truth every
+   SQL author sees — with a documented abstention-masking caveat.
+   Two writers, one surface, no arbiter.
+3. **Metadata drift.** The pipeline config describes the hierarchies
+   phase as LLM-free while the phase runs two judges; the same
+   omission puts those calls under the wrong retry policy despite a
+   guard comment written to prevent exactly that; config comments
+   cite features that moved phases. The pipeline's description of
+   itself is a second document, and it decays.
+4. **Invisible abandonment.** A detector registered but executed by
+   no phase; an orphaned context view whose consumer was retired; a
+   write-only intents table; correlation algorithms with no caller;
+   result fields hardwired to zero. The phase shape hides
+   unconsumed outputs — nothing forces an output to have a reader.
+5. **Undefended assumptions, shipped.** The stored-sign witness
+   documents that its central assumption is "load-bearing and
+   unverified" and ships `calibrated: false`; the null sentinel's
+   collision risk is "accepted as vanishingly rare rather than
+   guarded".
+
+### What the map means for the hesitation
+
+The brittleness lives almost entirely in layers the port list
+already refuses: the pipeline shell and its self-description (3, 4),
+the serving aggregators (2), name-keyed seams between phases (1),
+and the adjudication layer that is deferred by ruling (5 sits
+there). The well-built cores are what ports — and they port into a
+containment the lead already named: functions and skills, wipeable
+without disturbing the stack.
+
+One residual risk is real and worth a standing rule: a statistic
+ported without its falsification history invites cargo-culting — the
+formula survives, the reasons die. So: **no statistic ports without
+its oracle.** Every measurement lands with an acceptance test
+against ground truth we hold (the finance generator's
+`ground_truth.yaml`, RelBench's declared FKs, booksql's known
+schema), and carries the recorded falsification that shaped it as
+comment or skill prose. That is the corpus-first process applied to
+numerics, and it is what turns the hesitation into a gate instead
+of a wall.

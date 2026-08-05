@@ -127,3 +127,12 @@ accessors, which every future script wants regardless.
    rule.
 4. **`NumMat` in v1** — or columns-only until the correlation matmul
    actually lands.
+
+## First reactions (the project lead, same day)
+
+Kernels + swappable library accepted. Fork 1 answered: the spike
+waits — later, not now. Library leanings on record for when it runs:
+faer interesting; polars acknowledged as arrow-native but the
+second-engine objection stands; candle a candidate only when NN
+models reach the platform; ndarray proven but staler than faer.
+Forks 2–4 stay open until the spike.
