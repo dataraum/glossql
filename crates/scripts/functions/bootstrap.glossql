@@ -26,6 +26,15 @@ DECLARE ASPECT outlier_profile WITH $${
                  "iqr": {"type": "object"}, "zscore": {"type": "object"}}
 }$$ AS MEASUREMENT;
 
+DECLARE ASPECT relationship_candidates WITH $${
+  "type": "object",
+  "properties": {"candidates": {"type": "array",
+    "items": {"type": "object",
+      "properties": {"from": {"type": "string"}, "to": {"type": "string"},
+                     "cardinality": {"type": "string"},
+                     "overlap": {"type": "number"}}}}}
+}$$ AS MEASUREMENT;
+
 DECLARE ASPECT temporal_profile WITH $${
   "type": "object", "required": ["applicable"],
   "properties": {"applicable": {"type": "boolean"},
@@ -43,5 +52,8 @@ DECLARE FUNCTION outliers FOR GLOBAL FROM 'functions/outliers.rhai'
 
 DECLARE FUNCTION temporal FOR GLOBAL FROM 'functions/temporal.rhai'
   RETURNS temporal_profile;
+
+DECLARE FUNCTION detect_relationships FOR GLOBAL FROM 'functions/relationships.rhai'
+  RETURNS relationship_candidates;
 
 DECLARE FUNCTION slot_entropy FOR GLOBAL FROM 'functions/slot_entropy.rhai';

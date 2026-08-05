@@ -65,15 +65,24 @@ them, one call or several.
 Never guess at workspace state — read it through the language, where it
 is always current:
 
-- `SELECT * FROM glossary` / `cache` / `imports` — the store's
-  relations as plain tables (who said what; what is computed; source
-  rows vs landed rows).
+- `SELECT * FROM glossary` / `cache` / `imports` / `relationships` —
+  the store's relations as plain tables (who said what; what is
+  computed; source rows vs landed rows; the declared join edges).
 - `GLOSSARY(subject)` — collapsed values with `state`
   (`current | stale | contested | unassessed`); a contested value is
   withheld, and absence is a visible row.
 - `ATTEST(…)` — `(subject, aspect, witness, band, score, computed_at)`,
   band in green/yellow/orange/red.
 - ordinary SELECT over tables and views for the data itself.
+
+## Measurements over-produce — you are the judge
+
+Detection functions are tuned toward recall: they emit *candidates*
+with evidence, never conclusions, and false positives are expected.
+Reading a measurement is a judging job — verify each candidate against
+the data itself, then declare or gloss only the survivors. The rejects
+stay in the measurement, visible and undeclared; never delete them to
+"clean up". Judgment lives in your reads, not in the function.
 
 ## When a slot contests
 

@@ -229,6 +229,12 @@ pub const RELATIONS: &[Relation] = &[
         columns: &["name", "settings"],
         sql: "SELECT name, settings FROM sources ORDER BY name",
     },
+    Relation {
+        name: "relationships",
+        columns: &["dataset", "left_path", "op", "right_path"],
+        sql: "SELECT dataset, left_path, op, right_path FROM relationships \
+              ORDER BY dataset, left_path, op, right_path",
+    },
 ];
 
 /// The column shape of a readable store relation, `None` for any other

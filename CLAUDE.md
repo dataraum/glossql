@@ -54,13 +54,18 @@ documents:
   via initialize clientInfo with a boot-flag fallback. The door tells,
   skills teach — agent knowledge is statically written into
   `.claude/skills/` (glossql, glossql-add-source with the framing block
-  and per-column glossing rules, glossql-functions), the one teaching
-  layer (MCP resources tried and reversed 2026-08-04). A fresh
+  and per-column glossing rules, glossql-functions,
+  glossql-relationships), the one teaching layer (MCP resources tried
+  and reversed 2026-08-04). Skills follow deliverables, never v0.3
+  phase names (ruled 2026-08-05); the judge pattern — measurements
+  optimize recall, the agent judge removes false positives —
+  is taught in the core glossql skill, detect_relationships is its
+  first plane. A fresh
   workspace receives the shipped system at boot — embedded bootstrap:
   reference scripts + the measurement library's declarations, vertical
   excluded; the declaration relations (functions, aspects, witnesses,
-  sources) read as plain tables. Flight SQL cut from M5: a future
-  door, pyarrow reads the HTTP stream).
+  sources, relationships) read as plain tables. Flight SQL cut from
+  M5: a future door, pyarrow reads the HTTP stream).
 - `reports/` — pivot records, review verdicts, and evaluation records.
 
 **Standing invariant:** workspace `cargo test` passes — every ```sql block

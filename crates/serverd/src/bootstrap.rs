@@ -21,6 +21,10 @@ const SCRIPTS: &[(&str, &str)] = &[
         include_str!("../../scripts/functions/temporal.rhai"),
     ),
     (
+        "relationships.rhai",
+        include_str!("../../scripts/functions/relationships.rhai"),
+    ),
+    (
         "slot_entropy.rhai",
         include_str!("../../scripts/functions/slot_entropy.rhai"),
     ),

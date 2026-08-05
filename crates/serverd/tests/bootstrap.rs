@@ -39,13 +39,14 @@ async fn a_fresh_workspace_receives_the_shipped_system() {
         "profile.rhai",
         "outliers.rhai",
         "temporal.rhai",
+        "relationships.rhai",
         "slot_entropy.rhai",
     ] {
         assert!(dir.path().join("functions").join(name).exists(), "{name}");
     }
 
-    assert_eq!(count(&plane, "SELECT count(*) FROM functions;").await, "4");
-    assert_eq!(count(&plane, "SELECT count(*) FROM aspects;").await, "3");
+    assert_eq!(count(&plane, "SELECT count(*) FROM functions;").await, "5");
+    assert_eq!(count(&plane, "SELECT count(*) FROM aspects;").await, "4");
     // The one function without RETURNS is the detector.
     assert_eq!(
         count(

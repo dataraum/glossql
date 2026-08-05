@@ -1,0 +1,86 @@
+// Relationship candidates (fixture 12): the high-recall half of the
+// candidate -> verified -> declared arc. Runs at dataset grain
+// (`SELECT detect_relationships() FROM fin`) and measures every
+// plausible join pair across the landed tables — generous by design
+// (ruled 2026-08-05): the statistical pass optimizes recall, and the
+// judge reading this measurement removes the false positives against
+// the data; this script never does. Core fields (from, to,
+// cardinality, overlap) answer the aspect schema; the rest of the
+// evidence rides its open remainder. Cost: one LIMIT 0 and one
+// aggregate scan per table, one distinct-join per candidate pair.
+
+let tables = [];
+let names = db.query("SELECT DISTINCT table_name FROM imports ORDER BY table_name")
+    .col("table_name");
+for i in 0..names.count() {
+    tables.push(names.value_at(i));
+}
+
+// Per-column shape: filled and distinct counts decide which columns
+// look like keys (the join's `to` side) — near-unique, not strictly
+// unique, so dirty keys stay in the running.
+let cols = [];
+for t in tables {
+    let head = db.query(`SELECT * FROM "${t}" LIMIT 0`);
+    let select = "";
+    for c in head.columns() {
+        if select != "" { select += ", "; }
+        select += `count("${c}") AS "f_${c}", count(DISTINCT "${c}") AS "d_${c}"`;
+    }
+    if select == "" { continue; }
+    let agg = db.query(`SELECT ${select} FROM "${t}"`);
+    for c in head.columns() {
+        // value_at serves display text; counts read back as ints.
+        let filled = agg.col(`f_${c}`).value_at(0).parse_int();
+        let distinct = agg.col(`d_${c}`).value_at(0).parse_int();
+        cols.push(#{
+            table: t, column: c, dtype: head.col(c).dtype(),
+            filled: filled, distinct: distinct,
+            unique: filled > 0 && distinct == filled,
+            key_like: filled > 0 && distinct >= 2
+                && distinct.to_float() / filled.to_float() >= 0.9,
+        });
+    }
+}
+
+// Every type-compatible (column, key) pair, scored by how much of the
+// from side resolves. Same-table pairs stay in: a parent column
+// pointing at its own table's key is a hierarchy candidate.
+let candidates = [];
+for k in cols {
+    if !k.key_like { continue; }
+    for f in cols {
+        if f.table == k.table && f.column == k.column { continue; }
+        if f.dtype != k.dtype { continue; }
+        if f.distinct == 0 { continue; }
+        let m = db.query(
+            `SELECT count(*) AS m FROM
+             (SELECT DISTINCT "${f.column}" AS v FROM "${f.table}"
+              WHERE "${f.column}" IS NOT NULL) a
+             JOIN (SELECT DISTINCT "${k.column}" AS v FROM "${k.table}"
+              WHERE "${k.column}" IS NOT NULL) b ON a.v = b.v`,
+        ).col("m").value_at(0).parse_int();
+        let overlap = m.to_float() / f.distinct.to_float();
+        if overlap < 0.5 { continue; }
+        candidates.push(#{
+            from: `${f.table}.${f.column}`,
+            to: `${k.table}.${k.column}`,
+            cardinality: if f.unique { "one-to-one" } else { "many-to-one" },
+            overlap: overlap,
+            matched: m,
+            orphans: f.distinct - m,
+            from_distinct: f.distinct,
+            to_distinct: k.distinct,
+        });
+    }
+}
+
+candidates.sort(|a, b| if a.overlap < b.overlap {
+    1
+} else if a.overlap > b.overlap {
+    -1
+} else {
+    0
+});
+
+#{ candidates: candidates }
