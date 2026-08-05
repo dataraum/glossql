@@ -27,6 +27,13 @@ high recall, false positives included, you are the precision. After
 new tables land, re-measure:
 `DELETE FROM cache WHERE function = 'detect_relationships';`
 
+A candidate carrying `key_columns` is a **composite**: its `from`/`to`
+anchor is no key alone, but together with the scoping leg it
+identifies rows — the multi-tenant shape, `(business_id, name)`. The
+measurement only proposes composites the data rescued (the combined
+to side is near-unique and the two-leg join resolves); the anchor is
+the identifying leg, the scope the tenant leg.
+
 ## 2. Judge every candidate
 
 Before declaring anything, per candidate:
@@ -47,6 +54,10 @@ Before declaring anything, per candidate:
   values, and the business objects have to agree.
 - **Check the claimed cardinality** on the data
   (`GROUP BY … HAVING count(*) > 1`) rather than trusting the label.
+- **Judge a composite on all its legs.** Anti-join on the anchor
+  *and* the scope together; joining on the anchor alone fans out and
+  silently over-counts — that fan-out is what the composite exists to
+  collapse.
 
 ## 3. Declare the survivors
 

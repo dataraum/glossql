@@ -177,3 +177,103 @@ async fn candidates_are_generous_and_declaration_records_the_survivor() {
     );
     assert!(after.contains(r#""from":"orders.order_id""#), "{after}");
 }
+
+/// The multi-tenant fixture: party names repeat across businesses, so
+/// `name` is no key alone — only (businessID, name) identifies a row.
+/// booksql's shape: every FK is (businessID, X) -> target(businessID, Y).
+async fn tenant_fixture(root: &std::path::Path) {
+    let parties = Arc::new(Schema::new(vec![
+        Field::new("business_id", DataType::Int64, true),
+        Field::new("name", DataType::Utf8, true),
+    ]));
+    write_table(
+        root,
+        "parties",
+        RecordBatch::try_new(parties, vec![
+            Arc::new(Int64Array::from(vec![1, 1, 1, 2, 2])),
+            Arc::new(StringArray::from(vec!["ann", "bob", "cat", "ann", "bob"])),
+        ])
+        .unwrap(),
+    )
+    .await;
+    let txns = Arc::new(Schema::new(vec![
+        Field::new("business_id", DataType::Int64, true),
+        Field::new("party", DataType::Utf8, true),
+    ]));
+    write_table(
+        root,
+        "txns",
+        RecordBatch::try_new(txns, vec![
+            Arc::new(Int64Array::from(vec![1, 1, 1, 2, 2])),
+            Arc::new(StringArray::from(vec!["ann", "ann", "bob", "ann", "bob"])),
+        ])
+        .unwrap(),
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_scoped_key_is_rescued_as_a_composite_candidate() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("lake/erp");
+    std::fs::create_dir_all(&root).unwrap();
+    tenant_fixture(&root).await;
+
+    let lake = Lake::open(&dir.path().join("catalog.db"), &dir.path().join("warehouse"))
+        .await
+        .unwrap();
+    let store = Store::open_memory().await.unwrap();
+    let session = Session::new(store.clone(), Actor {
+        kind: ActorKind::Agent,
+        id: "agent-1".into(),
+    })
+    .unwrap()
+    .with_lake(lake)
+    .with_runtime(Arc::new(RhaiRuntime::new(env!("CARGO_MANIFEST_DIR"))));
+
+    session
+        .execute(&format!(
+            "DECLARE DATASET fin SET (purpose: 'composite rescue');\n\
+             USE fin;\n\
+             DECLARE SOURCE erp_export SET (type: parquet, location: '{}');\n\
+             DECLARE ASPECT relationship_candidates WITH $${{\n\
+               \"type\": \"object\",\n\
+               \"properties\": {{\"candidates\": {{\"type\": \"array\"}}}}\n\
+             }}$$ AS MEASUREMENT;\n\
+             DECLARE FUNCTION detect_relationships FOR GLOBAL \
+             FROM 'functions/relationships.rhai' RETURNS relationship_candidates;\n\
+             DECLARE RECIPE parties ON fin FROM erp_export AS \
+             $$SELECT * FROM read_parquet('parties/*.parquet')$$;\n\
+             DECLARE RECIPE txns ON fin FROM erp_export AS \
+             $$SELECT * FROM read_parquet('txns/*.parquet')$$;",
+            root.display()
+        ))
+        .await
+        .unwrap();
+
+    session
+        .execute("SELECT detect_relationships() FROM fin;")
+        .await
+        .unwrap();
+    let value = one(
+        &session
+            .execute("SELECT value FROM GLOSSARY(fin::relationship_candidates) WHERE state = 'current';")
+            .await
+            .unwrap(),
+    );
+
+    // No column is a key alone here — the composite pass is the only
+    // producer: the anchor pair plus the scoping leg, data-decided.
+    assert!(value.contains(r#""from":"txns.party""#), "{value}");
+    assert!(value.contains(r#""to":"parties.name""#), "{value}");
+    assert!(
+        value.contains(
+            r#""key_columns":[{"from":"txns.business_id","to":"parties.business_id"}]"#
+        ),
+        "{value}"
+    );
+    assert!(value.contains(r#""cardinality":"many-to-one""#), "{value}");
+    // The reverse direction is refused by the data: (party, business_id)
+    // does not identify a txn row.
+    assert!(!value.contains(r#""from":"parties."#), "{value}");
+}

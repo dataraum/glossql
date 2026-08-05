@@ -7,7 +7,8 @@
 // the data; this script never does. Core fields (from, to,
 // cardinality, overlap) answer the aspect schema; the rest of the
 // evidence rides its open remainder. Cost: one LIMIT 0 and one
-// aggregate scan per table, one distinct-join per candidate pair.
+// aggregate scan per table, one distinct-join per overlapping pair,
+// a handful of queries per attempted composite rescue.
 
 let tables = [];
 let names = db.query("SELECT DISTINCT table_name FROM imports ORDER BY table_name")
@@ -43,12 +44,13 @@ for t in tables {
     }
 }
 
-// Every type-compatible (column, key) pair, scored by how much of the
-// from side resolves. Same-table pairs stay in: a parent column
-// pointing at its own table's key is a hierarchy candidate.
-let candidates = [];
+// Every type-compatible pair whose values overlap, keys or not — the
+// non-key pairs are the raw material for composite rescue. Same-table
+// pairs stay in: a parent column pointing at its own table's key is a
+// hierarchy candidate.
+let pairs = [];
 for k in cols {
-    if !k.key_like { continue; }
+    if k.distinct < 2 { continue; }
     for f in cols {
         if f.table == k.table && f.column == k.column { continue; }
         if f.dtype != k.dtype { continue; }
@@ -62,16 +64,105 @@ for k in cols {
         ).col("m").value_at(0).parse_int();
         let overlap = m.to_float() / f.distinct.to_float();
         if overlap < 0.5 { continue; }
+        pairs.push(#{ f: f, k: k, overlap: overlap, matched: m });
+    }
+}
+
+// Single-column candidates: the pairs whose to side stands as a key
+// on its own.
+let candidates = [];
+for p in pairs {
+    if !p.k.key_like { continue; }
+    candidates.push(#{
+        from: `${p.f.table}.${p.f.column}`,
+        to: `${p.k.table}.${p.k.column}`,
+        cardinality: if p.f.unique { "one-to-one" } else { "many-to-one" },
+        overlap: p.overlap,
+        matched: p.matched,
+        orphans: p.f.distinct - p.matched,
+        from_distinct: p.f.distinct,
+        to_distinct: p.k.distinct,
+    });
+}
+
+// Composite rescue (the v0.3 reality, ported 2026-08-05): a to side
+// that is no key alone can be one inside a scope — the multi-tenant
+// shape, (businessID, name). For each overlapping pair whose to side
+// is not key-like, try the co-present pairs between the same two
+// tables as the scoping leg; the first whose combination makes the to
+// side near-unique and whose two-leg join resolves rescues the
+// anchor. Width 2 only — anchor plus one scope — wider composites
+// stay future work. Data decides, not names.
+let seen = [];
+for p in pairs {
+    if p.k.key_like { continue; }
+    let scopes = [];
+    for s in pairs {
+        if s.f.table != p.f.table || s.k.table != p.k.table { continue; }
+        if s.f.column == p.f.column || s.k.column == p.k.column { continue; }
+        scopes.push(s);
+    }
+    scopes.sort(|a, b| if a.overlap < b.overlap { 1 } else if a.overlap > b.overlap { -1 } else { 0 });
+    for s in scopes {
+        let key = `${p.f.table}|${p.k.table}|${p.f.column}+${s.f.column}|${p.k.column}+${s.k.column}`;
+        let mirror = `${p.f.table}|${p.k.table}|${s.f.column}+${p.f.column}|${s.k.column}+${p.k.column}`;
+        if seen.contains(key) || seen.contains(mirror) { continue; }
+
+        let kt = p.k.table;
+        let both = `"${p.k.column}" IS NOT NULL AND "${s.k.column}" IS NOT NULL`;
+        let filled = db.query(`SELECT count(*) AS c FROM "${kt}" WHERE ${both}`)
+            .col("c").value_at(0).parse_int();
+        let dst = db.query(
+            `SELECT count(*) AS c FROM
+             (SELECT DISTINCT "${p.k.column}", "${s.k.column}" FROM "${kt}" WHERE ${both})`,
+        ).col("c").value_at(0).parse_int();
+        if filled == 0 || dst < 2 || dst.to_float() / filled.to_float() < 0.9 { continue; }
+
+        let ft = p.f.table;
+        let fboth = `"${p.f.column}" IS NOT NULL AND "${s.f.column}" IS NOT NULL`;
+        let ffilled = db.query(`SELECT count(*) AS c FROM "${ft}" WHERE ${fboth}`)
+            .col("c").value_at(0).parse_int();
+        let fpairs = db.query(
+            `SELECT count(*) AS c FROM
+             (SELECT DISTINCT "${p.f.column}", "${s.f.column}" FROM "${ft}" WHERE ${fboth})`,
+        ).col("c").value_at(0).parse_int();
+        if fpairs == 0 { continue; }
+        let m = db.query(
+            `SELECT count(*) AS m FROM
+             (SELECT DISTINCT "${p.f.column}" AS v1, "${s.f.column}" AS v2
+              FROM "${ft}" WHERE ${fboth}) a
+             JOIN (SELECT DISTINCT "${p.k.column}" AS v1, "${s.k.column}" AS v2
+              FROM "${kt}" WHERE ${both}) b
+             ON a.v1 = b.v1 AND a.v2 = b.v2`,
+        ).col("m").value_at(0).parse_int();
+        let overlap = m.to_float() / fpairs.to_float();
+        if overlap < 0.5 { continue; }
+
+        seen.push(key);
+        // The anchor is the identifying leg — the higher-cardinality to
+        // side; the scope is the tenant leg. Which pair triggered the
+        // rescue is iteration order, not evidence.
+        let a = p;
+        let sc = s;
+        if s.k.distinct > p.k.distinct {
+            a = s;
+            sc = p;
+        }
         candidates.push(#{
-            from: `${f.table}.${f.column}`,
-            to: `${k.table}.${k.column}`,
-            cardinality: if f.unique { "one-to-one" } else { "many-to-one" },
+            from: `${a.f.table}.${a.f.column}`,
+            to: `${a.k.table}.${a.k.column}`,
+            key_columns: [#{
+                from: `${sc.f.table}.${sc.f.column}`,
+                to: `${sc.k.table}.${sc.k.column}`,
+            }],
+            cardinality: if fpairs == ffilled { "one-to-one" } else { "many-to-one" },
             overlap: overlap,
             matched: m,
-            orphans: f.distinct - m,
-            from_distinct: f.distinct,
-            to_distinct: k.distinct,
+            orphans: fpairs - m,
+            from_distinct: fpairs,
+            to_distinct: dst,
         });
+        break;
     }
 }
 

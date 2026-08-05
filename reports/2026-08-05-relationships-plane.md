@@ -71,6 +71,18 @@ alone now. The judge *loop* is language-level and lives in the core
   (`matched`, `orphans`, `from_distinct`, `to_distinct`) on the
   aspect schema's open remainder. Same-table pairs stay in — they are
   hierarchy candidates.
+- **Composite rescue** (added same day on the lead's flag: "we also
+  had composite keys"): a to side that is no key alone can be one
+  inside a scope — the multi-tenant shape, `(businessID, name)`,
+  which is every one of booksql's five declared FKs. Ported as the
+  reality, not the machinery: v0.3's greedy width-4 fuse becomes
+  width 2 — anchor plus one co-present scoping pair, accepted only
+  when the combined to side is near-unique and the two-leg join
+  resolves ("DATA decides, not names", v0.3's own rule). The anchor
+  is the higher-cardinality to side (the identifying leg), the scope
+  the tenant leg; the candidate carries `key_columns` on the open
+  remainder, exactly v0.3's semantic-model shape. The declared form
+  is unchanged — cure by keyed view, then declare (the corpus rule).
 - `relationship_candidates` aspect + `detect_relationships`
   declaration in the boot library — fixture 12's spellings verbatim.
 - **The `relationships` relation** — the judge must see what is
@@ -96,6 +108,30 @@ aspect's grain, so disclosure assumes every subject might speak to
 it. Reads narrow past it (`WHERE state = 'current'`), but the noise
 is real; whether aspects should declare grain is a language question
 for the project lead, not something to decide in passing.
+
+## Porting list — realities to carry, not complexity
+
+The lead's rule for this area: v0.3's complexity is not the thing to
+keep; what could be *realities in actual data* is.
+
+- **The stock-flow judge** (lead's candidate, 2026-08-05): v0.3's
+  temporal-behavior detector pools the *claimed* behavior against the
+  *measured* one — the first measurement-based judge. Candidate
+  glossql shape, needing a ruling before build: a function that
+  RETURNS the `behavior` FACT aspect would put a measured voice into
+  the same witness's slots (function voices ride RETURNS, ruled
+  2026-08-04; collapse already ranks human > agent > function), and
+  `slot_entropy` — or a sharper detector — would band
+  claim-vs-data disagreement with no new machinery. RETURNS onto a
+  FACT aspect is legal by shape today but unexercised; whether it is
+  *intended* is the lead's call.
+- **booksql** (`../testdata/booksql`, research-use dataset): the
+  SQLite (`accounting.sqlite`, 810k-row `master_txn_table`, five
+  composite FKs all shaped `(businessID, X)`) is the designated test
+  for the relational-source import when the ADBC executor lands; the
+  badly-exported CSVs under `Tables/` are an add-source reality test
+  before that — broken exports are exactly what probes and authored
+  recipes exist for.
 
 ## Next: run 3
 
