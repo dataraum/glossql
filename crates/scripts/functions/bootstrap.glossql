@@ -55,6 +55,29 @@ DECLARE ASPECT behavior_evidence WITH $${
   }
 }$$ AS MEASUREMENT ON COLUMN;
 
+DECLARE ASPECT dimension_relevance WITH $${
+  "type": "object", "required": ["applicable"],
+  "properties": {
+    "applicable": {"type": "boolean"},
+    "relevance": {"type": "number"}, "coverage": {"type": "number"},
+    "evenness": {"type": "number"}, "groups": {"type": "integer"},
+    "truncated": {"type": "boolean"}
+  }
+}$$ AS MEASUREMENT ON COLUMN;
+
+DECLARE ASPECT hierarchy_candidates WITH $${
+  "type": "object", "required": ["applicable"],
+  "properties": {
+    "applicable": {"type": "boolean"},
+    "rows": {"type": "integer"},
+    "candidates": {"type": "array", "items": {"type": "object",
+      "properties": {
+        "from": {"type": "string"}, "to": {"type": "string"},
+        "g3": {"type": "number"}, "lambda": {"type": "number"},
+        "kind": {"type": "string", "enum": ["edge", "alias"]}}}}
+  }
+}$$ AS MEASUREMENT ON TABLE;
+
 DECLARE FUNCTION profile FOR GLOBAL FROM 'functions/profile.rhai'
   RETURNS column_profile;
 
@@ -72,5 +95,12 @@ DECLARE FUNCTION detect_relationships FOR GLOBAL FROM 'functions/relationships.r
 DECLARE FUNCTION behavior_evidence FOR GLOBAL FROM 'functions/behavior_evidence.rhai'
   ACCEPTS (relationships, imports)
   RETURNS behavior_evidence;
+
+DECLARE FUNCTION dimension_relevance FOR GLOBAL FROM 'functions/dimension_relevance.rhai'
+  ACCEPTS (column_profile)
+  RETURNS dimension_relevance;
+
+DECLARE FUNCTION detect_hierarchies FOR GLOBAL FROM 'functions/hierarchies.rhai'
+  RETURNS hierarchy_candidates;
 
 DECLARE FUNCTION slot_entropy FOR GLOBAL FROM 'functions/slot_entropy.rhai';

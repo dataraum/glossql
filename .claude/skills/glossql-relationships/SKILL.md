@@ -23,9 +23,9 @@ column is tried as a `from` side, and any pair where at least half the
 from-side values resolve survives. Each candidate carries `from`,
 `to`, `cardinality`, `overlap`, plus evidence — `matched`, `orphans`,
 `from_distinct`, `to_distinct`. The list is deliberately generous:
-high recall, false positives included, you are the precision. After
-new tables land, re-measure:
-`DELETE FROM cache WHERE function = 'detect_relationships';`
+high recall, false positives included, you are the precision. A newly
+landed table invalidates the cached candidates on its own (the
+`imports` ACCEPTS edge) — the next call re-measures.
 
 A candidate carrying `key_columns` is a **composite**: its `from`/`to`
 anchor is no key alone, but together with the scoping leg it
