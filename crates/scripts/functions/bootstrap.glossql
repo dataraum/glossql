@@ -66,9 +66,11 @@ DECLARE FUNCTION temporal FOR GLOBAL FROM 'functions/temporal.rhai'
   RETURNS temporal_profile;
 
 DECLARE FUNCTION detect_relationships FOR GLOBAL FROM 'functions/relationships.rhai'
+  ACCEPTS (imports)
   RETURNS relationship_candidates;
 
 DECLARE FUNCTION behavior_evidence FOR GLOBAL FROM 'functions/behavior_evidence.rhai'
+  ACCEPTS (relationships, imports)
   RETURNS behavior_evidence;
 
 DECLARE FUNCTION slot_entropy FOR GLOBAL FROM 'functions/slot_entropy.rhai';

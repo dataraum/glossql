@@ -16,10 +16,10 @@
 // Anchors come from DECLARED relationships only (ruled 2026-08-05): the
 // plane order is relationships first, and the wrong-anchor gate then
 // guards misdeclared edges rather than a combinatorial sweep. Composite
-// (tuple) endpoints are skipped for now. A newly declared relationship
-// does NOT invalidate this cache — ACCEPTS edges are aspect-only — so
-// recompute by `DELETE FROM cache WHERE function = 'behavior_evidence'`
-// after declaring; the add-source skill teaches this.
+// (tuple) endpoints are skipped for now. The declaration reads them as
+// invalidation edges — `ACCEPTS (relationships, imports)`, ruled
+// 2026-08-05 — so a new edge or a landed table kills this cache and the
+// next call recomputes; abstentions heal on their own.
 //
 // Conventions (which event columns carry the movement) are v0.3's
 // enumeration: each numeric column, and every ordered pair difference

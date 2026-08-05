@@ -331,7 +331,10 @@ DECLARE FUNCTION reconcile_bands FOR fin FROM 'functions/reconcile_bands.rhai';
 - `ACCEPTS` names the aspects whose current values the server hands the
   script as its context document — settings are context, never call
   arguments; calls are always bare `f()`. Absent `ACCEPTS`, the script
-  receives no context.
+  receives no context. The declaration relations `relationships` and
+  `imports` may ride the list too, as invalidation edges only: no
+  context entry arrives — the script reads them as tables — but a write
+  to the relation kills the cache like an aspect value would.
 - `RETURNS` names the aspect the function's output fills, mirroring
   `ACCEPTS`: functions read aspects and write an aspect, and the aspect's
   schema is the one contract — output is validated against it at
@@ -372,7 +375,9 @@ value for an aspect — glossed, or a bound measurement's fresh output —
 deletes the cached results of every function that `ACCEPTS` it, at and
 under the subject: the declaration that names a script's inputs also names
 what kills its cache, and it is the only definition-level invalidation
-there is. Data freshness is snapshot staleness, marked at read (§5.3) — a
+there is. A declared relationship or a recorded import invalidates
+dataset-wide through the same edge, for functions that `ACCEPTS` the
+relation. Data freshness is snapshot staleness, marked at read (§5.3) — a
 table's definition never changes underneath its evidence, because a
 changed recipe is refused and `DROP TABLE` takes the evidence with it
 (§3). Nothing recomputes at write time, and no machinery ever deletes a

@@ -28,7 +28,10 @@ DECLARE FUNCTION outliers FOR GLOBAL FROM 'functions/outliers.rhai'
 - `ACCEPTS` names the aspects whose current values arrive as context —
   settings are context, never call arguments; calls are always bare
   `f()`. It is also the invalidation edge: a new value for an accepted
-  aspect deletes your cached results.
+  aspect deletes your cached results. The declaration relations
+  `relationships` and `imports` may ride the list too, as invalidation
+  edges only — no context entry arrives (read them through `db`), but
+  a declared edge or a landed table kills your cache dataset-wide.
 - `RETURNS` names the aspect the output fills; the output is validated
   against that aspect's JSON Schema at extraction.
 - **No `RETURNS` declares a detector** — role by shape. Detectors are

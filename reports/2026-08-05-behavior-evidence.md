@@ -82,12 +82,18 @@ backstop, but it is a server-surface line and should be seen.
 
 ## Flagged, not fixed
 
-- **Relation writes don't invalidate.** `ACCEPTS` edges are
-  aspect-only, so declaring a new relationship leaves stale
-  `behavior_evidence` caches in place. The skill teaches
-  `DELETE FROM cache WHERE function = 'behavior_evidence'`; whether
-  declaration relations should be invalidation edges like aspects is a
-  language question for the project lead, not decided here.
+- **Relation writes don't invalidate.** ~~`ACCEPTS` edges are
+  aspect-only~~ — ruled same day (project lead: "if the logic is
+  already there, why not — caches repopulate on the next call") and
+  landed: `ACCEPTS` admits the wired declaration relations
+  (`relationships`, `imports`) as invalidation edges. No context entry
+  arrives — the script reads them as tables — but a declared edge or a
+  landed import kills the accepting function's cache dataset-wide
+  through the same `invalidate()` path an aspect value uses.
+  Abstentions heal on their own; the skill's manual
+  `DELETE FROM cache` teaching is retired. An unwired relation name is
+  refused rather than becoming a silent no-op edge; the rest join as
+  consumers appear. SPEC.md §6 carries the two-sentence diff.
 - **Intersection pairing.** Series pair on (entity, period) cells
   present on both sides; a calendar gap between kept cells makes Δy
   span it and read as noise. v0.3's calendar-complete period

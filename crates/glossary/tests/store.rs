@@ -489,6 +489,74 @@ async fn a_glossary_delete_invalidates_detector_verdicts() {
     );
 }
 
+#[tokio::test]
+async fn declaration_relations_are_invalidation_edges() {
+    let s = store().await;
+    // ACCEPTS admits the wired declaration relations (ruled 2026-08-05):
+    // no context arrives, but a write to the relation kills the cache
+    // dataset-wide — an edge can change any subject's evidence.
+    let Declaration::Function(dep) = decl(
+        "DECLARE FUNCTION evidence FOR fin FROM 'ev.rhai' \
+         ACCEPTS (relationships, imports) RETURNS unit;",
+    ) else {
+        unreachable!()
+    };
+    s.declare_function(&dep).await.unwrap();
+    let Declaration::Function(other) = decl("DECLARE FUNCTION vibes FOR fin FROM 'v.rhai';")
+    else {
+        unreachable!()
+    };
+    s.declare_function(&other).await.unwrap();
+
+    s.cache_put("fin", "orders.amount", "evidence", r#"{"applicable": false}"#, None)
+        .await
+        .unwrap();
+    s.cache_put("fin", "orders.amount", "vibes", r#"{"n": 1}"#, None)
+        .await
+        .unwrap();
+
+    s.declare_relationship("fin", "orders.customer_id", "->", "customers.id")
+        .await
+        .unwrap();
+    assert!(
+        s.cache_get("fin", "orders.amount", "evidence")
+            .await
+            .unwrap()
+            .is_none(),
+        "a declared edge kills the accepting function's cache"
+    );
+
+    s.cache_put("fin", "orders.amount", "evidence", r#"{"applicable": false}"#, None)
+        .await
+        .unwrap();
+    s.import_put("fin", "payments", 10, 10).await.unwrap();
+    assert!(
+        s.cache_get("fin", "orders.amount", "evidence")
+            .await
+            .unwrap()
+            .is_none(),
+        "a landed import kills it the same way"
+    );
+
+    assert!(
+        s.cache_get("fin", "orders.amount", "vibes")
+            .await
+            .unwrap()
+            .is_some(),
+        "a function without the edge keeps its cache"
+    );
+
+    // An unwired relation name is refused as an unknown aspect — a
+    // silent no-op edge would be worse than an error.
+    let Declaration::Function(bad) =
+        decl("DECLARE FUNCTION w FOR fin FROM 'w.rhai' ACCEPTS (witnesses);")
+    else {
+        unreachable!()
+    };
+    let e = s.declare_function(&bad).await.unwrap_err();
+    assert!(matches!(e, Error::Unknown { what: "aspect", .. }), "{e}");
+}
+
 // -- recipe admission (SPEC.md §3) ----------------------------------------
 
 #[tokio::test]

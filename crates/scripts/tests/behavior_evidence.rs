@@ -199,7 +199,8 @@ async fn a_running_balance_is_a_stock_its_movement_a_flow_and_noise_abstains() {
                                 \"anchors\": {{\"type\": \"array\"}}}}\n\
              }}$$ AS MEASUREMENT ON COLUMN;\n\
              DECLARE FUNCTION behavior_evidence FOR GLOBAL \
-             FROM 'functions/behavior_evidence.rhai' RETURNS behavior_evidence;\n\
+             FROM 'functions/behavior_evidence.rhai' \
+             ACCEPTS (relationships, imports) RETURNS behavior_evidence;\n\
              DECLARE RECIPE ledgers ON fin FROM erp_export AS \
              $$SELECT * FROM read_parquet('ledgers/*.parquet')$$;\n\
              DECLARE RECIPE positions ON fin FROM erp_export AS \
@@ -207,11 +208,25 @@ async fn a_running_balance_is_a_stock_its_movement_a_flow_and_noise_abstains() {
              FROM read_parquet('positions/*.parquet')$$;\n\
              DECLARE RECIPE moves ON fin FROM erp_export AS \
              $$SELECT entity, CAST(d AS DATE) AS d, amount \
-             FROM read_parquet('moves/*.parquet')$$;\n\
-             DECLARE RELATIONSHIP positions.entity -> ledgers.id;\n\
-             DECLARE RELATIONSHIP moves.entity -> ledgers.id;",
+             FROM read_parquet('moves/*.parquet')$$;",
             root.display()
         ))
+        .await
+        .unwrap();
+
+    // Before any edge is declared there are no anchors — the
+    // measurement abstains whole.
+    let before = evidence(&session, "balance").await;
+    assert_eq!(before["applicable"], false, "{before}");
+
+    // Declaring the edges invalidates the cached abstention through the
+    // `relationships` ACCEPTS edge (ruled 2026-08-05) — the next call
+    // recomputes, no manual cache delete.
+    session
+        .execute(
+            "DECLARE RELATIONSHIP positions.entity -> ledgers.id;\n\
+             DECLARE RELATIONSHIP moves.entity -> ledgers.id;",
+        )
         .await
         .unwrap();
 

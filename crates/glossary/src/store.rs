@@ -247,6 +247,16 @@ pub fn relation_columns(name: &str) -> Option<&'static [&'static str]> {
         .map(|r| r.columns)
 }
 
+/// The declaration relations `ACCEPTS` admits as invalidation edges
+/// (ruled 2026-08-05): no context entry arrives — the script reads them
+/// as tables through the door — but a write to the relation kills the
+/// cache like an aspect value would. Only wired relations are admissible;
+/// an unwired name would be a silent no-op edge, so the rest join as
+/// consumers appear.
+pub fn accepts_relation(name: &str) -> bool {
+    matches!(name, "relationships" | "imports")
+}
+
 async fn migrate(pool: &SqlitePool) -> Result<()> {
     sqlx::raw_sql(MIGRATION).execute(pool).await?;
     // Pre-grain stores lack the column (2026-08-05); the failed ALTER on a
@@ -418,6 +428,10 @@ impl Store {
         .bind(right)
         .execute(&self.pool)
         .await?;
+        // A new edge invalidates dataset-wide through the same ACCEPTS
+        // machinery an aspect value uses (ruled 2026-08-05): an edge can
+        // change any subject's evidence, and the next call repopulates.
+        self.invalidate(dataset, "relationships", dataset).await?;
         Ok(())
     }
 
@@ -462,9 +476,15 @@ impl Store {
     }
 
     /// `ACCEPTS` names declared aspects — the context the server assembles
-    /// for the script (SPEC.md §6); each must exist.
+    /// for the script (SPEC.md §6); each must exist. Declaration relations
+    /// may ride the list too, as invalidation edges only (ruled
+    /// 2026-08-05): no context entry arrives, but a write to the relation
+    /// kills the cache like an aspect value would.
     pub async fn declare_function(&self, decl: &FunctionDecl) -> Result<()> {
         for aspect in &decl.accepts {
+            if accepts_relation(aspect.value.as_str()) {
+                continue;
+            }
             self.require("aspect", "aspects", aspect.value.as_str())
                 .await?;
         }
@@ -722,6 +742,9 @@ impl Store {
         .bind(landed_rows)
         .execute(&self.pool)
         .await?;
+        // A landed table widens what dataset-sweeping measurements can
+        // see; the `imports` ACCEPTS edge invalidates them dataset-wide.
+        self.invalidate(dataset, "imports", dataset).await?;
         Ok(())
     }
 

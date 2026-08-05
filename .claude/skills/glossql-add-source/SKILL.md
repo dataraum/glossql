@@ -186,9 +186,9 @@ then speak to each aspect on every landed column:
   `SELECT behavior_evidence() FROM orders.amount;` reconciles the
   column against period movements aggregated from event tables
   reachable over *declared* relationships (declare edges first; a new
-  edge does not invalidate this cache —
-  `DELETE FROM cache WHERE function = 'behavior_evidence';`
-  recomputes). Each anchor carries a verdict beside its evidence —
+  edge or import invalidates the evidence cache, so the next call
+  recomputes and abstentions heal on their own). Each anchor carries
+  a verdict beside its evidence —
   entity votes, agreement, both residuals, the runner-up
   conventions — and `abstain` is a complete answer, not a defect. The
   verdict is evidence for *your* judgment, never a ruling: you may

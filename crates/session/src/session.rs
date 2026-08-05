@@ -494,6 +494,12 @@ impl Session {
                 None => {
                     let mut context = serde_json::Map::new();
                     for aspect in &function.accepts {
+                        // A declaration relation in ACCEPTS is an
+                        // invalidation edge only (ruled 2026-08-05): the
+                        // script reads it as a table, no context entry.
+                        if glossql_glossary::accepts_relation(aspect) {
+                            continue;
+                        }
                         let value =
                             context_value(&store, &resolved.dataset, &resolved.subject, aspect)
                                 .await?;

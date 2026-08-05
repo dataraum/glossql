@@ -87,7 +87,8 @@ async fn the_generator_grades_the_discriminator() {
                                 \"anchors\": {{\"type\": \"array\"}}}}\n\
              }}$$ AS MEASUREMENT ON COLUMN;\n\
              DECLARE FUNCTION behavior_evidence FOR GLOBAL \
-             FROM 'functions/behavior_evidence.rhai' RETURNS behavior_evidence;\n\
+             FROM 'functions/behavior_evidence.rhai' \
+             ACCEPTS (relationships, imports) RETURNS behavior_evidence;\n\
              DECLARE RECIPE chart_of_accounts ON fin FROM finance AS \
              $$SELECT TRY_CAST(account_id AS BIGINT) AS account_id, name \
              FROM read_csv('chart_of_accounts.csv')$$;\n\
