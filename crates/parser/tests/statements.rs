@@ -30,6 +30,14 @@ snap!(
     "DECLARE RELATIONSHIP orders.customer_id -> customers.id;\nDECLARE RELATIONSHIP invoices.order_id <-> orders.id;"
 );
 snap!(
+    relationship_decl_composite,
+    "DECLARE RELATIONSHIP master_txn.(business_id, account) -> coa.(business_id, account_name);"
+);
+snap!(
+    gloss_on_composite_pair_path,
+    r#"GLOSS meaning ON txn.(business_id, party) -> parties.(business_id, name) AS $${"value": "scoped reference"}$$;"#
+);
+snap!(
     aspect_decl_fact,
     r#"DECLARE ASPECT unit WITH $${"type": "object", "properties": {"value": {"type": "string"}}}$$ AS FACT;"#
 );

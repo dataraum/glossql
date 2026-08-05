@@ -168,9 +168,9 @@ fn parse_declaration(p: &mut Parser) -> Result<Declaration, ParserError> {
         }
         "RELATIONSHIP" => {
             p.next_token();
-            let left = parse_column_path(p)?;
+            let left = parse_rel_side(p)?;
             let op = parse_rel_op(p)?;
-            let right = parse_column_path(p)?;
+            let right = parse_rel_side(p)?;
             Ok(Declaration::Relationship(RelationshipDecl {
                 left,
                 op,
@@ -433,9 +433,69 @@ fn parse_rel_op(p: &mut Parser) -> Result<RelOp, ParserError> {
     expected("`->` or `<->`", &found)
 }
 
-fn parse_path_segments(p: &mut Parser) -> Result<Vec<Ident>, ParserError> {
+/// `(a, b, …)` — a composite key. At least two columns: a one-tuple would
+/// be a second spelling of `table.column`, and the store keys on the
+/// canonical text.
+fn parse_key_tuple(p: &mut Parser) -> Result<Vec<Ident>, ParserError> {
+    p.expect_token(&Token::LParen)?;
+    let mut columns = vec![p.parse_identifier()?];
+    while p.consume_token(&Token::Comma) {
+        columns.push(p.parse_identifier()?);
+    }
+    p.expect_token(&Token::RParen)?;
+    if columns.len() < 2 {
+        let found = p.peek_token();
+        return expected(
+            "at least two columns in a composite endpoint — spell one column as table.column",
+            &found,
+        );
+    }
+    Ok(columns)
+}
+
+fn into_rel_side(
+    mut segments: Vec<Ident>,
+    tuple: Option<Vec<Ident>>,
+    p: &Parser,
+) -> Result<RelSide, ParserError> {
+    match tuple {
+        Some(columns) if matches!(segments.len(), 1 | 2) => {
+            let table = segments.pop().expect("length checked");
+            Ok(RelSide {
+                dataset: segments.pop(),
+                table,
+                columns,
+            })
+        }
+        None if matches!(segments.len(), 2 | 3) => {
+            let column = segments.pop().expect("length checked");
+            let table = segments.pop().expect("length checked");
+            Ok(RelSide {
+                dataset: segments.pop(),
+                table,
+                columns: vec![column],
+            })
+        }
+        _ => {
+            let found = p.peek_token();
+            expected(
+                "a relationship endpoint of [dataset.]table.column or [dataset.]table.(a, b)",
+                &found,
+            )
+        }
+    }
+}
+
+/// Path segments up to a composite key: stops when a `.` is followed by
+/// `(`, returning the tuple beside the segments walked so far.
+fn parse_segments_or_tuple(
+    p: &mut Parser,
+) -> Result<(Vec<Ident>, Option<Vec<Ident>>), ParserError> {
     let mut segments = vec![p.parse_identifier()?];
     while p.consume_token(&Token::Period) {
+        if p.peek_token() == Token::LParen {
+            return Ok((segments, Some(parse_key_tuple(p)?)));
+        }
         segments.push(p.parse_identifier()?);
         if segments.len() > 3 {
             let found = p.peek_token();
@@ -445,37 +505,16 @@ fn parse_path_segments(p: &mut Parser) -> Result<Vec<Ident>, ParserError> {
             );
         }
     }
-    Ok(segments)
+    Ok((segments, None))
 }
 
-fn into_column_path(mut segments: Vec<Ident>, p: &Parser) -> Result<ColumnPath, ParserError> {
-    match segments.len() {
-        2 | 3 => {
-            let column = segments.pop().expect("length checked");
-            let table = segments.pop().expect("length checked");
-            Ok(ColumnPath {
-                dataset: segments.pop(),
-                table,
-                column,
-            })
-        }
-        _ => {
-            let found = p.peek_token();
-            expected(
-                "a relationship endpoint of table.column or dataset.table.column",
-                &found,
-            )
-        }
-    }
-}
-
-fn parse_column_path(p: &mut Parser) -> Result<ColumnPath, ParserError> {
-    let segments = parse_path_segments(p)?;
-    into_column_path(segments, p)
+fn parse_rel_side(p: &mut Parser) -> Result<RelSide, ParserError> {
+    let (segments, tuple) = parse_segments_or_tuple(p)?;
+    into_rel_side(segments, tuple, p)
 }
 
 fn parse_subject(p: &mut Parser) -> Result<Subject, ParserError> {
-    let segments = parse_path_segments(p)?;
+    let (segments, tuple) = parse_segments_or_tuple(p)?;
     let op = if p.consume_token(&Token::TwoWayArrow) {
         Some(RelOp::OneToOne)
     } else if p.consume_token(&Token::Arrow) {
@@ -483,11 +522,18 @@ fn parse_subject(p: &mut Parser) -> Result<Subject, ParserError> {
     } else {
         None
     };
-    match op {
-        None => Ok(Subject::Path(Path { segments })),
-        Some(op) => {
-            let left = into_column_path(segments, p)?;
-            let right = parse_column_path(p)?;
+    match (op, tuple) {
+        (None, None) => Ok(Subject::Path(Path { segments })),
+        (None, Some(_)) => {
+            let found = p.peek_token();
+            expected(
+                "`->` or `<->` — a composite endpoint only exists in a pair path",
+                &found,
+            )
+        }
+        (Some(op), tuple) => {
+            let left = into_rel_side(segments, tuple, p)?;
+            let right = parse_rel_side(p)?;
             Ok(Subject::Pair(Box::new(PairPath { left, op, right })))
         }
     }

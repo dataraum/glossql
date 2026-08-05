@@ -65,20 +65,68 @@ pub async fn resolve_path(
     }
 }
 
-/// Resolve one endpoint of a pair path: `[dataset.]table.column`.
+/// Resolve one endpoint of a pair path: `[dataset.]table` segments plus the
+/// key — one column, or ≥ 2 for a composite endpoint (the tuple is the key,
+/// ruled 2026-08-05). Canonical spelling: `table.column` / `table.(a, b)`.
 pub async fn resolve_endpoint(
+    store: &Store,
+    use_dataset: Option<&str>,
+    table_segments: &[String],
+    columns: &[String],
+) -> Result<Resolved, SessionError> {
+    let (dataset, table) = match table_segments {
+        [table] => (
+            use_dataset.ok_or(SessionError::NoDataset)?.to_string(),
+            table.clone(),
+        ),
+        [dataset, table] if store.dataset_exists(dataset).await? => {
+            (dataset.clone(), table.clone())
+        }
+        _ => {
+            return Err(SessionError::BadSubject(format!(
+                "relationship endpoint `{}` must be [dataset.]table.column or [dataset.]table.(a, b)",
+                table_segments.join(".")
+            )));
+        }
+    };
+    let key = match columns {
+        [] => {
+            return Err(SessionError::BadSubject(format!(
+                "relationship endpoint `{table}` names no key column"
+            )));
+        }
+        [one] => one.clone(),
+        many => format!("({})", many.join(", ")),
+    };
+    Ok(Resolved {
+        dataset,
+        subject: format!("{table}.{key}"),
+    })
+}
+
+/// Resolve a textual `[dataset.]table.column` endpoint. Substrate SQL spells
+/// no tuples — composite pairs are addressed by sweep plus WHERE on the
+/// subject text.
+pub async fn resolve_column_endpoint(
     store: &Store,
     use_dataset: Option<&str>,
     segments: &[String],
 ) -> Result<Resolved, SessionError> {
-    let resolved = resolve_path(store, use_dataset, segments).await?;
-    if !resolved.subject.contains('.') || resolved.subject == resolved.dataset {
-        return Err(SessionError::BadSubject(format!(
+    match segments.split_last() {
+        Some((column, table_segments)) if !table_segments.is_empty() => {
+            resolve_endpoint(
+                store,
+                use_dataset,
+                table_segments,
+                std::slice::from_ref(column),
+            )
+            .await
+        }
+        _ => Err(SessionError::BadSubject(format!(
             "relationship endpoint `{}` must be table.column",
             segments.join(".")
-        )));
+        ))),
     }
-    Ok(resolved)
 }
 
 /// Join two resolved endpoints into the canonical pair-path subject.

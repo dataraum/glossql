@@ -81,10 +81,13 @@ use               = "USE", name ;
 
 (* -- relationships ------------------------------------------------------ *)
 
-relationship_decl = "RELATIONSHIP", column_path, rel_op, column_path ;
+relationship_decl = "RELATIONSHIP", rel_side, rel_op, rel_side ;
 rel_op            = "->"                     (* many-to-one, the FK direction *)
                   | "<->" ;                  (* one-to-one *)
-column_path       = [ name, "." ], name, ".", name ;   (* [dataset.]table.column *)
+rel_side          = [ name, "." ], name, ".", rel_key ; (* [dataset.]table.key *)
+rel_key           = name                     (* one column *)
+                  | "(", name, ",", name, { ",", name }, ")" ;
+                    (* composite — the tuple is the key *)
 
 (* -- subjects ----------------------------------------------------------- *)
 
@@ -93,7 +96,7 @@ subject           = path
 path              = name, [ ".", name, [ ".", name ] ] ;
                     (* dataset | dataset.table | dataset.table.column;
                        views count as tables; unprefixed resolves via USE *)
-pair_path         = column_path, rel_op, column_path ;
+pair_path         = rel_side, rel_op, rel_side ;
                     (* a declared relationship, addressed by its pair path *)
 
 (* -- glossary ----------------------------------------------------------- *)

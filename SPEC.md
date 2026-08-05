@@ -121,11 +121,13 @@ A **subject** is what a gloss, a function SELECT, or a witness attaches to:
 - `dataset.table` — views count as tables
 - `dataset.table.column`
 - `table.column -> table.column` — a declared relationship, addressed by its
-  pair path (relationships have no names)
+  pair path (relationships have no names). An endpoint is a column or a
+  column tuple: `table.(a, b)` — the tuple is the key.
 
 ```sql
 DECLARE RELATIONSHIP orders.customer_id -> customers.id;
 DECLARE RELATIONSHIP invoices.order_id <-> orders.id;
+DECLARE RELATIONSHIP txn.(business_id, account) -> coa.(business_id, code);
 ```
 
 - `->` is many-to-one (the FK direction); one-to-many is `->` written from
@@ -136,8 +138,6 @@ DECLARE RELATIONSHIP invoices.order_id <-> orders.id;
   declared relationships exist; there is no rejected or negative form — a
   rejected candidate is simply not declared, and detection functions are
   deterministic, so it does not resurface as new knowledge.
-- Composite keys are detected by a function, materialized as a column (e.g.
-  in a view), then declared as a single-column relationship.
 
 ## 5. The glossary
 

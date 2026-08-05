@@ -43,12 +43,11 @@ DECLARE RELATIONSHIP orders.customer_id -> customers.id;
 DECLARE RELATIONSHIP invoices.order_id <-> orders.id;
 ```
 
-Composite keys follow the decided rule — detected by a function, materialized
-as a column, then declared:
+Composite keys are tuple endpoints (ruled 2026-08-05, fixture 14; the
+derived-column cure retired with it):
 
 ```glossql
-CREATE VIEW txn_keyed AS SELECT *, account || ':' || business_id AS account_key FROM txn;
-DECLARE RELATIONSHIP txn_keyed.account_key -> coa.account_key;
+DECLARE RELATIONSHIP txn.(business_id, account) -> coa.(business_id, account_name);
 ```
 
 ## Dimensions, hierarchies, calendar (`slice_definitions`, `dimension_hierarchies`, `workspace_calendar`)

@@ -27,7 +27,7 @@ use glossql_glossary::{AttestRow, CollapsedRow, RawRow, ReadContext, Scope, Stor
 use serde_json::{Value, json};
 
 use crate::session::{FunctionRuntime, SessionError, SqlDoor};
-use crate::subject::{pair_subject, resolve_endpoint, resolve_path};
+use crate::subject::{pair_subject, resolve_column_endpoint, resolve_path};
 
 /// State the planner shares with the router: the `USE`'d dataset, the data
 /// plane, and the script runtime (reads run detectors).
@@ -385,8 +385,8 @@ async fn decode_scope(
             .ok_or_else(|| SessionError::BadSubject(format!("`{left}` in a pair path")))?;
         let right_segments = path_segments(right)
             .ok_or_else(|| SessionError::BadSubject(format!("`{right}` in a pair path")))?;
-        let l = resolve_endpoint(store, use_dataset, &left_segments).await?;
-        let r = resolve_endpoint(store, use_dataset, &right_segments).await?;
+        let l = resolve_column_endpoint(store, use_dataset, &left_segments).await?;
+        let r = resolve_column_endpoint(store, use_dataset, &right_segments).await?;
         let pair = pair_subject(&l, op, &r);
         return Ok(((l.dataset, Scope::Subject(pair)), aspect));
     }

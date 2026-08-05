@@ -33,3 +33,5 @@ simplified language (see `reports/2026-08-03-simplification.md`).
 | 10 | remaining engine artifacts | TRANSCRIBES (coverage completion) |
 | 11 | flow: add source | TRANSCRIBES (no flow construct; orchestration app-side) |
 | 12 | flow: begin session | TRANSCRIBES (measure → read → declare → attest) |
+| 13 | typing patterns | TRANSCRIBES (patterns as FACT glosses) |
+| 14 | composite relationships (finance_2 run, 2026-08-05) | TRANSCRIBES (composite = tuple endpoint; view cure retired) |

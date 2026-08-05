@@ -88,9 +88,9 @@ pub struct RecipeDecl {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct RelationshipDecl {
-    pub left: ColumnPath,
+    pub left: RelSide,
     pub op: RelOp,
-    pub right: ColumnPath,
+    pub right: RelSide,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -182,21 +182,24 @@ pub struct Path {
     pub segments: Vec<Ident>,
 }
 
-/// `[dataset.]table.column`.
+/// A relationship endpoint: `[dataset.]table.column` or, composite,
+/// `[dataset.]table.(a, b)` — the tuple is the key (ruled 2026-08-05;
+/// there is no derived-column cure).
 #[derive(Debug, Clone, PartialEq)]
-pub struct ColumnPath {
+pub struct RelSide {
     pub dataset: Option<Ident>,
     pub table: Ident,
-    pub column: Ident,
+    /// One column, or ≥ 2 for a composite endpoint.
+    pub columns: Vec<Ident>,
 }
 
 /// A declared relationship, addressed by its pair path (relationships have
 /// no names).
 #[derive(Debug, Clone, PartialEq)]
 pub struct PairPath {
-    pub left: ColumnPath,
+    pub left: RelSide,
     pub op: RelOp,
-    pub right: ColumnPath,
+    pub right: RelSide,
 }
 
 #[derive(Debug, Clone, PartialEq)]

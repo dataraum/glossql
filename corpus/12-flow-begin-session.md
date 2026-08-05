@@ -48,12 +48,12 @@ A rejected candidate is not declared — it stays visible in the measurement
 (fixture 07); a human's earlier declarations are already in the log, so
 "materialize overlays" is nothing: both actor kinds write the same statement.
 
-Composite keys are cured, then declared (the decided rule):
+Composite keys are tuple endpoints (ruled 2026-08-05, fixture 14 — the
+derived-column cure was retired when a live run showed it required the
+view surface §3 closes):
 
 ```glossql
-CREATE VIEW txn_keyed AS
-  SELECT *, account || ':' || business_id AS account_key FROM txn;
-DECLARE RELATIONSHIP txn_keyed.account_key -> coa.account_key;
+DECLARE RELATIONSHIP txn.(business_id, account) -> coa.(business_id, account_name);
 ```
 
 Enrichment and the catalog are views plus agent glosses:

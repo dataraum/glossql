@@ -276,4 +276,39 @@ async fn a_scoped_key_is_rescued_as_a_composite_candidate() {
     // The reverse direction is refused by the data: (party, business_id)
     // does not identify a txn row.
     assert!(!value.contains(r#""from":"parties."#), "{value}");
+
+    // The ruling (2026-08-05, fixture 14): the tuple is the key — the
+    // survivor declares directly, no derived-column cure. The declaration
+    // reads back, and the grounds glossed on the pair path surface in the
+    // anchor table's sweep.
+    session
+        .execute(
+            "DECLARE RELATIONSHIP txns.(business_id, party) -> parties.(business_id, name);\n\
+             DECLARE ASPECT meaning WITH $${\"type\": \"object\", \
+             \"properties\": {\"value\": {\"type\": \"string\"}}}$$ AS FACT;\n\
+             GLOSS meaning ON txns.(business_id, party) -> parties.(business_id, name) AS \
+             $${\"value\": \"party names repeat across businesses; the scope leg carries the tenant\"}$$;",
+        )
+        .await
+        .unwrap();
+    let right = one(
+        &session
+            .execute("SELECT right_path FROM relationships;")
+            .await
+            .unwrap(),
+    );
+    assert_eq!(right, "parties.(business_id, name)");
+    let swept = one(
+        &session
+            .execute(
+                "SELECT subject FROM GLOSSARY(txns) \
+                 WHERE aspect = 'meaning' AND state = 'current';",
+            )
+            .await
+            .unwrap(),
+    );
+    assert_eq!(
+        swept,
+        "txns.(business_id, party) -> parties.(business_id, name)"
+    );
 }

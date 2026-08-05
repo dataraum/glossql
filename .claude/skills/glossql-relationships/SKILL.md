@@ -32,7 +32,8 @@ anchor is no key alone, but together with the scoping leg it
 identifies rows — the multi-tenant shape, `(business_id, name)`. The
 measurement only proposes composites the data rescued (the combined
 to side is near-unique and the two-leg join resolves); the anchor is
-the identifying leg, the scope the tenant leg.
+the identifying leg, the scope the tenant leg. The declared form is
+the tuple — anchor and scope legs together, in one endpoint.
 
 ## 2. Judge every candidate
 
@@ -68,13 +69,13 @@ DECLARE RELATIONSHIP invoices.order_id <-> orders.id;
 
 `->` is a reference; `<->` when both sides resolve each other. A
 same-table candidate (`coa.parent_code -> coa.account_code`) is a
-hierarchy — declare it like any edge. A composite key is cured first,
-then declared (the decided rule):
+hierarchy — declare it like any edge. A composite key declares as a
+tuple endpoint — the tuple is the key (never declare the anchor leg
+alone: unscoped it licenses the fan-out the composite exists to
+collapse):
 
 ```glossql
-CREATE VIEW txn_keyed AS
-  SELECT *, account || ':' || business_id AS account_key FROM txn;
-DECLARE RELATIONSHIP txn_keyed.account_key -> coa.account_key;
+DECLARE RELATIONSHIP txn.(business_id, account) -> coa.(business_id, account_name);
 ```
 
 Rejected candidates are *not declared and not erased* — they stay
@@ -100,4 +101,7 @@ SELECT subject, aspect, value FROM GLOSSARY(orders);
 ```
 
 The `relationships` relation is the declared structure; a table's
-`GLOSSARY()` sweep picks up the pair paths it participates in.
+`GLOSSARY()` sweep picks up the pair paths it participates in —
+composite pairs included. Substrate SQL spells no tuples inside
+`GLOSSARY(…)`, so address a composite pair through the sweep plus
+`WHERE subject = '…'` on the subject text.

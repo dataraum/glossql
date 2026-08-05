@@ -688,15 +688,17 @@ impl Session {
 
     async fn pair(
         &self,
-        left: &glossql_parser::ColumnPath,
+        left: &glossql_parser::RelSide,
         op: RelOp,
-        right: &glossql_parser::ColumnPath,
+        right: &glossql_parser::RelSide,
     ) -> Result<(Resolved, &'static str, Resolved), SessionError> {
         let use_dataset = self.shared.dataset.read().expect("state lock").clone();
         let use_dataset = use_dataset.as_deref();
         let store = &self.shared.store;
-        let l = resolve_endpoint(store, use_dataset, &endpoint_segments(left)).await?;
-        let r = resolve_endpoint(store, use_dataset, &endpoint_segments(right)).await?;
+        let (lt, lc) = endpoint_parts(left);
+        let (rt, rc) = endpoint_parts(right);
+        let l = resolve_endpoint(store, use_dataset, &lt, &lc).await?;
+        let r = resolve_endpoint(store, use_dataset, &rt, &rc).await?;
         if l.dataset != r.dataset {
             return Err(SessionError::BadSubject(format!(
                 "pair path spans datasets `{}` and `{}`",
@@ -711,14 +713,15 @@ impl Session {
     }
 }
 
-fn endpoint_segments(path: &glossql_parser::ColumnPath) -> Vec<String> {
-    let mut segments = Vec::new();
-    if let Some(d) = &path.dataset {
-        segments.push(d.value.clone());
+/// An endpoint's `[dataset.]table` segments beside its key columns.
+fn endpoint_parts(side: &glossql_parser::RelSide) -> (Vec<String>, Vec<String>) {
+    let mut table = Vec::new();
+    if let Some(d) = &side.dataset {
+        table.push(d.value.clone());
     }
-    segments.push(path.table.value.clone());
-    segments.push(path.column.value.clone());
-    segments
+    table.push(side.table.value.clone());
+    let columns = side.columns.iter().map(|c| c.value.clone()).collect();
+    (table, columns)
 }
 
 /// The nearest current value of `aspect`, walking up from the subject:

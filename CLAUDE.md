@@ -17,10 +17,12 @@ Four non-prose artifacts are first-class — fixtures and machinery, not
 documents:
 
 - `grammar.ebnf` — the machine-readable grammar; the source of truth for syntax.
-- `corpus/` — transcriptions of **real** `../dataraum-context` artifacts
+- `corpus/` — transcriptions of **real** artifacts: `../dataraum-context`'s,
+  and — from fixture 14 on — our own test runs
   (` ```glossql ` must parse; ` ```glossql-gap ` documents a gap and must
   fail). Fixtures 11–12 model the system's operational flows as statement
-  sequences.
+  sequences; fixture 14 records the composite ruling (2026-08-05: a
+  composite endpoint is a tuple, the view cure retired).
 - `crates/` — the Rust PoC server, a Cargo workspace at the repo root.
   Directories unprefixed, package names `glossql-*`; datafusion moves in
   lockstep with iceberg-datafusion, sqlx with iceberg-catalog-sql (see the

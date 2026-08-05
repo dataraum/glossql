@@ -46,8 +46,7 @@ calls: the server keeps one session per actor.
 | `PROBE erp AS $$sql$$;` | run recipe-shaped SQL at the source, landing nothing | §3 |
 | `DECLARE RECIPE orders ON fin FROM erp AS $$sql$$;` | land the table the SQL produces — the landed table is the typed table | §3 |
 | `DROP TABLE orders;` | remove a table — refused while it holds data | §3 |
-| `DECLARE RELATIONSHIP a.col -> b.col;` | declare a join edge (`<->` both ways) | §4 |
-| `CREATE VIEW v AS SELECT …;` | ordinary substrate DDL | §4 |
+| `DECLARE RELATIONSHIP a.col -> b.col;` | declare a join edge (`<->` both ways); a composite endpoint is a tuple: `a.(x, y) -> b.(x, y)` | §4 |
 | `DECLARE ASPECT name WITH $$json-schema$$ AS MEASUREMENT\|FACT\|QUERY;` | add to the vocabulary; the schema is the one validated contract | §5.1 |
 | `GLOSS aspect ON subject AS $$json$$;` | speak a value into your slot | §5.2 |
 | `SELECT … FROM GLOSSARY(subject);` | the collapsed context; `all => true` for every slot | §5.3 |
@@ -59,6 +58,10 @@ calls: the server keeps one session per actor.
 
 There is no ordering surface: send statements in the order you need
 them, one call or several.
+
+Schema-altering substrate DDL — `CREATE VIEW` included — is closed
+(SPEC §3): tables come from recipes, and a composite edge is declared
+as a tuple, never cured through a view.
 
 ## Reading live state
 
