@@ -96,21 +96,28 @@ DECLARE RELATIONSHIP orders.city -> orders.state;
 GLOSS meaning ON orders.zip -> orders.city AS $${"value": "postal drill-down; g3 0, judged non-vacuous"}$$;
 ```
 
-## 4. Enriched views
+## 4. The enriched read
 
-`CREATE VIEW` is native SQL. Before a view carries a join, run the
+The substrate does not persist views — `CREATE VIEW` is refused
+(2026-08-06; a persistent enriched-view construct is an open language
+question, not yours to improvise). The deliverable is the *judged
+join*: which joins extend a fact without corrupting it, recorded so
+every later query can use them. Before trusting any join, run the
 grain check — the cheapest verification of the most consequential
-property a view has:
+property a join has:
 
 ```glossql
 SELECT count(*) FROM orders;
 SELECT count(*) FROM orders o JOIN customers c ON o.customer_id = c.id;
 ```
 
-Equal counts, exactly, or the join does not go in: a fan-out view
+Equal counts, exactly, or the join is not grain-preserving: a fan-out
 multiplies every downstream aggregate, and v0.3 failed the run rather
 than ship one. In a one-hop star the probes are independent — check
-each join alone. Carry the dimension columns you judged worth
-carrying, not everything; a conformed dimension shared across facts
-needs its concept named in prose, and alias axes collapse to one
-canonical column while role pairs never do.
+each join alone. A fact-to-fact join that *drops* rows instead needs
+`LEFT JOIN` to keep the fact whole; say which in the gloss. Record
+the verdicts as prose on the relationship pairs (the grain-check
+numbers are the grounds). Carry the dimension columns you judged
+worth carrying, not everything; a conformed dimension shared across
+facts needs its concept named in prose, and alias axes collapse to
+one canonical column while role pairs never do.

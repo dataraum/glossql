@@ -12,6 +12,9 @@ serde_json.workspace = true
 # and shares compiled ASTs across threads; `serde` is the JSON bridge both
 # ways (rhai-1.25.1: ast.rs:19, serde/ser.rs:83).
 rhai = { version = "1.25", features = ["sync", "serde"] }
+# The statistical kernels' algebra (reconcile's convention product); the
+# same substrate drivers will need (numeric-substrate report, 2026-08-05).
+faer = "0.22"
 regex = "1"
 
 [features]

@@ -62,9 +62,16 @@ if parts.len() == 1 {
                 // NULL is a category: the null rows form one more group.
                 let nac = distinct + if filled < n { 1 } else { 0 };
                 if nac < 2 { continue; }
-                if filled > 0 && distinct.to_float() / filled.to_float() >= 0.9 {
-                    continue; // near-key, by fraction — full-scan exact
-                }
+                // Only EXACT uniqueness excludes (2026-08-06, the f1
+                // circuits lesson): a unique column determines everything
+                // trivially and carries zero information, but a
+                // near-unique one — location, 75 distinct of 77 — is
+                // legitimate hierarchy material on a dimension table. The
+                // earlier near-key fraction gate stripped it before
+                // screening. Thin evidence stays VISIBLE instead of
+                // gated: `rows_per_value` on each candidate says how many
+                // rows back each determinant value.
+                if filled > 0 && distinct == filled { continue; }
                 pool.push(#{ name: c, nac: nac });
             }
         }
@@ -112,6 +119,7 @@ if parts.len() == 1 {
                             pair_groups: pair_groups, g3: g3_ab,
                             lambda: (agree_ab - b.modal).to_float()
                                 / (n - b.modal).to_float(),
+                            rows_per_value: n.to_float() / a.nac.to_float(),
                             kind: if alias { "alias" } else { "edge" },
                         });
                     }
@@ -122,6 +130,7 @@ if parts.len() == 1 {
                             pair_groups: pair_groups, g3: g3_ba,
                             lambda: (agree_ba - a.modal).to_float()
                                 / (n - a.modal).to_float(),
+                            rows_per_value: n.to_float() / b.nac.to_float(),
                             kind: if alias { "alias" } else { "edge" },
                         });
                     }

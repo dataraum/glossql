@@ -81,6 +81,15 @@ pub enum Outcome {
 /// columns without scanning them.
 pub trait SqlDoor: Send + Sync {
     fn sql(&self, query: &str) -> Result<Vec<RecordBatch>, String>;
+
+    /// Many statements, answered in order. The default runs them one by
+    /// one; doors backed by a runtime overlap them — the script stays a
+    /// sequential orchestrator, the fan-out lives below the seam
+    /// (2026-08-06: v0.3 ran its pair scans on a thread pool; rhai has no
+    /// threads, so the door carries the parallelism instead).
+    fn sql_all(&self, queries: &[String]) -> Vec<Result<Vec<RecordBatch>, String>> {
+        queries.iter().map(|q| self.sql(q)).collect()
+    }
 }
 
 /// The seam scripts plug into (rhai + arrow kernels, `glossql-scripts`).
@@ -133,6 +142,37 @@ impl SqlDoor for CtxDoor {
                     batches.push(RecordBatch::new_empty(schema));
                 }
                 Ok(batches)
+            })
+        })
+    }
+
+    fn sql_all(&self, queries: &[String]) -> Vec<Result<Vec<RecordBatch>, String>> {
+        // Waves of 16: enough overlap to hide per-query latency, bounded
+        // enough that a thousand-pair sweep doesn't stampede the runtime.
+        tokio::task::block_in_place(|| {
+            self.handle.block_on(async {
+                let mut out = Vec::with_capacity(queries.len());
+                for wave in queries.chunks(16) {
+                    let mut handles = Vec::with_capacity(wave.len());
+                    for q in wave {
+                        let ctx = self.ctx.clone();
+                        let q = q.clone();
+                        handles.push(tokio::spawn(async move {
+                            let df = ctx.sql(&q).await.map_err(|e| e.to_string())?;
+                            let schema = Arc::new(df.schema().as_arrow().clone());
+                            let mut batches =
+                                df.collect().await.map_err(|e| e.to_string())?;
+                            if batches.is_empty() {
+                                batches.push(RecordBatch::new_empty(schema));
+                            }
+                            Ok(batches)
+                        }));
+                    }
+                    for h in handles {
+                        out.push(h.await.unwrap_or_else(|e| Err(e.to_string())));
+                    }
+                }
+                out
             })
         })
     }

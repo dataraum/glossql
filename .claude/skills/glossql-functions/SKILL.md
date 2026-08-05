@@ -47,8 +47,12 @@ result, a map that must serialize as JSON:
   by aspect name; an entry is `()` when that aspect has no value yet.
   For a detector: `slots` (one per speaker, each with a `body`),
   `threshold`, plus `subject`/`aspect`/`witness` to echo back.
-- `db` — the door into the dataset: `db.query("sql")` returns a Table.
-  Any SQL; determinism is your contract, the workspace your boundary.
+- `db` — the door into the dataset: `db.query("sql")` returns a Table;
+  `db.query_all([sql, …])` returns an array of Tables, answered in
+  order — the door overlaps the batch below the seam, so a fan-out of
+  small queries (pair scans, probes) belongs in one `query_all`, never
+  a sequential loop. Any SQL; determinism is your contract, the
+  workspace your boundary.
 
 ## Kernels
 
@@ -64,7 +68,26 @@ Col: `dtype()` (Arrow type name — a `LIMIT 0` query types a column
 without scanning it), `count()`, `null_count()`, `distinct()`, `min()`,
 `max()`, `sum()`, `mean()`, `stddev()`, `percentile(p)`, `mad()`,
 `top_k(k)`, `len_stats()`, `match_rate(regex)`, `parse_rate(sql_type)`,
-`value_at(i)`.
+`value_at(i)`, `floats()` — the whole column as floats via one Arrow
+cast, `()` for NULL. Read numbers you will loop over with `floats()`,
+never `value_at().parse_float()` per cell: `value_at` renders display
+strings, and a hot loop through it is interpreter-bound.
+
+Statistical kernels — the compute-heavy halves of measurements live
+here, in Rust; a script that finds itself nesting loops over rows or
+pairs should be reaching for one instead:
+
+- `key_vec()` on a Col — its distinct values as sorted typed keys;
+  `count()` and `matched(other)` on the result give set size and
+  intersection by linear merge. Containment between two columns is
+  `a.matched(b) / a_distinct` — never a per-pair SQL join.
+- `pair_keys(c1, c2)` on a Table — two columns' rows as combined keys
+  (both non-null), for composite domains.
+- `reconcile(y_table, m_table, terms)` — the stock/flow discriminator
+  over two grouped results (`e, b, yv` and `e, b, s_<term>…`, both
+  `ORDER BY e, b`): conventions (each term and every ordered pair
+  difference) as one matrix product, residuals and voting gates per
+  entity; returns `n_common` and per-convention summaries.
 
 ## Abstention
 

@@ -9,11 +9,14 @@
 //! door; a detector's door refuses) — and its final expression is the
 //! result, converted to JSON and validated against `RETURNS` by the session.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Component, PathBuf};
 use std::sync::{Arc, RwLock};
 
-use datafusion::arrow::array::{Array, ArrayRef, Float64Array, RecordBatch, StringArray};
+use datafusion::arrow::array::{
+    Array, ArrayRef, BooleanArray, Decimal128Array, Float64Array, Int64Array, LargeStringArray,
+    RecordBatch, StringArray, UInt64Array,
+};
 use datafusion::arrow::compute::kernels::aggregate;
 use datafusion::arrow::compute::{CastOptions, cast_with_options};
 use datafusion::arrow::datatypes::{DataType, TimeUnit};
@@ -70,7 +73,10 @@ impl RhaiRuntime {
         // corpus script needs them.
         engine.set_module_resolver(rhai::module_resolvers::DummyModuleResolver);
         // Runaway backstop, not a sandbox — scripts are workspace-trusted
-        // (M2 ruling); every other limit keeps its default.
+        // (M2 ruling); every other limit keeps its default. 50M is right
+        // BECAUSE the heavy arithmetic lives in kernels (2026-08-06: the
+        // f1 rework briefly raised this to 2B to cover interpreter-bound
+        // loops — that was covering for a wrong design, reverted with it).
         engine.set_max_operations(50_000_000);
         // Except expression depth, whose default HALVES in debug builds
         // (rhai-1.25.1 limits.rs:17 vs :32) — a library script would then
@@ -303,13 +309,106 @@ impl RhaiRuntime {
                 Ok(Dynamic::from(
                     array_value_to_string(&c.0, i).map_err(|e| e.to_string())?,
                 ))
+            })
+            // The whole column as floats, one vectorized Arrow cast — no
+            // per-cell display strings (2026-08-06: the string round-trip
+            // was the seam tax that made hot loops interpreter-bound).
+            // NULL and unparseable cells arrive as ().
+            .register_fn("floats", |c: &mut Col| -> ScriptResult<rhai::Array> {
+                let cast = as_floats(&c.0)?;
+                Ok((0..cast.len())
+                    .map(|i| {
+                        if cast.is_null(i) {
+                            Dynamic::UNIT
+                        } else {
+                            Dynamic::from(cast.value(i))
+                        }
+                    })
+                    .collect())
+            })
+            // The column's distinct values as sorted typed keys — built
+            // once, intersected many times (the SPIDER substrate; see the
+            // statistical-kernels section).
+            .register_fn("key_vec", |c: &mut Col| -> ScriptResult<KeyVec> {
+                Ok(key_vec_from(cell_keys(&c.0)?))
             });
+
+        engine
+            .register_type_with_name::<KeyVec>("KeyVec")
+            .register_fn("count", |k: &mut KeyVec| -> i64 { k.0.len() as i64 })
+            // |A ∩ B| by linear merge of two sorted key vectors — the
+            // containment numerator, at hash-probe-free speed.
+            .register_fn("matched", |a: &mut KeyVec, b: KeyVec| -> i64 {
+                merge_matched(&a.0, &b.0)
+            });
+
+        engine
+            // Two columns' rows as combined keys (both non-null) — the
+            // composite rescue's pair domain, deduplicated and sorted.
+            .register_fn(
+                "pair_keys",
+                |t: &mut Table, c1: &str, c2: &str| -> ScriptResult<KeyVec> {
+                    let k1 = cell_keys(&column_of(t, c1)?)?;
+                    let k2 = cell_keys(&column_of(t, c2)?)?;
+                    let keys = k1
+                        .into_iter()
+                        .zip(k2)
+                        .map(|pair| match pair {
+                            (Some(a), Some(b)) => {
+                                let mut h = fnv1a(FNV_SEED, &a.to_le_bytes());
+                                h = fnv1a(h, &b.to_le_bytes());
+                                Some(h)
+                            }
+                            _ => None,
+                        })
+                        .collect();
+                    Ok(key_vec_from(keys))
+                },
+            )
+            // The stock/flow discriminator over two grouped results —
+            // see the statistical-kernels section for the contract.
+            .register_fn(
+                "reconcile",
+                |y: Table, m: Table, terms: rhai::Array| -> ScriptResult<rhai::Map> {
+                    let terms: Vec<String> = terms
+                        .into_iter()
+                        .map(|t| {
+                            t.into_string()
+                                .map_err(|t| format!("reconcile takes term names, got {t}"))
+                        })
+                        .collect::<Result<_, _>>()?;
+                    reconcile_kernel(&y, &m, terms)
+                },
+            );
 
         engine
             .register_type_with_name::<Door>("Door")
             .register_fn("query", |d: &mut Door, sql: &str| -> ScriptResult<Table> {
                 d.0.sql(sql).map(|b| Table(Arc::new(b))).map_err(Into::into)
-            });
+            })
+            // Many queries at once, answered in order — the door overlaps
+            // them below the seam (2026-08-06). One failed query fails the
+            // call, named by its position: a batch is one measurement step.
+            .register_fn(
+                "query_all",
+                |d: &mut Door, queries: rhai::Array| -> ScriptResult<rhai::Array> {
+                    let sqls: Vec<String> = queries
+                        .into_iter()
+                        .map(|q| {
+                            q.into_string()
+                                .map_err(|t| format!("query_all takes strings, got {t}"))
+                        })
+                        .collect::<Result<_, _>>()?;
+                    let mut out = rhai::Array::with_capacity(sqls.len());
+                    for (i, r) in d.0.sql_all(&sqls).into_iter().enumerate() {
+                        match r {
+                            Ok(b) => out.push(Dynamic::from(Table(Arc::new(b)))),
+                            Err(e) => return fail(format!("query_all[{i}]: {e}")),
+                        }
+                    }
+                    Ok(out)
+                },
+            );
 
         RhaiRuntime {
             root: root.into(),
@@ -471,6 +570,446 @@ fn as_floats(array: &ArrayRef) -> ScriptResult<Float64Array> {
         .downcast_ref::<Float64Array>()
         .expect("cast to Float64 yields Float64")
         .clone())
+}
+
+// ---- statistical kernels (2026-08-06) --------------------------------
+//
+// The compute-heavy halves of the measurement scripts, in Rust where
+// they belong (the crate contract above: scripts orchestrate, they
+// never iterate rows). Two families:
+//
+// - Key vectors: the SPIDER/SINDY substrate for inclusion-dependency
+//   discovery (Bauckmann et al. 2006; Kruse et al. 2015) — a column's
+//   distinct values as one sorted `Vec<u64>`, containment between two
+//   columns as a linear merge. Exact while Σ distinct fits memory; the
+//   named ladder past that is BINDER-style hash-range partitioning
+//   (Papenbrock et al., VLDB 2015) and bottom-k/KMV sketches (Bar-Yossef
+//   et al. 2002; Beyer et al. 2007) — not built until a dataset needs
+//   them.
+// - `reconcile`: v0.3's stock/flow discriminator (its constants and
+//   provenance move here with the arithmetic they govern) — convention
+//   evaluation as one matrix product over stacked entity series, then
+//   segmented L1 residual reductions.
+
+/// FNV-1a over bytes — fixed keys, so runs reproduce; std's hasher
+/// randomizes per process and would break the determinism discipline.
+fn fnv1a(init: u64, bytes: &[u8]) -> u64 {
+    let mut h = init;
+    for b in bytes {
+        h ^= u64::from(*b);
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    h
+}
+
+const FNV_SEED: u64 = 0xcbf2_9ce4_8422_2325;
+
+/// Per-row u64 key for a column, `None` for NULL. Equality-faithful
+/// within one dtype (the scripts gate pairs by dtype): integer-like
+/// values keep their identity, byte-backed values hash deterministically.
+/// No display strings, no per-value allocation.
+fn cell_keys(array: &ArrayRef) -> ScriptResult<Vec<Option<u64>>> {
+    use DataType::*;
+    let keys = match array.data_type() {
+        Int8 | Int16 | Int32 | Int64 | Date32 | Date64 | Timestamp(_, _) | Time32(_)
+        | Time64(_) | Duration(_) => {
+            let cast = cast_with_options(
+                array,
+                &Int64,
+                &CastOptions { safe: true, ..Default::default() },
+            )
+            .map_err(|e| e.to_string())?;
+            let a = cast
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .expect("cast to Int64 yields Int64");
+            (0..a.len())
+                .map(|i| (!a.is_null(i)).then(|| a.value(i) as u64))
+                .collect()
+        }
+        UInt8 | UInt16 | UInt32 | UInt64 => {
+            let cast = cast_with_options(
+                array,
+                &UInt64,
+                &CastOptions { safe: true, ..Default::default() },
+            )
+            .map_err(|e| e.to_string())?;
+            let a = cast
+                .as_any()
+                .downcast_ref::<UInt64Array>()
+                .expect("cast to UInt64 yields UInt64");
+            (0..a.len())
+                .map(|i| (!a.is_null(i)).then(|| a.value(i)))
+                .collect()
+        }
+        Float32 | Float64 => {
+            let a = as_floats(array)?;
+            (0..a.len())
+                .map(|i| (!a.is_null(i)).then(|| a.value(i).to_bits()))
+                .collect()
+        }
+        Boolean => {
+            let a = array
+                .as_any()
+                .downcast_ref::<BooleanArray>()
+                .expect("Boolean downcasts");
+            (0..a.len())
+                .map(|i| (!a.is_null(i)).then(|| u64::from(a.value(i))))
+                .collect()
+        }
+        Decimal128(_, _) => {
+            let a = array
+                .as_any()
+                .downcast_ref::<Decimal128Array>()
+                .expect("Decimal128 downcasts");
+            (0..a.len())
+                .map(|i| (!a.is_null(i)).then(|| fnv1a(FNV_SEED, &a.value(i).to_le_bytes())))
+                .collect()
+        }
+        Utf8 => {
+            let a = array
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .expect("Utf8 downcasts");
+            (0..a.len())
+                .map(|i| (!a.is_null(i)).then(|| fnv1a(FNV_SEED, a.value(i).as_bytes())))
+                .collect()
+        }
+        LargeUtf8 => {
+            let a = array
+                .as_any()
+                .downcast_ref::<LargeStringArray>()
+                .expect("LargeUtf8 downcasts");
+            (0..a.len())
+                .map(|i| (!a.is_null(i)).then(|| fnv1a(FNV_SEED, a.value(i).as_bytes())))
+                .collect()
+        }
+        // Anything exotic falls back to the display form — correctness
+        // over speed for types no measurement has met yet.
+        _ => {
+            let mut out = Vec::with_capacity(array.len());
+            for i in 0..array.len() {
+                if array.is_null(i) {
+                    out.push(None);
+                } else {
+                    let s = array_value_to_string(array, i).map_err(|e| e.to_string())?;
+                    out.push(Some(fnv1a(FNV_SEED, s.as_bytes())));
+                }
+            }
+            out
+        }
+    };
+    Ok(keys)
+}
+
+/// A named column across the table's batches, concatenated once.
+fn column_of(t: &Table, name: &str) -> ScriptResult<ArrayRef> {
+    let Some(first) = t.0.first() else {
+        return fail(format!("no rows carry a column `{name}`"));
+    };
+    let Some((index, _)) = first.schema().column_with_name(name) else {
+        return fail(format!("no column `{name}` in the result"));
+    };
+    if t.0.len() == 1 {
+        return Ok(Arc::clone(first.column(index)));
+    }
+    let arrays: Vec<&dyn Array> = t.0.iter().map(|b| b.column(index).as_ref()).collect();
+    datafusion::arrow::compute::concat(&arrays).map_err(|e| e.to_string().into())
+}
+
+/// A column's distinct values as sorted keys — built once, intersected
+/// many times.
+#[derive(Debug, Clone)]
+pub struct KeyVec(Arc<Vec<u64>>);
+
+fn key_vec_from(keys: Vec<Option<u64>>) -> KeyVec {
+    let mut v: Vec<u64> = keys.into_iter().flatten().collect();
+    v.sort_unstable();
+    v.dedup();
+    KeyVec(Arc::new(v))
+}
+
+fn merge_matched(a: &[u64], b: &[u64]) -> i64 {
+    let (mut i, mut j, mut n) = (0usize, 0usize, 0i64);
+    while i < a.len() && j < b.len() {
+        match a[i].cmp(&b[j]) {
+            std::cmp::Ordering::Less => i += 1,
+            std::cmp::Ordering::Greater => j += 1,
+            std::cmp::Ordering::Equal => {
+                n += 1;
+                i += 1;
+                j += 1;
+            }
+        }
+    }
+    n
+}
+
+// ---- the reconcile kernel: v0.3's stock/flow discriminator ----------
+//
+// Constants ported verbatim with their provenance; the two gates are
+// COUPLED (see behavior_evidence.rhai's header for the derivation).
+const MIN_PERIODS: usize = 4;
+const FIRE_RESIDUAL_MAX: f64 = 0.5;
+const MIN_ENTITIES_FIRED: usize = 2;
+const AGREEMENT_MIN: f64 = 0.8;
+
+fn min_separation() -> f64 {
+    (1.0 - FIRE_RESIDUAL_MAX) / (1.0 + FIRE_RESIDUAL_MAX)
+}
+
+/// One entity's vote: `None` = abstained. A dead measure abstains
+/// symmetrically with a dead anchor; a wrong anchor leaves both
+/// residuals large; a near-tie converts the last significant digit
+/// into no verdict at all.
+fn classify_series(y: &[f64], m: &[f64]) -> (Option<bool>, f64, f64) {
+    const INF: f64 = f64::INFINITY;
+    if y.len() < MIN_PERIODS
+        || !y.iter().any(|v| *v != 0.0)
+        || !m.iter().any(|v| *v != 0.0)
+    {
+        return (None, INF, INF);
+    }
+    let denom_flow: f64 = m.iter().map(|v| v.abs()).sum();
+    let r_flow = if denom_flow > 0.0 {
+        y.iter().zip(m).map(|(a, b)| (a - b).abs()).sum::<f64>() / denom_flow
+    } else {
+        INF
+    };
+    let denom_stock: f64 = m[1..].iter().map(|v| v.abs()).sum();
+    let r_stock = if denom_stock > 0.0 {
+        (1..y.len())
+            .map(|t| ((y[t] - y[t - 1]) - m[t]).abs())
+            .sum::<f64>()
+            / denom_stock
+    } else {
+        INF
+    };
+    if r_flow.min(r_stock) > FIRE_RESIDUAL_MAX {
+        return (None, r_flow, r_stock);
+    }
+    let (rw, rl) = if r_flow < r_stock {
+        (r_flow, r_stock)
+    } else {
+        (r_stock, r_flow)
+    };
+    let sep = if rw.is_infinite() {
+        0.0
+    } else if rl.is_infinite() {
+        1.0
+    } else if rw + rl == 0.0 {
+        0.0
+    } else {
+        (rl - rw) / (rl + rw)
+    };
+    if sep < min_separation() {
+        return (None, r_flow, r_stock);
+    }
+    (Some(r_stock < r_flow), r_flow, r_stock)
+}
+
+fn median(mut v: Vec<f64>) -> Option<f64> {
+    if v.is_empty() {
+        return None;
+    }
+    v.sort_by(|a, b| a.partial_cmp(b).expect("residuals are finite"));
+    let n = v.len();
+    Some(if n % 2 == 1 {
+        v[n / 2]
+    } else {
+        (v[n / 2 - 1] + v[n / 2]) / 2.0
+    })
+}
+
+/// The discriminator over two grouped query results (both
+/// `ORDER BY e, b`): y rows `(e, b, yv)`, m rows `(e, b, s_<term>…)`.
+/// Alignment is a hash join on typed cell keys; conventions (each term,
+/// and every ordered pair difference) evaluate as one matrix product
+/// over the stacked entity series; residuals reduce per (entity,
+/// convention) under the ported gates. Returns per-convention
+/// summaries; support policy (Wilson, winner, alternatives) stays in
+/// the script.
+fn reconcile_kernel(y: &Table, m: &Table, terms: Vec<String>) -> ScriptResult<rhai::Map> {
+    let k = terms.len();
+    if k == 0 {
+        return fail("reconcile needs at least one movement term");
+    }
+    if k > 64 {
+        return fail("more than 64 movement terms — the validity mask is a u64");
+    }
+    let ye = cell_keys(&column_of(y, "e")?)?;
+    let yb = cell_keys(&column_of(y, "b")?)?;
+    let yv = as_floats(&column_of(y, "yv")?)?;
+    let me = cell_keys(&column_of(m, "e")?)?;
+    let mb = cell_keys(&column_of(m, "b")?)?;
+    let mut mcols = Vec::with_capacity(k);
+    for t in &terms {
+        mcols.push(as_floats(&column_of(m, &format!("s_{t}"))?)?);
+    }
+
+    let mut mrows: HashMap<(u64, u64), usize> = HashMap::with_capacity(me.len());
+    let mut m_entities: HashSet<u64> = HashSet::new();
+    for i in 0..me.len() {
+        if let (Some(e), Some(b)) = (me[i], mb[i]) {
+            m_entities.insert(e);
+            mrows.insert((e, b), i);
+        }
+    }
+
+    // Contiguous entity segments in y order; a cell pairs a y value
+    // with its matching m row. Cells missing on the m side drop —
+    // intersection pairing, as recorded in the script's header.
+    let mut segments: Vec<Vec<(f64, usize)>> = Vec::new();
+    let mut y_entities: HashSet<u64> = HashSet::new();
+    let mut current: Option<u64> = None;
+    for i in 0..ye.len() {
+        let (Some(e), Some(b)) = (ye[i], yb[i]) else {
+            continue;
+        };
+        if yv.is_null(i) {
+            continue;
+        }
+        y_entities.insert(e);
+        if current != Some(e) {
+            segments.push(Vec::new());
+            current = Some(e);
+        }
+        if let Some(&row) = mrows.get(&(e, b)) {
+            segments.last_mut().expect("segment exists").push((yv.value(i), row));
+        }
+    }
+    let n_common = y_entities.intersection(&m_entities).count();
+
+    // Stack the cells: M (cells × k, NULL as 0.0 with a validity bit)
+    // and the y vector, segment bounds kept.
+    let ncells: usize = segments.iter().map(Vec::len).sum();
+    let mut mmat = vec![0.0f64; ncells * k];
+    let mut valid = vec![0u64; ncells];
+    let mut yvec = vec![0.0f64; ncells];
+    let mut bounds = Vec::with_capacity(segments.len());
+    let mut at = 0usize;
+    for seg in &segments {
+        let start = at;
+        for &(yval, row) in seg {
+            yvec[at] = yval;
+            for (t, col) in mcols.iter().enumerate() {
+                if !col.is_null(row) {
+                    mmat[at * k + t] = col.value(row);
+                    valid[at] |= 1u64 << t;
+                }
+            }
+            at += 1;
+        }
+        bounds.push((start, at - start));
+    }
+
+    // Conventions: each term, then every ordered pair difference —
+    // v0.3's enumeration, unchanged. Evaluated as M · W in one product.
+    let mut conv_terms: Vec<(usize, Option<usize>)> = Vec::new();
+    let mut conv_names: Vec<String> = Vec::new();
+    for (i, t) in terms.iter().enumerate() {
+        conv_terms.push((i, None));
+        conv_names.push(t.clone());
+    }
+    for i1 in 0..k {
+        for i2 in 0..k {
+            if i1 != i2 {
+                conv_terms.push((i1, Some(i2)));
+                conv_names.push(format!("{} - {}", terms[i1], terms[i2]));
+            }
+        }
+    }
+    let cc = conv_terms.len();
+    let mmatf = faer::Mat::from_fn(ncells, k, |i, j| mmat[i * k + j]);
+    let w = faer::Mat::from_fn(k, cc, |i, j| {
+        let (t1, t2) = conv_terms[j];
+        if i == t1 {
+            1.0
+        } else if Some(i) == t2 {
+            -1.0
+        } else {
+            0.0
+        }
+    });
+    let mw = &mmatf * &w;
+
+    let mut summaries = rhai::Array::with_capacity(cc);
+    let mut ys_buf: Vec<f64> = Vec::new();
+    let mut ms_buf: Vec<f64> = Vec::new();
+    for (c, &(t1, t2)) in conv_terms.iter().enumerate() {
+        let mask = (1u64 << t1) | t2.map_or(0, |t| 1u64 << t);
+        let mut flow_votes = 0usize;
+        let mut stock_votes = 0usize;
+        let mut rf_flow = Vec::new();
+        let mut rs_flow = Vec::new();
+        let mut rf_stock = Vec::new();
+        let mut rs_stock = Vec::new();
+        for &(start, len) in &bounds {
+            ys_buf.clear();
+            ms_buf.clear();
+            for cell in start..start + len {
+                if valid[cell] & mask == mask {
+                    ys_buf.push(yvec[cell]);
+                    ms_buf.push(mw[(cell, c)]);
+                }
+            }
+            let (label, rf, rs) = classify_series(&ys_buf, &ms_buf);
+            match label {
+                Some(true) => {
+                    stock_votes += 1;
+                    rf_stock.push(rf);
+                    rs_stock.push(rs);
+                }
+                Some(false) => {
+                    flow_votes += 1;
+                    rf_flow.push(rf);
+                    rs_flow.push(rs);
+                }
+                None => {}
+            }
+        }
+        let voted = flow_votes + stock_votes;
+        let stock_wins = stock_votes > flow_votes;
+        let winners = if stock_wins { stock_votes } else { flow_votes };
+        let agreement = if voted > 0 {
+            winners as f64 / voted as f64
+        } else {
+            0.0
+        };
+        let verdict = if voted >= MIN_ENTITIES_FIRED && agreement >= AGREEMENT_MIN {
+            if stock_wins { "stock" } else { "flow" }
+        } else {
+            "abstain"
+        };
+        let mut s = rhai::Map::new();
+        s.insert("convention".into(), Dynamic::from(conv_names[c].clone()));
+        s.insert("terms".into(), Dynamic::from(if t2.is_some() { 2i64 } else { 1i64 }));
+        s.insert("verdict".into(), Dynamic::from(verdict.to_string()));
+        s.insert("voted".into(), Dynamic::from(voted as i64));
+        s.insert("winners".into(), Dynamic::from(winners as i64));
+        s.insert("agreement".into(), Dynamic::from(agreement));
+        if verdict != "abstain" {
+            // Medians over the winning-label voters only — a dissenting
+            // minority's residuals would contaminate the diagnostics.
+            let (rf, rs) = if stock_wins {
+                (rf_stock.clone(), rs_stock.clone())
+            } else {
+                (rf_flow.clone(), rs_flow.clone())
+            };
+            if let Some(v) = median(rf) {
+                s.insert("r_flow".into(), Dynamic::from(v));
+            }
+            if let Some(v) = median(rs) {
+                s.insert("r_stock".into(), Dynamic::from(v));
+            }
+        }
+        summaries.push(Dynamic::from_map(s));
+    }
+
+    let mut out = rhai::Map::new();
+    out.insert("n_common".into(), Dynamic::from(n_common as i64));
+    out.insert("summaries".into(), Dynamic::from(summaries));
+    Ok(out)
 }
 
 /// The SQL cast-target spellings the substrate accepts, mapped to arrow for

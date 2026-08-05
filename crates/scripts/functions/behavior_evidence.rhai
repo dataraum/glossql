@@ -21,95 +21,34 @@
 // 2026-08-05 — so a new edge or a landed table kills this cache and the
 // next call recomputes; abstentions heal on their own.
 //
-// Conventions (which event columns carry the movement) are v0.3's
-// enumeration: each numeric column, and every ordered pair difference
-// (debit − credit) — evaluated as dict arithmetic over stored per-period
-// sums, never extra scans (linearity of SUM). Pairing is on the
-// intersection of (entity, period) cells present on both sides; a
-// calendar gap between kept cells makes Δy span it and read as noise —
-// the calendar-complete enumeration did not port, honest abstention
-// absorbs the miss.
+// The division of labor (2026-08-06, replacing interpreter-bound
+// loops): this script discovers anchors and holds POLICY — axes,
+// alignments, grain, which terms are movements, Wilson support, the
+// winner and its alternatives. The `reconcile` kernel holds the
+// ARITHMETIC — alignment by hash join on typed keys, conventions (each
+// term and every ordered pair difference, v0.3's enumeration) as one
+// matrix product over the stacked entity series, residuals and gates
+// per entity. Pairing is on the intersection of (entity, period) cells
+// present on both sides; a calendar gap between kept cells makes Δy
+// span it and read as noise — honest abstention absorbs the miss.
 //
-// Cost: one LIMIT 0 per landed table, one grain probe per measure axis,
-// two grouped aggregates per anchor; everything after is arithmetic.
-
-// ---- ported arithmetic (constants verbatim; the two gates are COUPLED) ----
-// MIN_PERIODS = 4          residuals on shorter series are not meaningful
-// FIRE_RESIDUAL_MAX = 0.5  wrong-anchor gate: correct-anchor winning
-//                          residual measured ≈ 0.0–0.1 (≤ ~0.5 under heavy
-//                          noise); wrong-anchor min-residual ≈ 1.0 — the
-//                          gate sits at the measured separation midpoint
-// MIN_SEPARATION = (1 − 0.5)/(1 + 0.5) = 1/3 — DERIVED, no number of its
-//                          own: the weakest fit still admitted (0.5)
-//                          against the false hypothesis' ≈ 1.0 level.
-//                          Moving FIRE_RESIDUAL_MAX to 1.0 silently
-//                          disables this gate; to 0.0 lets nothing fire.
-// MIN_ENTITIES_FIRED = 2, AGREEMENT_MIN = 0.8 — a lone entity or a split
-//                          vote is ignorance, not lineage.
-
-fn reconcile(y, m) {
-    // 1.0e300 stands in for a dead normalizer: scale-free by
-    // construction, and degrading to an absolute scale can mint a
-    // spurious perfect fit — the hypothesis abstains instead.
-    let denom_flow = 0.0;
-    for v in m { denom_flow += abs(v); }
-    let r_flow = 1.0e300;
-    if denom_flow > 0.0 {
-        let s = 0.0;
-        for i in 0..y.len() { s += abs(y[i] - m[i]); }
-        r_flow = s / denom_flow;
-    }
-    let denom_stock = 0.0;
-    for i in 1..m.len() { denom_stock += abs(m[i]); }
-    let r_stock = 1.0e300;
-    if denom_stock > 0.0 {
-        let s = 0.0;
-        for i in 1..y.len() { s += abs((y[i] - y[i - 1]) - m[i]); }
-        r_stock = s / denom_stock;
-    }
-    [r_flow, r_stock]
-}
-
-fn separation(rf, rs) {
-    // (R_lose − R_win) / (R_lose + R_win): 1 when one hypothesis fits
-    // and the other does not, 0 when indistinguishable. Two identically
-    // zero residuals are NO separation — a series whose whole movement
-    // is one terminal period fits both, and is evidence for neither.
-    let r_win = if rf < rs { rf } else { rs };
-    let r_lose = if rf < rs { rs } else { rf };
-    if r_win >= 1.0e300 { return 0.0; }
-    if r_lose >= 1.0e300 { return 1.0; }
-    let total = r_win + r_lose;
-    if total == 0.0 { return 0.0; }
-    (r_lose - r_win) / total
-}
-
-fn classify(y, m) {
-    // One entity's vote; label () = abstained. A dead measure abstains
-    // symmetrically with a dead anchor: a series that never moves has
-    // no stock/flow nature to detect.
-    if y.len() < 4 { return #{ label: (), r_flow: 1.0e300, r_stock: 1.0e300 }; }
-    let any_y = false;
-    let any_m = false;
-    for v in y { if v != 0.0 { any_y = true; } }
-    for v in m { if v != 0.0 { any_m = true; } }
-    if !any_y || !any_m { return #{ label: (), r_flow: 1.0e300, r_stock: 1.0e300 }; }
-    let rr = reconcile(y, m);
-    let rf = rr[0];
-    let rs = rr[1];
-    let r_min = if rf < rs { rf } else { rs };
-    if r_min > 0.5 {
-        // Wrong-anchor gate: neither hypothesis fits — abstain, never guess.
-        return #{ label: (), r_flow: rf, r_stock: rs };
-    }
-    if separation(rf, rs) < (1.0 - 0.5) / (1.0 + 0.5) {
-        // Near-tie gate: one hypothesis fits, but not measurably better
-        // than the other — the winner would be the noise.
-        return #{ label: (), r_flow: rf, r_stock: rs };
-    }
-    let label = if rs < rf { "stock" } else { "flow" };
-    #{ label: label, r_flow: rf, r_stock: rs }
-}
+// Anchor shape (the f1 lessons, kept from the rework):
+// - Declared-edge legs leave the movement pool: a join leg is an
+//   identifier, not a movement. Served on each anchor as
+//   `identifier_columns` — visible, never silent.
+// - A table's own time axes are preferred; it borrows through an edge
+//   only when it has none (journal_lines borrowing journal_entries'
+//   date stays; every-table-also-via-races goes).
+// - The anchor grain is the COARSER of the two sides' native grains
+//   (year > quarter > month > day): a monthly snapshot against a daily
+//   ledger reconciles monthly, two daily tables reconcile daily — a
+//   race-day standings row against that race's points, exactly.
+// - An alignment where fewer than two entities carry 4+ periods
+//   abstains on one HAVING probe, before either side is scanned wide.
+//
+// Cost: one LIMIT 0 per landed table, one grain probe per involved
+// axis, one viability probe per alignment, two grouped aggregates per
+// surviving anchor; the arithmetic is one kernel call.
 
 fn wilson_lcb(successes, n) {
     // Wilson score lower bound (Wilson 1927): the parameter-free way to
@@ -128,12 +67,12 @@ fn wilson_lcb(successes, n) {
     if v < 0.0 { 0.0 } else { v }
 }
 
-fn median_of(vals) {
-    if vals.len() == 0 { return (); }
-    let s = vals;
-    s.sort();
-    let n = s.len();
-    if n % 2 == 1 { s[n / 2] } else { (s[n / 2 - 1] + s[n / 2]) / 2.0 }
+fn grain_rank(g) {
+    switch g { "year" => 3, "quarter" => 2, "month" => 1, _ => 0 }
+}
+
+fn coarser(a, b) {
+    if grain_rank(a) >= grain_rank(b) { a } else { b }
 }
 
 // ---- subject and schema ----
@@ -198,10 +137,19 @@ if parts.len() == 2 {
             }
         }
 
-        // Time axes of a table t: its own date columns, plus date columns
-        // one declared hop away (journal_lines borrows journal_entries'
-        // date through entry_id). Built inline for the measure table and
-        // for each event candidate.
+        // A declared edge's legs are identifiers — they never carry a
+        // movement (the f1 lesson: an id-heavy schema floods the
+        // conventions otherwise). Excluded from movement pools, served
+        // on every anchor as `identifier_columns`.
+        let legs = #{};
+        for p in pointers {
+            legs[`${p.src_t}|${p.src_c}`] = true;
+            legs[`${p.dst_t}|${p.dst_c}`] = true;
+        }
+
+        // Time axes of a table t: its OWN date columns; only a table
+        // with none borrows one declared hop away (journal_lines
+        // borrowing journal_entries' date through entry_id).
         let all_axes = #{};
         for t in tables {
             let axes = [];
@@ -211,17 +159,19 @@ if parts.len() == 2 {
                                  time_col: c.name });
                 }
             }
-            for p in pointers {
-                if p.src_t != t || p.dst_t == t { continue; }
-                for c in schemas[p.dst_t] {
-                    if c.dtype.starts_with("Date") || c.dtype.starts_with("Timestamp") {
-                        let label = `${p.dst_t}.${c.name} via ${p.src_c}`;
-                        let seen = false;
-                        for a in axes { if a.label == label { seen = true; } }
-                        if !seen {
-                            axes.push(#{ label: label, borrowed: true, fk: p.src_c,
-                                         time_table: p.dst_t, key: p.dst_c,
-                                         time_col: c.name });
+            if axes.len() == 0 {
+                for p in pointers {
+                    if p.src_t != t || p.dst_t == t { continue; }
+                    for c in schemas[p.dst_t] {
+                        if c.dtype.starts_with("Date") || c.dtype.starts_with("Timestamp") {
+                            let label = `${p.dst_t}.${c.name} via ${p.src_c}`;
+                            let seen = false;
+                            for a in axes { if a.label == label { seen = true; } }
+                            if !seen {
+                                axes.push(#{ label: label, borrowed: true, fk: p.src_c,
+                                             time_table: p.dst_t, key: p.dst_c,
+                                             time_col: c.name });
+                            }
                         }
                     }
                 }
@@ -235,7 +185,7 @@ if parts.len() == 2 {
                      reason: `no period axis: no date column on ${table} or one declared hop away` };
         } else {
             let anchors = [];
-            let ycache = #{};
+            let cache = #{};
 
             for maxis in m_axes {
                 // FROM clause for the measure side; s = subject table,
@@ -248,20 +198,31 @@ if parts.len() == 2 {
                 }
                 let m_ts = `CAST(${m_texpr} AS TIMESTAMP)`;
 
-                // Bucket grain: the coarsest named grain the axis is
-                // already truncated to (a period-keyed snapshot axis);
-                // event-grain axes fall through to calendar months, the
-                // dominant business period — sums are linear, so a flow
-                // reconciles at any grain.
-                let g = db.query(`SELECT
-                    SUM(CASE WHEN date_trunc('year', ${m_ts}) = ${m_ts} THEN 0 ELSE 1 END) AS ny,
-                    SUM(CASE WHEN date_trunc('quarter', ${m_ts}) = ${m_ts} THEN 0 ELSE 1 END) AS nq,
-                    SUM(CASE WHEN date_trunc('month', ${m_ts}) = ${m_ts} THEN 0 ELSE 1 END) AS nm
-                    FROM ${m_from} WHERE ${m_texpr} IS NOT NULL`);
-                if g.cell("ny") == () { continue; }
-                let grain = "month";
-                if g.cell("ny").parse_int() == 0 { grain = "year"; }
-                else if g.cell("nq").parse_int() == 0 { grain = "quarter"; }
+                // The axis's NATIVE grain: the coarsest named grain it
+                // is already truncated to (a period-keyed snapshot
+                // axis); event-grain axes are daily. The anchor aligns
+                // at the coarser of its two sides' native grains.
+                let mg_key = maxis.label;
+                if !(mg_key in cache) {
+                    let g = db.query(`SELECT
+                        SUM(CASE WHEN date_trunc('year', ${m_ts}) = ${m_ts} THEN 0 ELSE 1 END) AS ny,
+                        SUM(CASE WHEN date_trunc('quarter', ${m_ts}) = ${m_ts} THEN 0 ELSE 1 END) AS nq,
+                        SUM(CASE WHEN date_trunc('month', ${m_ts}) = ${m_ts} THEN 0 ELSE 1 END) AS nm
+                        FROM ${m_from} WHERE ${m_texpr} IS NOT NULL`);
+                    if g.cell("ny") == () {
+                        cache[mg_key] = "empty";
+                    } else if g.cell("ny").parse_int() == 0 {
+                        cache[mg_key] = "year";
+                    } else if g.cell("nq").parse_int() == 0 {
+                        cache[mg_key] = "quarter";
+                    } else if g.cell("nm").parse_int() == 0 {
+                        cache[mg_key] = "month";
+                    } else {
+                        cache[mg_key] = "day";
+                    }
+                }
+                let m_native = cache[mg_key];
+                if m_native == "empty" { continue; }
 
                 for ev in tables {
                     if ev == table { continue; }
@@ -299,53 +260,30 @@ if parts.len() == 2 {
                     let e_axes = all_axes[ev];
                     if e_axes.len() == 0 { continue; }
 
+                    // Movement candidates: the event table's numeric
+                    // columns, minus declared-edge legs and the
+                    // alignment column itself.
+                    let identifier_cols = [];
+                    let base_pool = [];
+                    for c in schemas[ev] {
+                        let d = c.dtype;
+                        if !(d.starts_with("Int") || d.starts_with("UInt")
+                            || d.starts_with("Float") || d.starts_with("Decimal")) {
+                            continue;
+                        }
+                        if `${ev}|${c.name}` in legs {
+                            identifier_cols.push(c.name);
+                        } else {
+                            base_pool.push(c.name);
+                        }
+                    }
+
                     for al in deduped {
-                        // Movement candidates: the event table's numeric
-                        // columns, minus the alignment column itself.
                         let terms_pool = [];
-                        for c in schemas[ev] {
-                            if c.name == al.e_col { continue; }
-                            let d = c.dtype;
-                            if d.starts_with("Int") || d.starts_with("UInt")
-                                || d.starts_with("Float") || d.starts_with("Decimal") {
-                                terms_pool.push(c.name);
-                            }
+                        for c in base_pool {
+                            if c != al.e_col { terms_pool.push(c); }
                         }
                         if terms_pool.len() == 0 { continue; }
-                        let convs = [];
-                        for c in terms_pool { convs.push([c]); }
-                        for c1 in terms_pool {
-                            for c2 in terms_pool {
-                                if c1 != c2 { convs.push([c1, c2]); }
-                            }
-                        }
-
-                        // Measure-side series, cached per (axis, entity
-                        // column): entity → bucket → Σy.
-                        let ykey = `${maxis.label}|${al.m_col}|${grain}`;
-                        if !(ykey in ycache) {
-                            let ym = #{};
-                            let yq = db.query(`SELECT s."${al.m_col}" AS e,
-                                date_trunc('${grain}', ${m_ts}) AS b,
-                                SUM(CAST(s."${column}" AS DOUBLE)) AS yv
-                                FROM ${m_from}
-                                WHERE s."${al.m_col}" IS NOT NULL AND ${m_texpr} IS NOT NULL
-                                  AND s."${column}" IS NOT NULL
-                                GROUP BY 1, 2 ORDER BY 1, 2`);
-                            let ec = yq.col("e");
-                            let bc = yq.col("b");
-                            let vc = yq.col("yv");
-                            for i in 0..yq.num_rows() {
-                                let v = vc.value_at(i);
-                                if v == () { continue; }
-                                let e = ec.value_at(i);
-                                let b = bc.value_at(i);
-                                if !(e in ym) { ym[e] = #{}; }
-                                ym[e][b] = v.parse_float();
-                            }
-                            ycache[ykey] = ym;
-                        }
-                        let ym = ycache[ykey];
 
                         for eaxis in e_axes {
                             let e_from = `"${ev}" s`;
@@ -356,107 +294,112 @@ if parts.len() == 2 {
                             }
                             let e_ts = `CAST(${e_texpr} AS TIMESTAMP)`;
 
-                            // Event-side sums for every term at once:
-                            // entity → bucket → column → Σ.
+                            let eg_key = eaxis.label;
+                            if !(eg_key in cache) {
+                                let g = db.query(`SELECT
+                                    SUM(CASE WHEN date_trunc('year', ${e_ts}) = ${e_ts} THEN 0 ELSE 1 END) AS ny,
+                                    SUM(CASE WHEN date_trunc('quarter', ${e_ts}) = ${e_ts} THEN 0 ELSE 1 END) AS nq,
+                                    SUM(CASE WHEN date_trunc('month', ${e_ts}) = ${e_ts} THEN 0 ELSE 1 END) AS nm
+                                    FROM ${e_from} WHERE ${e_texpr} IS NOT NULL`);
+                                if g.cell("ny") == () {
+                                    cache[eg_key] = "empty";
+                                } else if g.cell("ny").parse_int() == 0 {
+                                    cache[eg_key] = "year";
+                                } else if g.cell("nq").parse_int() == 0 {
+                                    cache[eg_key] = "quarter";
+                                } else if g.cell("nm").parse_int() == 0 {
+                                    cache[eg_key] = "month";
+                                } else {
+                                    cache[eg_key] = "day";
+                                }
+                            }
+                            let e_native = cache[eg_key];
+                            if e_native == "empty" { continue; }
+                            let grain = coarser(m_native, e_native);
+
+                            // A cumulative that RESETS — season
+                            // standings, year-to-date balances — is a
+                            // stock only inside its scope; at raw
+                            // entity grain every boundary injects a
+                            // full period's error and the wrong-anchor
+                            // gate (rightly) abstains. Recall-first:
+                            // serve the raw alignment AND a year-scoped
+                            // variant; the gates kill the wrong one
+                            // (found on rel-f1, 2026-08-06: 74 seasons
+                            // of standings abstained at driver grain,
+                            // reconcile exactly at driver-season grain).
+                            for scope in if grain == "year" { ["none"] } else { ["none", "year"] } {
+                            let m_e = `s."${al.m_col}"`;
+                            let e_e = `s."${al.e_col}"`;
+                            if scope == "year" {
+                                m_e = `CAST(s."${al.m_col}" AS VARCHAR) || '@' || CAST(extract(year FROM ${m_ts}) AS VARCHAR)`;
+                                e_e = `CAST(s."${al.e_col}" AS VARCHAR) || '@' || CAST(extract(year FROM ${e_ts}) AS VARCHAR)`;
+                            }
+
+                            // Viability, on one probe: fewer than two
+                            // entities with 4+ periods cannot clear the
+                            // voting floor — the raceId-style alignment
+                            // (one bucket per entity) dies here before
+                            // either side is scanned wide.
+                            let vkey = `viable|${maxis.label}|${al.m_col}|${grain}|${scope}`;
+                            if !(vkey in cache) {
+                                let vq = db.query(`SELECT count(*) AS v FROM
+                                    (SELECT ${m_e} AS e FROM ${m_from}
+                                     WHERE s."${al.m_col}" IS NOT NULL AND ${m_texpr} IS NOT NULL
+                                       AND s."${column}" IS NOT NULL
+                                     GROUP BY 1
+                                     HAVING count(DISTINCT date_trunc('${grain}', ${m_ts})) >= 4) AS g`);
+                                let v = vq.cell("v");
+                                cache[vkey] = if v == () { 0 } else { v.parse_int() };
+                            }
+                            if cache[vkey] < 2 {
+                                anchors.push(#{ event: ev,
+                                    align: `${table}.${al.m_col} = ${ev}.${al.e_col}`,
+                                    measure_time: maxis.label,
+                                    event_time: eaxis.label,
+                                    grain: grain,
+                                    scope: scope,
+                                    viable_entities: cache[vkey],
+                                    identifier_columns: identifier_cols,
+                                    verdict: "abstain",
+                                    reason: "fewer than two entities carry 4+ periods on this alignment" });
+                                continue;
+                            }
+
+                            // Measure-side series, cached per (axis,
+                            // entity column, grain, scope) — the kernel
+                            // consumes the grouped result directly.
+                            let ykey = `${maxis.label}|${al.m_col}|${grain}|${scope}`;
+                            if !(ykey in cache) {
+                                cache[ykey] = db.query(`SELECT ${m_e} AS e,
+                                    date_trunc('${grain}', ${m_ts}) AS b,
+                                    SUM(CAST(s."${column}" AS DOUBLE)) AS yv
+                                    FROM ${m_from}
+                                    WHERE s."${al.m_col}" IS NOT NULL AND ${m_texpr} IS NOT NULL
+                                      AND s."${column}" IS NOT NULL
+                                    GROUP BY 1, 2 ORDER BY 1, 2`);
+                            }
+                            let yq = cache[ykey];
+
+                            // Event-side sums for every term at once.
                             let sel = "";
                             for c in terms_pool {
                                 sel += `, SUM(CAST(s."${c}" AS DOUBLE)) AS "s_${c}"`;
                             }
-                            let mq = db.query(`SELECT s."${al.e_col}" AS e,
+                            let mq = db.query(`SELECT ${e_e} AS e,
                                 date_trunc('${grain}', ${e_ts}) AS b${sel}
                                 FROM ${e_from}
                                 WHERE s."${al.e_col}" IS NOT NULL AND ${e_texpr} IS NOT NULL
                                 GROUP BY 1, 2 ORDER BY 1, 2`);
-                            let mm = #{};
-                            let ec = mq.col("e");
-                            let bc = mq.col("b");
-                            for i in 0..mq.num_rows() {
-                                let e = ec.value_at(i);
-                                let b = bc.value_at(i);
-                                if !(e in mm) { mm[e] = #{}; }
-                                if !(b in mm[e]) { mm[e][b] = #{}; }
-                                for c in terms_pool {
-                                    let v = mq.col(`s_${c}`).value_at(i);
-                                    if v != () { mm[e][b][c] = v.parse_float(); }
-                                }
-                            }
 
-                            // The pairing's common entity denominator —
-                            // every convention is judged against it.
-                            let common = [];
-                            for e in ym.keys() {
-                                if e in mm { common.push(e); }
-                            }
-                            let n_common = common.len();
-
-                            let summaries = [];
-                            for conv in convs {
-                                let name = conv[0];
-                                if conv.len() == 2 { name = `${conv[0]} - ${conv[1]}`; }
-                                let flow_votes = 0;
-                                let stock_votes = 0;
-                                let rf_flow = [];
-                                let rs_flow = [];
-                                let rf_stock = [];
-                                let rs_stock = [];
-                                for e in common {
-                                    let buckets = [];
-                                    for b in ym[e].keys() {
-                                        if b in mm[e] { buckets.push(b); }
-                                    }
-                                    buckets.sort();
-                                    let ys = [];
-                                    let ms = [];
-                                    for b in buckets {
-                                        let sums = mm[e][b];
-                                        if !(conv[0] in sums) { continue; }
-                                        let mv = sums[conv[0]];
-                                        if conv.len() == 2 {
-                                            if !(conv[1] in sums) { continue; }
-                                            mv -= sums[conv[1]];
-                                        }
-                                        ys.push(ym[e][b]);
-                                        ms.push(mv);
-                                    }
-                                    let r = classify(ys, ms);
-                                    if r.label == "flow" {
-                                        flow_votes += 1;
-                                        rf_flow.push(r.r_flow);
-                                        rs_flow.push(r.r_stock);
-                                    } else if r.label == "stock" {
-                                        stock_votes += 1;
-                                        rf_stock.push(r.r_flow);
-                                        rs_stock.push(r.r_stock);
-                                    }
-                                }
-                                let voted = flow_votes + stock_votes;
-                                let verdict = "abstain";
-                                let agreement = 0.0;
-                                let winners = 0;
-                                let pattern = "flow";
-                                if stock_votes > flow_votes { pattern = "stock"; }
-                                if voted > 0 {
-                                    winners = if pattern == "stock" { stock_votes } else { flow_votes };
-                                    agreement = winners.to_float() / voted.to_float();
-                                }
-                                if voted >= 2 && agreement >= 0.8 { verdict = pattern; }
-                                let s = #{ convention: name, terms: conv.len(),
-                                           verdict: verdict, voted: voted,
-                                           agreement: agreement,
-                                           support: wilson_lcb(winners, n_common) };
-                                // Medians over the winning-label voters
-                                // only — a dissenting minority's residuals
-                                // would contaminate the diagnostics.
-                                if verdict != "abstain" {
-                                    if pattern == "stock" {
-                                        s.r_flow = median_of(rf_stock);
-                                        s.r_stock = median_of(rs_stock);
-                                    } else {
-                                        s.r_flow = median_of(rf_flow);
-                                        s.r_stock = median_of(rs_flow);
-                                    }
-                                }
-                                summaries.push(s);
+                            // The discriminator — alignment, conventions,
+                            // residuals, gates — in one kernel call.
+                            let rec = reconcile(yq, mq, terms_pool);
+                            let n_common = rec.n_common;
+                            let summaries = rec.summaries;
+                            for i in 0..summaries.len() {
+                                summaries[i].support =
+                                    wilson_lcb(summaries[i].winners, n_common);
                             }
 
                             // Winner: support-first; on a support tie the
@@ -498,7 +441,9 @@ if parts.len() == 2 {
                                             measure_time: maxis.label,
                                             event_time: eaxis.label,
                                             grain: grain,
+                                            scope: scope,
                                             entities: n_common,
+                                            identifier_columns: identifier_cols,
                                             alternatives: alts };
                             if winner != () {
                                 anchor.verdict = winner.verdict;
@@ -506,8 +451,8 @@ if parts.len() == 2 {
                                 anchor.voted = winner.voted;
                                 anchor.agreement = winner.agreement;
                                 anchor.support = winner.support;
-                                anchor.r_flow = winner.r_flow;
-                                anchor.r_stock = winner.r_stock;
+                                if "r_flow" in winner { anchor.r_flow = winner.r_flow; }
+                                if "r_stock" in winner { anchor.r_stock = winner.r_stock; }
                             } else {
                                 anchor.verdict = "abstain";
                                 let any_votes = false;
@@ -519,6 +464,7 @@ if parts.len() == 2 {
                                 };
                             }
                             anchors.push(anchor);
+                            }
                         }
                     }
                 }
