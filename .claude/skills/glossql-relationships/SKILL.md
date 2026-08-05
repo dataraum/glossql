@@ -59,6 +59,12 @@ Before declaring anything, per candidate:
   *and* the scope together; joining on the anchor alone fans out and
   silently over-counts — that fan-out is what the composite exists to
   collapse.
+- **Ground the verdict, not the story.** Declare or reject on what
+  the joins measure. *Why* the data looks this way (a bad export, a
+  missing tenant set, a generator that never enforced the reference)
+  is a hypothesis — verify it before writing it down, or state it as
+  a hypothesis. A correct rejection with a wrong causal story
+  misleads everyone who reads the grounds later.
 
 ## 3. Declare the survivors
 
