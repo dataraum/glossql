@@ -212,8 +212,9 @@ impl RelationPlanner for GlossqlReads {
             ("glossary", Some(a)) => self.run(glossary_read(&self.shared, &a.args))?,
             ("attest", Some(a)) => self.run(attest_read(&self.shared, &a.args))?,
             // The store's relations, readable as plain tables; snapshot at
-            // plan time, like every other read here.
-            ("glossary" | "cache" | "imports", None) => {
+            // plan time, like every other read here. Which names qualify
+            // lives in one place: the store's RELATIONS table.
+            (name, None) if glossql_glossary::relation_columns(name).is_some() => {
                 let table = fname.clone();
                 self.run(async {
                     let rows = self.shared.store.relation_rows(&table).await?;
@@ -587,34 +588,9 @@ pub(crate) fn extraction_batch(rows: Vec<glossql_glossary::CacheRow>) -> RecordB
 }
 
 fn relation_batch(table: &str, rows: Vec<Vec<Option<String>>>) -> RecordBatch {
-    let names: &[&str] = match table {
-        "glossary" => &[
-            "dataset",
-            "subject",
-            "aspect",
-            "actor_kind",
-            "actor_id",
-            "body",
-            "written_at",
-            "snapshot_id",
-        ],
-        "imports" => &[
-            "dataset",
-            "table_name",
-            "source_rows",
-            "landed_rows",
-            "dropped_rows_count",
-            "imported_at",
-        ],
-        _ => &[
-            "dataset",
-            "subject",
-            "function",
-            "body",
-            "computed_at",
-            "snapshot_id",
-        ],
-    };
+    // The store's RELATIONS table is the one home of each shape; the
+    // planner only routes names that table knows.
+    let names = glossql_glossary::relation_columns(table).expect("planner routed a known relation");
     let schema = Arc::new(Schema::new(
         names.iter().map(|n| utf8(n)).collect::<Vec<_>>(),
     ));

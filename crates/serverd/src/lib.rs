@@ -5,11 +5,13 @@
 //! Flight SQL is a future door, cut from M5 (project lead, 2026-08-04):
 //! pyarrow reads the same HTTP stream.
 
+mod bootstrap;
 mod mcp;
 mod plane;
 mod query;
 mod wire;
 
+pub use bootstrap::bootstrap;
 pub use mcp::GlossqlMcp;
 pub use plane::Plane;
 pub use query::ARROW_STREAM;

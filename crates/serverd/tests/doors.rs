@@ -198,6 +198,59 @@ async fn the_mcp_door_executes_and_reports_refusals_as_tool_errors() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn metadata_reads_pass_the_cap_uncapped() {
+    let app = app_with(DoorConfig {
+        row_cap: 3,
+        ..Default::default()
+    })
+    .await;
+    let call = |id: u64, statements: &str| {
+        json!({
+            "jsonrpc": "2.0", "id": id, "method": "tools/call",
+            "params": {
+                "_meta": meta(),
+                "name": "glossql",
+                "arguments": {"statements": statements}
+            }
+        })
+    };
+
+    // Five glosses through one batch call — the plane keeps the session,
+    // so USE survives into the read.
+    let setup = r#"
+        DECLARE DATASET fin SET (purpose: 'cap test');
+        USE fin;
+        DECLARE ASPECT unit WITH $${"type": "object"}$$ AS FACT;
+        GLOSS unit ON t.a AS $${"value": "EUR"}$$;
+        GLOSS unit ON t.b AS $${"value": "EUR"}$$;
+        GLOSS unit ON t.c AS $${"value": "EUR"}$$;
+        GLOSS unit ON t.d AS $${"value": "EUR"}$$;
+        GLOSS unit ON t.e AS $${"value": "EUR"}$$;
+    "#;
+    let body = expect_ok(mcp(app.clone(), call(7, setup)).await).await;
+    assert_ne!(body["result"]["isError"], json!(true), "{body}");
+
+    // A metadata sweep wider than the cap arrives whole.
+    let body = expect_ok(
+        mcp(app.clone(), call(8, "SELECT subject FROM glossary;")).await,
+    )
+    .await;
+    let text = body["result"]["content"][0]["text"].as_str().unwrap();
+    let outcomes: Value = serde_json::from_str(text).unwrap();
+    assert_eq!(outcomes[0]["row_count"], json!(5), "{outcomes}");
+    assert_eq!(outcomes[0]["truncated"], json!(false));
+
+    let body = expect_ok(
+        mcp(app, call(9, "SELECT subject FROM GLOSSARY(fin, all => true);")).await,
+    )
+    .await;
+    let text = body["result"]["content"][0]["text"].as_str().unwrap();
+    let outcomes: Value = serde_json::from_str(text).unwrap();
+    assert_eq!(outcomes[0]["truncated"], json!(false), "{outcomes}");
+    assert!(outcomes[0]["row_count"].as_u64().unwrap() >= 5, "{outcomes}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn the_mcp_door_caps_rows_and_declares_it() {
     let app = app_with(DoorConfig {
         row_cap: 3,

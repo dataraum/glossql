@@ -11,7 +11,7 @@ use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion::sql::parser::Statement as DFStatement;
 use datafusion::sql::sqlparser::ast::{
-    FromTable, ObjectType, Statement as SQLStatement, TableFactor,
+    FromTable, ObjectType, Statement as SQLStatement, TableFactor, visit_relations,
 };
 use datafusion::sql::sqlparser::parser::ParserError;
 use serde_json::Value;
@@ -551,10 +551,9 @@ impl Session {
     /// like any read; the planner did its part before the first batch.
     /// Anything that is not exactly one query refuses with
     /// [`SessionError::NotOneRead`] and belongs in [`Session::execute`].
-    pub async fn query_stream(
-        &self,
-        sql: &str,
-    ) -> Result<SendableRecordBatchStream, SessionError> {
+    /// The result says whether the query reads only the store's
+    /// relations — the doors' cap policy wants to know.
+    pub async fn query_stream(&self, sql: &str) -> Result<QueryStream, SessionError> {
         let mut statements = GlossqlParser::parse_sql(sql)?;
         let one_query = matches!(&statements[..], [Statement::Substrate(statement)]
             if matches!(&**statement, DFStatement::Statement(inner)
@@ -565,13 +564,17 @@ impl Session {
         let Some(Statement::Substrate(statement)) = statements.pop() else {
             unreachable!("just matched")
         };
+        let metadata_only = reads_only_metadata(&statement);
         let plan = self.ctx.state().statement_to_plan(*statement).await?;
-        Ok(self
-            .ctx
-            .execute_logical_plan(plan)
-            .await?
-            .execute_stream()
-            .await?)
+        Ok(QueryStream {
+            stream: self
+                .ctx
+                .execute_logical_plan(plan)
+                .await?
+                .execute_stream()
+                .await?,
+            metadata_only,
+        })
     }
 
     /// Substrate SQL runs behind an allowlist (project lead, 2026-08-04):
@@ -762,6 +765,42 @@ fn parent_of(subject: &str, dataset: &str) -> Option<String> {
     } else {
         Some(subject.rsplit_once('.').expect("has a dot").0.to_string())
     }
+}
+
+/// A single query's batch stream, plus what it reads: `metadata_only`
+/// marks a query whose every relation is the store's — `GLOSSARY()`,
+/// `ATTEST()`, and the plain store relations. The doors' row-cap policy
+/// exempts these (project lead, 2026-08-04): metadata is the agent's
+/// map; the cap guards data reads.
+pub struct QueryStream {
+    pub stream: SendableRecordBatchStream,
+    pub metadata_only: bool,
+}
+
+/// Every relation the query touches is a store read — and there is at
+/// least one, so constant selects and VALUES stay on the capped path.
+/// The store's RELATIONS table names the plain relations; `attest` is
+/// the one read construct beside them (`glossary()` shares its name
+/// with the relation).
+fn reads_only_metadata(statement: &DFStatement) -> bool {
+    let DFStatement::Statement(inner) = statement else {
+        return false;
+    };
+    let mut any = false;
+    let mut all = true;
+    let _ = visit_relations(inner.as_ref(), |name| {
+        any = true;
+        let metadata = name.0.len() == 1
+            && name.0[0].as_ident().is_some_and(|i| {
+                let name = i.value.to_lowercase();
+                name == "attest" || glossql_glossary::relation_columns(&name).is_some()
+            });
+        if !metadata {
+            all = false;
+        }
+        std::ops::ControlFlow::<()>::Continue(())
+    });
+    any && all
 }
 
 /// The verb of a statement the allowlist refused, for the error message.

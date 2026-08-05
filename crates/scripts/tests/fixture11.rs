@@ -235,6 +235,25 @@ async fn fixture_11_with_real_scripts() {
         .unwrap();
     assert_eq!(one(&dropped), "0", "this author kept every row");
 
+    // An agent using functions wildly: outliers before its ACCEPTS
+    // dependency exists. The abstention names what to produce first —
+    // "run the dependency" is a different fact from "never applicable" —
+    // and the profile's landing heals it through the declared edge.
+    agent
+        .execute("SELECT outliers() FROM orders.amount;")
+        .await
+        .unwrap();
+    let early = agent
+        .execute("SELECT value FROM GLOSSARY(orders.amount::outlier_profile);")
+        .await
+        .unwrap();
+    assert!(one(&early).contains("\"applicable\":false"), "{}", one(&early));
+    assert!(
+        one(&early).contains("\"missing_aspects\":[\"column_profile\"]"),
+        "{}",
+        one(&early)
+    );
+
     // The measurement plane runs on the served table; outliers chains on
     // the profile through ACCEPTS.
     agent

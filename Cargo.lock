@@ -2294,6 +2294,7 @@ dependencies = [
  "datafusion",
  "glossql-catalog",
  "glossql-glossary",
+ "glossql-scripts",
  "glossql-session",
  "regex",
  "rhai",
@@ -2317,6 +2318,7 @@ dependencies = [
  "glossql-session",
  "rmcp",
  "serde_json",
+ "tempfile",
  "tokio",
  "tower",
 ]
@@ -3920,6 +3922,7 @@ dependencies = [
  "once_cell",
  "rhai_codegen",
  "serde",
+ "serde_json",
  "smallvec",
  "smartstring",
  "thin-vec",

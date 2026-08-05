@@ -5,6 +5,12 @@ members = ["crates/parser", "crates/glossary", "crates/session", "crates/catalog
 [workspace.package]
 edition = "2024"
 
+[workspace.lints.rust]
+# macOS ld notes that datafusion-sized debug binaries outgrow the compact
+# unwind table (__eh_frame > 16MB) — an exception-handling performance
+# note, nothing actionable; every crate opts in via [lints] workspace.
+linker_messages = "allow"
+
 [workspace.dependencies]
 # 53.1 is the newest datafusion supported by iceberg-datafusion (0.10.1 pins
 # ^53.1); the whole workspace moves in lockstep or trait impls stop lining up.

@@ -435,3 +435,68 @@ async fn gloss_on_a_pair_path_lands_under_the_relationship_subject() {
         "{other_side}"
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_declarations_read_as_plain_relations() {
+    let (session, _) = agent_session().await;
+    run(&session, SETUP).await;
+    run(
+        &session,
+        r#"
+        DECLARE SOURCE erp SET (type: parquet, location: 'lake/erp');
+        DECLARE ASPECT column_profile WITH $${"type": "object"}$$ AS MEASUREMENT;
+        DECLARE ASPECT outlier_profile WITH $${"type": "object"}$$ AS MEASUREMENT;
+        DECLARE FUNCTION outliers FOR GLOBAL FROM 'functions/outliers.rhai'
+          ACCEPTS (column_profile)
+          RETURNS outlier_profile;
+        DECLARE FUNCTION checker FOR fin FROM 'functions/checker.rhai';
+        DECLARE WITNESS unit_w ON unit BY (AGENT, HUMAN);
+        "#,
+    )
+    .await;
+
+    // An agent lists what exists instead of being told: the declaration
+    // relations answer like glossary/cache/imports do.
+    let functions = table(
+        &session,
+        "SELECT name, scope, accepts, returns FROM functions ORDER BY name;",
+    )
+    .await;
+    insta::assert_snapshot!(functions, @r#"
+    +----------+--------+--------------------+-----------------+
+    | name     | scope  | accepts            | returns         |
+    +----------+--------+--------------------+-----------------+
+    | checker  | fin    |                    |                 |
+    | outliers | GLOBAL | ["column_profile"] | outlier_profile |
+    +----------+--------+--------------------+-----------------+
+    "#);
+
+    let aspects = table(&session, "SELECT name, kind FROM aspects ORDER BY name;").await;
+    insta::assert_snapshot!(aspects, @r"
+    +-----------------+-------------+
+    | name            | kind        |
+    +-----------------+-------------+
+    | column_profile  | measurement |
+    | outlier_profile | measurement |
+    | unit            | fact        |
+    +-----------------+-------------+
+    ");
+
+    let witnesses = table(
+        &session,
+        "SELECT name, aspect, speakers, detector FROM witnesses;",
+    )
+    .await;
+    assert!(witnesses.contains("unit_w"), "{witnesses}");
+
+    let sources = table(&session, "SELECT name FROM sources;").await;
+    assert!(sources.contains("erp"), "{sources}");
+
+    // The relations compose like any table — a WHERE clause is a sweep.
+    let global = table(
+        &session,
+        "SELECT name FROM functions WHERE scope = 'GLOBAL';",
+    )
+    .await;
+    assert!(global.contains("outliers") && !global.contains("checker"), "{global}");
+}

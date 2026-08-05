@@ -1,10 +1,11 @@
 //! Batch normalization before a recipe result lands as an Iceberg table.
 //!
-//! Two maps: `compat` folds Arrow types Iceberg 0.10.1 rejects or would
+//! One map: `compat` folds Arrow types Iceberg 0.10.1 rejects or would
 //! promote to format-v3 types onto their v2 equivalents (ns timestamps →
-//! µs, `UInt64` → `Int64`, …); `force_utf8` lands every column as a string
-//! — the raw all-VARCHAR shape csv/json sources import as, typing being the
-//! typed view's business, not the import's.
+//! µs, `UInt64` → `Int64`, …). Nothing else touches the schema — the
+//! recipe's authored casts are the landed types (ruled 2026-08-04; the
+//! `force_utf8` refold was retired raw-twin machinery, deleted 2026-08-05
+//! after the first agent run landed eight string-typed tables).
 
 use std::sync::Arc;
 
@@ -65,10 +66,3 @@ pub fn compat(schema: SchemaRef, batches: Vec<RecordBatch>) -> Result<(SchemaRef
     recast(&schema, batches, |f| compat_type(f.data_type()))
 }
 
-/// The raw import shape: every column a string.
-pub fn force_utf8(
-    schema: SchemaRef,
-    batches: Vec<RecordBatch>,
-) -> Result<(SchemaRef, Vec<RecordBatch>)> {
-    recast(&schema, batches, |_| DataType::Utf8)
-}

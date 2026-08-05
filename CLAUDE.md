@@ -35,8 +35,10 @@ documents:
   namespaces) · `import` (recipe and probe execution over file sources,
   try_to_date/try_to_timestamp, source-row counting; ADBC executor
   planned) · `scripts` (rhai runtime behind FunctionRuntime, zero-copy
-  column kernels, the reference function library under
-  `crates/scripts/functions/`). Typing is authored in recipes (ruled
+  column kernels, the reference function library and its bootstrap
+  declarations under `crates/scripts/functions/`; abstentions name absent
+  ACCEPTS inputs — `missing_aspects`, ruled 2026-08-04; the kernel-mirror
+  test keeps the glossql-functions skill honest). Typing is authored in recipes (ruled
   2026-08-04) — no derived views, no raw twin, no typing functions.
   RETURNS mirrors ACCEPTS (ruled 2026-08-04): functions reference aspects
   on both sides, the aspect schema is the one validated contract, a
@@ -49,9 +51,15 @@ documents:
   cap (`--row-cap`) terminates the stream early so it bounds engine work.
   Sessions live in the plane keyed by actor; actor rides the connection
   via initialize clientInfo with a boot-flag fallback. The door tells,
-  skills teach — agent knowledge ships as skills sourced from repo
-  artifacts, ruled 2026-08-04. Flight SQL cut from M5: a future door,
-  pyarrow reads the HTTP stream).
+  skills teach — agent knowledge is statically written into
+  `.claude/skills/` (glossql, glossql-add-source with the framing block
+  and per-column glossing rules, glossql-functions), the one teaching
+  layer (MCP resources tried and reversed 2026-08-04). A fresh
+  workspace receives the shipped system at boot — embedded bootstrap:
+  reference scripts + the measurement library's declarations, vertical
+  excluded; the declaration relations (functions, aspects, witnesses,
+  sources) read as plain tables. Flight SQL cut from M5: a future
+  door, pyarrow reads the HTTP stream).
 - `reports/` — pivot records, review verdicts, and evaluation records.
 
 **Standing invariant:** workspace `cargo test` passes — every ```sql block

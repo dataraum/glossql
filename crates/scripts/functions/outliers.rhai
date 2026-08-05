@@ -6,7 +6,13 @@
 // table like the profile it chains on; TRY_CAST is identity on a typed
 // numeric column and keeps the door honest on an untyped one.
 let p = context.column_profile;
-if p == () || !("numeric" in p) {
+if p == () {
+    // The accepted aspect hasn't landed — a different fact from "not
+    // numeric": missing_aspects names what to produce first (ruled
+    // 2026-08-04), and the profile's landing heals this cached
+    // abstention through the ACCEPTS edge.
+    #{ applicable: false, missing_aspects: ["column_profile"] }
+} else if !("numeric" in p) {
     #{ applicable: false }
 } else {
     let parts = subject.split(".");

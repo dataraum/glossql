@@ -439,11 +439,13 @@ results: no construct writes a verdict into data.
 ## 8. Skills
 
 Agents use the language through skills; agents are not part of the grammar.
-The skill set mirrors the statement set: create a source, create a dataset,
-create a function, declare an aspect, write a gloss (body kind follows the
-aspect's declared kind), declare a witness, read the glossary. The flow docs
-(`corpus/11-flow-add-source.md`, `corpus/12-flow-begin-session.md`) model the
-running system's two operational flows as statement sequences.
+The door tells, skills teach (ruled 2026-08-04): the server's one surface
+takes statements and returns outcomes, and everything an agent must *learn*
+ships as skills sourced from this repository's artifacts — the language
+(this document, `grammar.ebnf`), the flows (`corpus/11-flow-add-source.md`,
+`corpus/12-flow-begin-session.md`), and function authoring (the reference
+scripts and their kernels). Everything *live* — declared functions, the
+glossary, the tables — is read through the language, never taught.
 
 ## 9. Open
 

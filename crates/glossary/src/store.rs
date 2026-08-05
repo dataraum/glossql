@@ -152,6 +152,94 @@ CREATE TABLE IF NOT EXISTS imports (
 );
 "#;
 
+/// A store relation readable as a plain table through the doors. The
+/// one place its shape lives: `columns` names exactly what `sql`
+/// selects, in order — every other list (the session's read planner,
+/// the doors' cap policy) derives from here.
+pub struct Relation {
+    pub name: &'static str,
+    pub columns: &'static [&'static str],
+    sql: &'static str,
+}
+
+/// Every relation [`Store::relation_rows`] serves — the glossary, the
+/// evidence, and the declarations, so an agent lists what exists
+/// instead of being told.
+pub const RELATIONS: &[Relation] = &[
+    Relation {
+        name: "glossary",
+        columns: &[
+            "dataset",
+            "subject",
+            "aspect",
+            "actor_kind",
+            "actor_id",
+            "body",
+            "written_at",
+            "snapshot_id",
+        ],
+        sql: "SELECT dataset, subject, aspect, actor_kind, actor_id, body, written_at, \
+                     CAST(snapshot_id AS TEXT) AS snapshot_id \
+              FROM glossary ORDER BY id",
+    },
+    Relation {
+        name: "cache",
+        columns: &["dataset", "subject", "function", "body", "computed_at", "snapshot_id"],
+        sql: "SELECT dataset, subject, function, body, computed_at, \
+                     CAST(snapshot_id AS TEXT) AS snapshot_id \
+              FROM cache ORDER BY id",
+    },
+    Relation {
+        name: "imports",
+        columns: &[
+            "dataset",
+            "table_name",
+            "source_rows",
+            "landed_rows",
+            "dropped_rows_count",
+            "imported_at",
+        ],
+        sql: "SELECT dataset, table_name, CAST(source_rows AS TEXT) AS source_rows, \
+                     CAST(landed_rows AS TEXT) AS landed_rows, \
+                     CAST(source_rows - landed_rows AS TEXT) AS dropped_rows_count, \
+                     imported_at \
+              FROM imports ORDER BY id",
+    },
+    Relation {
+        name: "functions",
+        columns: &["name", "scope", "script", "accepts", "returns"],
+        sql: "SELECT name, COALESCE(scope_dataset, 'GLOBAL') AS scope, script, \
+                     accepts, returns \
+              FROM functions ORDER BY name",
+    },
+    Relation {
+        name: "aspects",
+        columns: &["name", "kind", "schema"],
+        sql: "SELECT name, kind, schema FROM aspects ORDER BY name",
+    },
+    Relation {
+        name: "witnesses",
+        columns: &["name", "aspect", "speakers", "detector", "threshold"],
+        sql: "SELECT name, aspect, speakers, detector, \
+                     CAST(threshold AS TEXT) AS threshold \
+              FROM witnesses ORDER BY name",
+    },
+    Relation {
+        name: "sources",
+        columns: &["name", "settings"],
+        sql: "SELECT name, settings FROM sources ORDER BY name",
+    },
+];
+
+/// The column shape of a readable store relation, `None` for any other
+/// name — the lookup the session's planner and the doors share.
+pub fn relation_columns(name: &str) -> Option<&'static [&'static str]> {
+    RELATIONS
+        .iter()
+        .find(|r| r.name == name)
+        .map(|r| r.columns)
+}
+
 #[derive(Debug, Clone)]
 pub struct Store {
     pool: SqlitePool,
@@ -1087,29 +1175,13 @@ impl Store {
         Ok(done.rows_affected())
     }
 
-    /// Full relation dump for substrate `SELECT`s over `glossary`/`cache`.
+    /// Full relation dump for substrate `SELECT`s over the store's
+    /// relations — the names and column shapes live in [`RELATIONS`].
     pub async fn relation_rows(&self, table: &str) -> Result<Vec<Vec<Option<String>>>> {
-        let sql = match table {
-            "glossary" => {
-                "SELECT dataset, subject, aspect, actor_kind, actor_id, body, written_at, \
-                        CAST(snapshot_id AS TEXT) AS snapshot_id \
-                 FROM glossary ORDER BY id"
-            }
-            "cache" => {
-                "SELECT dataset, subject, function, body, computed_at, \
-                        CAST(snapshot_id AS TEXT) AS snapshot_id \
-                 FROM cache ORDER BY id"
-            }
-            "imports" => {
-                "SELECT dataset, table_name, CAST(source_rows AS TEXT) AS source_rows, \
-                        CAST(landed_rows AS TEXT) AS landed_rows, \
-                        CAST(source_rows - landed_rows AS TEXT) AS dropped_rows_count, \
-                        imported_at \
-                 FROM imports ORDER BY id"
-            }
-            other => return Err(Error::ForwardRejected(other.into())),
+        let Some(relation) = RELATIONS.iter().find(|r| r.name == table) else {
+            return Err(Error::ForwardRejected(table.into()));
         };
-        let rows = sqlx::query(sql).fetch_all(&self.pool).await?;
+        let rows = sqlx::query(relation.sql).fetch_all(&self.pool).await?;
         Ok(rows
             .into_iter()
             .map(|r| {

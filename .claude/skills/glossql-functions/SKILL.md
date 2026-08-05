@@ -1,0 +1,95 @@
+---
+name: glossql-functions
+description: Author rhai functions for a glossql workspace — measurements (RETURNS an aspect) and detectors (no RETURNS). The script contract (subject, context, db), the column kernels, and the abstention convention. Use when writing, changing, or debugging a .rhai function.
+---
+
+# Writing functions
+
+A function is a rhai script registered with a declaration; the aspect
+schema is its one validated contract. Normative prose: SPEC.md §6
+(functions) and §7 (witnesses, the detector role). The reference
+library under `crates/scripts/functions/` is the exemplar set — read
+the one closest to your task before writing:
+
+- `profile.rhai` — a measurement from column kernels.
+- `outliers.rhai` — a measurement chained on another through `ACCEPTS`.
+- `temporal.rhai` — a measurement built from `db.query` SQL.
+- `slot_entropy.rhai` — a detector.
+
+## Declaration
+
+```glossql
+DECLARE FUNCTION outliers FOR GLOBAL FROM 'functions/outliers.rhai'
+  ACCEPTS (column_profile)
+  RETURNS outlier_profile;
+```
+
+- `FOR` scopes to a dataset, or `GLOBAL`.
+- `ACCEPTS` names the aspects whose current values arrive as context —
+  settings are context, never call arguments; calls are always bare
+  `f()`. It is also the invalidation edge: a new value for an accepted
+  aspect deletes your cached results.
+- `RETURNS` names the aspect the output fills; the output is validated
+  against that aspect's JSON Schema at extraction.
+- **No `RETURNS` declares a detector** — role by shape. Detectors are
+  named in a witness's `DETECTOR` clause and never see table data.
+
+## The script contract
+
+Three constants are in scope; the script's last expression is its
+result, a map that must serialize as JSON:
+
+- `subject` — a string, `"table"` or `"table.column"`; split it for SQL.
+- `context` — a map. For a measurement: one entry per accepted aspect,
+  by aspect name; an entry is `()` when that aspect has no value yet.
+  For a detector: `slots` (one per speaker, each with a `body`),
+  `threshold`, plus `subject`/`aspect`/`witness` to echo back.
+- `db` — the door into the dataset: `db.query("sql")` returns a Table.
+  Any SQL; determinism is your contract, the workspace your boundary.
+
+## Kernels
+
+Zero-copy readers on query results (authoritative list: the
+registrations in `crates/scripts/src/lib.rs`).
+
+Table: `num_rows()`, `columns()`, `col(name)` → Col,
+`cell(name)` — the first row's value as a string, `()` for NULL or no
+rows (the one-row aggregate read; parse with rhai's `.parse_int()` /
+`.parse_float()`).
+
+Col: `dtype()` (Arrow type name — a `LIMIT 0` query types a column
+without scanning it), `count()`, `null_count()`, `distinct()`, `min()`,
+`max()`, `sum()`, `mean()`, `stddev()`, `percentile(p)`, `mad()`,
+`top_k(k)`, `len_stats()`, `match_rate(regex)`, `parse_rate(sql_type)`,
+`value_at(i)`.
+
+## Abstention
+
+When the subject doesn't fit or the inputs aren't there, abstain —
+return a fact, never throw:
+
+- `#{ applicable: false }` — the subject genuinely doesn't fit (a text
+  column has no outliers). Readers stop trying.
+- `#{ applicable: false, missing_aspects: ["column_profile"] }` — an
+  accepted aspect's context entry was `()`. Name every missing aspect;
+  readers run the producers first. The cached abstention heals on its
+  own: the dependency's landing invalidates it through the `ACCEPTS`
+  edge.
+
+Keep `applicable` in the aspect's `required`; `missing_aspects` rides
+the schema's open remainder.
+
+## Detectors
+
+Output must satisfy the standard attest schema — engine-owned, not
+authored: `subject`, `aspect`, `witness`, `band`
+(green|yellow|orange|red), `score` (0..1), `computed_at`. Judgment
+lives here and in read policy, never in results: no measurement writes
+a verdict into data.
+
+## Running
+
+```glossql
+SELECT outliers() FROM orders.amount;      -- computes once, then cached
+DELETE FROM cache WHERE function = 'outliers';  -- force recomputation
+```

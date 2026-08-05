@@ -1,0 +1,47 @@
+-- The shipped system: the global measurement library, declared into a
+-- fresh workspace by serverd at boot (the reference scripts land beside
+-- it under functions/). The vertical — semantic aspects, their
+-- witnesses — is deliberately absent: framing it is the agent's work.
+
+DECLARE ASPECT column_profile WITH $${
+  "type": "object",
+  "required": ["total", "null_ratio", "distinct"],
+  "properties": {
+    "total": {"type": "integer"}, "null_ratio": {"type": "number"},
+    "distinct": {"type": "integer"}, "cardinality_ratio": {"type": "number"},
+    "min": {}, "max": {}, "top_values": {"type": "array"},
+    "lengths": {"type": "object"},
+    "numeric": {
+      "type": "object",
+      "required": ["mean", "mad", "percentiles"],
+      "properties": {"mean": {}, "stddev": {}, "mad": {},
+                     "percentiles": {"type": "object"}}
+    }
+  }
+}$$ AS MEASUREMENT;
+
+DECLARE ASPECT outlier_profile WITH $${
+  "type": "object", "required": ["applicable"],
+  "properties": {"applicable": {"type": "boolean"},
+                 "iqr": {"type": "object"}, "zscore": {"type": "object"}}
+}$$ AS MEASUREMENT;
+
+DECLARE ASPECT temporal_profile WITH $${
+  "type": "object", "required": ["applicable"],
+  "properties": {"applicable": {"type": "boolean"},
+                 "granularity": {"type": "string"},
+                 "confidence": {"type": "number"},
+                 "completeness": {"type": "object"}, "gaps": {"type": "object"}}
+}$$ AS MEASUREMENT;
+
+DECLARE FUNCTION profile FOR GLOBAL FROM 'functions/profile.rhai'
+  RETURNS column_profile;
+
+DECLARE FUNCTION outliers FOR GLOBAL FROM 'functions/outliers.rhai'
+  ACCEPTS (column_profile)
+  RETURNS outlier_profile;
+
+DECLARE FUNCTION temporal FOR GLOBAL FROM 'functions/temporal.rhai'
+  RETURNS temporal_profile;
+
+DECLARE FUNCTION slot_entropy FOR GLOBAL FROM 'functions/slot_entropy.rhai';

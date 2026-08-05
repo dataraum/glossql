@@ -343,6 +343,15 @@ impl RhaiRuntime {
             .insert(script.to_string(), (text, Arc::clone(&ast)));
         Ok(ast)
     }
+
+    /// The registered kernel signatures — what the engine actually offers,
+    /// for the skill-mirror test. `kernel-audit` rides only under
+    /// `cargo test` (the self dev-dependency in Cargo.toml), never in the
+    /// shipped library.
+    #[cfg(feature = "kernel-audit")]
+    pub fn kernel_signatures(&self) -> Vec<String> {
+        self.engine.gen_fn_signatures(false)
+    }
 }
 
 impl FunctionRuntime for RhaiRuntime {

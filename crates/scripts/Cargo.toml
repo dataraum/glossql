@@ -14,7 +14,17 @@ serde_json.workspace = true
 rhai = { version = "1.25", features = ["sync", "serde"] }
 regex = "1"
 
+[features]
+# rhai's registered-function reflection, for the kernel-mirror test only —
+# the self dev-dependency below turns it on under `cargo test`, so the
+# shipped library never carries it.
+kernel-audit = ["rhai/metadata"]
+
 [dev-dependencies]
 glossql-catalog = { path = "../catalog" }
+glossql-scripts = { path = ".", features = ["kernel-audit"] }
 tokio.workspace = true
 tempfile = "3"
+
+[lints]
+workspace = true

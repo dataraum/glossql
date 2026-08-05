@@ -20,8 +20,10 @@ use crate::plane::Plane;
 use crate::wire;
 
 const INSTRUCTIONS: &str = "glossql workspace server. One tool: `glossql` executes \
-statements — declarations, USE, GLOSS, extraction, probes, and plain SQL. Load the \
-glossql skills for the grammar and the flows; start with USE <dataset>.";
+statements — declarations, USE, GLOSS, extraction, probes, and plain SQL. Live state \
+(functions, aspects, witnesses, sources, glossary, cache, imports) reads as plain \
+tables through the tool. The glossql skills teach the grammar and the flows; start \
+with USE <dataset>.";
 
 #[derive(Clone)]
 pub struct GlossqlMcp {
@@ -58,7 +60,9 @@ impl GlossqlMcp {
             "glossql",
             format!(
                 "Execute glossql statements against the workspace and return their outcomes. \
-                 Row output is capped at {} rows; `truncated` says when a result held more.",
+                 Row output is capped at {} rows; `truncated` says when a result held more. \
+                 Metadata reads — GLOSSARY(), ATTEST(), and the store relations — sent as \
+                 their own single statement are uncapped.",
                 self.row_cap
             ),
             schema,
@@ -109,22 +113,33 @@ impl ServerHandler for GlossqlMcp {
             .peer_info()
             .map(|info| info.client_info.name.clone())
             .unwrap_or_else(|| self.fallback.clone());
+        // The monitor line: what the agent actually sends, as it sends it.
+        println!("glossql <- {id}: {statements}");
         let session = self
             .plane
             .session(Actor {
                 kind: ActorKind::Agent,
-                id,
+                id: id.clone(),
             })
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
         // A single query streams from the engine and stops at the cap —
-        // what the agent won't see is never computed. Everything else
-        // runs through execute.
+        // what the agent won't see is never computed. Metadata reads
+        // (GLOSSARY(), ATTEST(), the store relations) are exempt from
+        // the cap (project lead, 2026-08-04): the map must be whole,
+        // and the store bounds it. Everything else runs through execute.
         let rendered = match session.query_stream(statements).await {
-            Ok(stream) => wire::stream_json(stream, self.row_cap)
-                .await
-                .map(|rows| serde_json::Value::Array(vec![rows])),
+            Ok(query) => {
+                let cap = if query.metadata_only {
+                    usize::MAX
+                } else {
+                    self.row_cap
+                };
+                wire::stream_json(query.stream, cap)
+                    .await
+                    .map(|rows| serde_json::Value::Array(vec![rows]))
+            }
             Err(SessionError::NotOneRead) => match session.execute(statements).await {
                 Ok(outcomes) => wire::outcomes_json(&outcomes, self.row_cap),
                 Err(e) => Err(e.to_string()),
@@ -135,7 +150,10 @@ impl ServerHandler for GlossqlMcp {
             Ok(body) => CallToolResult::success(vec![ContentBlock::text(body.to_string())]),
             // A failed statement is the agent's business, not the
             // transport's: an error result, never a protocol error.
-            Err(e) => CallToolResult::error(vec![ContentBlock::text(e)]),
+            Err(e) => {
+                println!("glossql !! {id}: {e}");
+                CallToolResult::error(vec![ContentBlock::text(e)])
+            }
         }
         .into())
     }

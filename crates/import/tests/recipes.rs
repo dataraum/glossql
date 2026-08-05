@@ -1,5 +1,6 @@
-//! Recipes over file sources: parquet keeps its types, csv lands raw
-//! all-VARCHAR byte-exact, paths cannot escape the source root.
+//! Recipes over file sources: the recipe's schema is the landed schema
+//! (typing is authored), an uncast csv column stays byte-exact raw text,
+//! paths cannot escape the source root.
 
 use std::sync::Arc;
 
@@ -73,7 +74,7 @@ async fn parquet_recipe_keeps_types_and_folds_ns_to_us() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn csv_recipe_lands_raw_all_varchar_byte_exact() {
+async fn csv_typing_is_authored_uncast_stays_byte_exact() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(
         dir.path().join("accounts.csv"),
@@ -81,24 +82,47 @@ async fn csv_recipe_lands_raw_all_varchar_byte_exact() {
     )
     .unwrap();
 
+    // No casts authored: the read side is all-Utf8, so raw text lands
+    // byte-exact — the author's default, not an import refold.
     let landed = run_recipe(
         &spec("csv", dir.path()),
         "SELECT * FROM read_csv('accounts.csv')",
     )
     .await
     .unwrap();
-    let (schema, batches) = (landed.schema, landed.batches);
-
     assert!(
-        schema.fields().iter().all(|f| f.data_type() == &DataType::Utf8),
-        "raw import is all-VARCHAR"
+        landed.schema.fields().iter().all(|f| f.data_type() == &DataType::Utf8),
+        "an uncast csv column is a string"
     );
-    let col = batches[0]
+    let col = landed.batches[0]
         .column(0)
         .as_any()
         .downcast_ref::<StringArray>()
         .unwrap();
     assert_eq!(col.value(0), "00123", "no inferred typing — leading zeros survive");
+
+    // Authored casts land typed: the landed table is the typed table
+    // (ruled 2026-08-04) — the schema the probe rehearsed, not a refold
+    // (the force_utf8 that discarded these casts died 2026-08-05).
+    let landed = run_recipe(
+        &spec("csv", dir.path()),
+        "SELECT account_no, try_cast(balance AS DOUBLE) AS balance \
+         FROM read_csv('accounts.csv')",
+    )
+    .await
+    .unwrap();
+    assert_eq!(landed.schema.field(0).data_type(), &DataType::Utf8);
+    assert_eq!(
+        landed.schema.field(1).data_type(),
+        &DataType::Float64,
+        "the authored cast is the landed type"
+    );
+    let balances = landed.batches[0]
+        .column(1)
+        .as_any()
+        .downcast_ref::<datafusion::arrow::array::Float64Array>()
+        .unwrap();
+    assert_eq!(balances.value(0), 42.0, "numbers aggregate as numbers");
 }
 
 #[tokio::test(flavor = "multi_thread")]

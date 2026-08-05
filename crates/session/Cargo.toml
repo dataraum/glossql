@@ -17,3 +17,6 @@ thiserror.workspace = true
 [dev-dependencies]
 insta.workspace = true
 tempfile = "3"
+
+[lints]
+workspace = true

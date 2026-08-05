@@ -107,9 +107,12 @@ pub struct Landed {
     pub source_rows: u64,
 }
 
-/// Run a recipe against its source and return the batches that will land as
-/// the table — csv/json folded to the raw all-VARCHAR shape, parquet folded
-/// to Iceberg-v2-compatible types.
+/// Run a recipe against its source and return the batches that will land
+/// as the table — exactly the schema the recipe's SQL produced (the
+/// probe's rehearsed identity), folded only where Iceberg v2 cannot hold
+/// a type. Typing is authored (ruled 2026-08-04): an uncast csv/json
+/// column is Utf8 because the read side is, never because the import
+/// refolds it.
 pub async fn run_recipe(spec: &SourceSpec, sql: &str) -> Result<Landed> {
     if spec.kind == SourceKind::RelationalDb {
         return Err(Error::RelationalSource(spec.name.clone()));
@@ -144,10 +147,7 @@ pub async fn run_recipe(spec: &SourceSpec, sql: &str) -> Result<Landed> {
         source_rows += ctx.read_table(provider)?.count().await? as u64;
     }
 
-    let (schema, batches) = match spec.kind {
-        SourceKind::Csv | SourceKind::Json => normalize::force_utf8(schema, batches)?,
-        _ => normalize::compat(schema, batches)?,
-    };
+    let (schema, batches) = normalize::compat(schema, batches)?;
     Ok(Landed {
         schema,
         batches,

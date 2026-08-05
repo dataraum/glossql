@@ -31,7 +31,9 @@ pub async fn query(State(state): State<AppState>, body: String) -> Response {
         Err(e) => return fail(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     };
     match session.query_stream(&body).await {
-        Ok(batches) => stream(batches),
+        // The Arrow door never caps — metadata or data, the client
+        // drains a stream; `metadata_only` is the MCP door's concern.
+        Ok(query) => stream(query.stream),
         // Not one query: statement sequences, declarations, and writes
         // run through execute and answer in JSON.
         Err(SessionError::NotOneRead) => match session.execute(&body).await {
