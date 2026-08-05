@@ -180,12 +180,23 @@ then speak to each aspect on every landed column:
 - **behavior** — numeric measures only. `stock` is a carried
   point-in-time level (balance, position, headcount) that must not be
   summed across periods; `flow` is a per-period movement (payment,
-  sale, change) that accumulates and is summable. Don't classify by
-  table name — ground it: a "trial balance" column can carry period
-  turnover (a flow) rather than balances, so when the ledger is
-  present, check whether the column ties to the period's movements
-  before calling it a stock. Unsure? Don't gloss: absence shows as an
-  honest `unassessed` row; a guess does not.
+  sale, change) that accumulates and is summable. A column's own
+  trajectory cannot decide this — a trending flow and a mean-reverting
+  stock look alike — so read the evidence before glossing:
+  `SELECT behavior_evidence() FROM orders.amount;` reconciles the
+  column against period movements aggregated from event tables
+  reachable over *declared* relationships (declare edges first; a new
+  edge does not invalidate this cache —
+  `DELETE FROM cache WHERE function = 'behavior_evidence';`
+  recomputes). Each anchor carries a verdict beside its evidence —
+  entity votes, agreement, both residuals, the runner-up
+  conventions — and `abstain` is a complete answer, not a defect. The
+  verdict is evidence for *your* judgment, never a ruling: you may
+  out-judge it by testing against the ledger yourself. Names lie
+  either way — a "trial balance" column can carry period turnover (a
+  flow) rather than balances; the measurement reads the data, not the
+  label. Unsure? Don't gloss: absence shows as an honest `unassessed`
+  row; a guess does not.
 - **unit** — where a magnitude has one: currency, quantity unit,
   percentage. `source_column` names the column carrying the unit when
   it rides beside the value.

@@ -72,6 +72,11 @@ impl RhaiRuntime {
         // Runaway backstop, not a sandbox — scripts are workspace-trusted
         // (M2 ruling); every other limit keeps its default.
         engine.set_max_operations(50_000_000);
+        // Except expression depth, whose default HALVES in debug builds
+        // (rhai-1.25.1 limits.rs:17 vs :32) — a library script would then
+        // parse in release and fail under `cargo test`. Pin the release
+        // defaults so both builds run the same contract.
+        engine.set_max_expr_depths(64, 32);
 
         engine
             .register_type_with_name::<Table>("Table")

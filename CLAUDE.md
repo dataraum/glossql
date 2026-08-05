@@ -63,8 +63,10 @@ documents:
   layer (MCP resources tried and reversed 2026-08-04). Skills follow deliverables, never v0.3
   phase names (ruled 2026-08-05); the judge pattern — measurements
   optimize recall, the agent judge removes false positives —
-  is taught in the core glossql skill, detect_relationships is its
-  first plane. A fresh
+  is taught in the core glossql skill; detect_relationships is its
+  first plane, behavior_evidence (stock/flow reconciliation,
+  oracle-tested against the finance generator) its second, ported
+  2026-08-05. A fresh
   workspace receives the shipped system at boot — embedded bootstrap:
   reference scripts + the measurement library's declarations, vertical
   excluded; the declaration relations (functions, aspects, witnesses,

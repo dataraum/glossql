@@ -43,6 +43,18 @@ DECLARE ASPECT temporal_profile WITH $${
                  "completeness": {"type": "object"}, "gaps": {"type": "object"}}
 }$$ AS MEASUREMENT ON COLUMN;
 
+DECLARE ASPECT behavior_evidence WITH $${
+  "type": "object", "required": ["applicable"],
+  "properties": {
+    "applicable": {"type": "boolean"},
+    "anchors": {"type": "array", "items": {"type": "object",
+      "properties": {
+        "event": {"type": "string"}, "align": {"type": "string"},
+        "verdict": {"type": "string", "enum": ["flow", "stock", "abstain"]},
+        "convention": {"type": "string"}, "support": {"type": "number"}}}}
+  }
+}$$ AS MEASUREMENT ON COLUMN;
+
 DECLARE FUNCTION profile FOR GLOBAL FROM 'functions/profile.rhai'
   RETURNS column_profile;
 
@@ -55,5 +67,8 @@ DECLARE FUNCTION temporal FOR GLOBAL FROM 'functions/temporal.rhai'
 
 DECLARE FUNCTION detect_relationships FOR GLOBAL FROM 'functions/relationships.rhai'
   RETURNS relationship_candidates;
+
+DECLARE FUNCTION behavior_evidence FOR GLOBAL FROM 'functions/behavior_evidence.rhai'
+  RETURNS behavior_evidence;
 
 DECLARE FUNCTION slot_entropy FOR GLOBAL FROM 'functions/slot_entropy.rhai';
