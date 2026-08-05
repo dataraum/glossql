@@ -27,15 +27,20 @@ recipe SQL, resolving under that root.
 to count what parses, then to rehearse the exact schema:
 
 ```glossql
-PROBE erp_export AS $$SELECT count("amount") AS filled,
-       count(try_cast("amount" AS DOUBLE)) AS parsed
-FROM read_parquet('orders/*.parquet')$$;
+PROBE erp_export AS $$SELECT count(raw) AS filled, count(parsed) AS parsed
+FROM (SELECT "amount" AS raw, try_cast("amount" AS DOUBLE) AS parsed
+      FROM read_parquet('orders/*.parquet'))$$;
 
 PROBE erp_export AS $$SELECT order_id,
        try_cast(amount AS DOUBLE) AS amount,
        try_to_date(order_date, '%d.%m.%Y') AS order_date
 FROM read_parquet('orders/*.parquet') LIMIT 0$$;
 ```
+
+Alias the casts in a subquery before aggregating over both the raw and
+the parsed column: the engine names a cast after its inner expression,
+so `count("amount")` and `count(try_cast("amount" AS DOUBLE))` collide
+in one aggregate — the `AS` aliases arrive too late to separate them.
 
 A `LIMIT 0` probe's empty result still carries its schema — it
 rehearses exactly the identity the recipe will stamp. Taught format
