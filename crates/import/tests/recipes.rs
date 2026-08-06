@@ -152,6 +152,75 @@ async fn recipe_paths_cannot_escape_the_source_root() {
     assert!(err.to_string().contains("outside the source's location"), "{err}");
 }
 
+// -- cast accounting (cells, not rows — 2026-08-06) ------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_landing_accounts_its_cast_nulled_cells() {
+    // Five rows land, five rows counted — but two amount cells and one
+    // date cell were values the casts nulled. The tokens come from the
+    // data; there is no vocabulary to match them against.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("orders.csv"),
+        "order_id,amount,order_date\n\
+         1,12.50,03.01.2026\n\
+         2,\\N,04.01.2026\n\
+         3,8.00,not yet\n\
+         4,\\N,05.01.2026\n\
+         5,1.25,06.01.2026\n",
+    )
+    .unwrap();
+    let landed = run_recipe(
+        &spec("csv", dir.path()),
+        "SELECT order_id, \
+                try_cast(amount AS DOUBLE) AS amount, \
+                try_to_date(order_date, '%d.%m.%Y') AS order_date \
+         FROM read_csv('orders.csv')",
+    )
+    .await
+    .unwrap();
+    assert_eq!(landed.batches.iter().map(|b| b.num_rows()).sum::<usize>(), 5);
+
+    let glossql_import::CastAccounting::Checked(checks) = &landed.casts else {
+        panic!("accounted: {:?}", landed.casts);
+    };
+    assert_eq!(checks.len(), 2, "{checks:?}");
+    let amount = checks.iter().find(|c| c.column == "amount").unwrap();
+    assert_eq!(amount.failed, 2);
+    assert_eq!(amount.tokens, vec![("\\N".to_string(), 2)]);
+    let date = checks.iter().find(|c| c.column == "order_date").unwrap();
+    assert_eq!(date.failed, 1);
+    assert_eq!(date.tokens, vec![("not yet".to_string(), 1)]);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn accounting_discloses_what_it_cannot_account() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("t.csv"), "a,b\n1,2\n1,3\n").unwrap();
+    let s = spec("csv", dir.path());
+
+    // An aggregating recipe has no per-row cast to account.
+    let landed = run_recipe(
+        &s,
+        "SELECT a, count(*) AS n FROM read_csv('t.csv') GROUP BY a",
+    )
+    .await
+    .unwrap();
+    assert!(
+        matches!(&landed.casts, glossql_import::CastAccounting::Unchecked(note) if note.contains("GROUP BY")),
+        "{:?}",
+        landed.casts
+    );
+
+    // No casts: the account is complete and empty.
+    let landed = run_recipe(&s, "SELECT * FROM read_csv('t.csv')").await.unwrap();
+    assert!(
+        matches!(&landed.casts, glossql_import::CastAccounting::Checked(c) if c.is_empty()),
+        "{:?}",
+        landed.casts
+    );
+}
+
 // -- relational sources (the ADBC executor) --------------------------------
 
 fn relational_spec(driver: &str, uri: &str) -> SourceSpec {

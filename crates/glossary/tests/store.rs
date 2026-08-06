@@ -529,7 +529,7 @@ async fn declaration_relations_are_invalidation_edges() {
     s.cache_put("fin", "orders.amount", "evidence", None, r#"{"applicable": false}"#, None)
         .await
         .unwrap();
-    s.import_put("fin", "payments", 10, 10).await.unwrap();
+    s.import_put("fin", "payments", 10, 10, "{}").await.unwrap();
     assert!(
         s.cache_get("fin", "orders.amount", "evidence", None)
             .await

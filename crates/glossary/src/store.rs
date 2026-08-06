@@ -190,6 +190,7 @@ CREATE TABLE IF NOT EXISTS imports (
   table_name TEXT NOT NULL,
   source_rows INTEGER NOT NULL,
   landed_rows INTEGER NOT NULL,
+  cast_failures TEXT,
   imported_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
 "#;
@@ -257,12 +258,13 @@ pub const RELATIONS: &[Relation] = &[
             "source_rows",
             "landed_rows",
             "dropped_rows_count",
+            "cast_failures",
             "imported_at",
         ],
         sql: "SELECT dataset, table_name, CAST(source_rows AS TEXT) AS source_rows, \
                      CAST(landed_rows AS TEXT) AS landed_rows, \
                      CAST(source_rows - landed_rows AS TEXT) AS dropped_rows_count, \
-                     imported_at \
+                     cast_failures, imported_at \
               FROM imports ORDER BY id",
     },
     Relation {
@@ -314,34 +316,6 @@ pub fn relation_columns(name: &str) -> Option<&'static [&'static str]> {
 /// consumers appear.
 pub fn accepts_relation(name: &str) -> bool {
     matches!(name, "relationships" | "imports")
-}
-
-async fn migrate(pool: &SqlitePool) -> Result<()> {
-    sqlx::raw_sql(MIGRATION).execute(pool).await?;
-    // Pre-grain stores lack the column (2026-08-05); the failed ALTER on a
-    // current schema is the idempotence check.
-    let _ = sqlx::query("ALTER TABLE aspects ADD COLUMN grains TEXT")
-        .execute(pool)
-        .await;
-    // Pre-witness stores keyed a verdict by (subject, function) alone, so
-    // witnesses sharing a detector read each other's answer (2026-08-06).
-    // The old verdicts cannot be attributed to a witness after the fact —
-    // they go, and the next read recomputes them, which is what
-    // detector-at-read already promises.
-    let widened = sqlx::query("ALTER TABLE cache ADD COLUMN witness TEXT")
-        .execute(pool)
-        .await
-        .is_ok();
-    if widened {
-        sqlx::query(
-            "DELETE FROM cache WHERE witness IS NULL AND function IN \
-             (SELECT name FROM functions WHERE returns IS NULL)",
-        )
-        .execute(pool)
-        .await?;
-    }
-    sqlx::raw_sql(INDEXES).execute(pool).await?;
-    Ok(())
 }
 
 /// The grain of a canonical subject spelling: the dataset itself, a pair
@@ -397,7 +371,6 @@ impl Store {
             .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
             .busy_timeout(std::time::Duration::from_secs(5));
         let pool = SqlitePoolOptions::new().connect_with(options).await?;
-        migrate(&pool).await?;
         Ok(Store { pool })
     }
 
@@ -408,7 +381,6 @@ impl Store {
             .max_connections(1)
             .connect("sqlite::memory:")
             .await?;
-        migrate(&pool).await?;
         Ok(Store { pool })
     }
 
@@ -852,15 +824,17 @@ impl Store {
         table: &str,
         source_rows: i64,
         landed_rows: i64,
+        cast_failures: &str,
     ) -> Result<()> {
         sqlx::query(
-            "INSERT INTO imports (dataset, table_name, source_rows, landed_rows) \
-             VALUES (?, ?, ?, ?)",
+            "INSERT INTO imports (dataset, table_name, source_rows, landed_rows, cast_failures) \
+             VALUES (?, ?, ?, ?, ?)",
         )
         .bind(dataset)
         .bind(table)
         .bind(source_rows)
         .bind(landed_rows)
+        .bind(cast_failures)
         .execute(&self.pool)
         .await?;
         // A landed table widens what dataset-sweeping measurements can

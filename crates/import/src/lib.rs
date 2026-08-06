@@ -10,9 +10,12 @@
 //! module): the driver returns Arrow batches, so what the source computed
 //! is what lands.
 
+pub mod accounting;
 mod adbc;
 pub mod casts;
 mod normalize;
+
+pub use accounting::{CastAccounting, CastCheck};
 
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -121,6 +124,10 @@ pub struct Landed {
     pub schema: SchemaRef,
     pub batches: Vec<RecordBatch>,
     pub source_rows: u64,
+    /// What the landing knows about its casts (`accounting` module): a
+    /// failed `try_*` is a kept row with a NULL cell, invisible in the
+    /// row counts above.
+    pub casts: CastAccounting,
 }
 
 /// Run a recipe against its source and return the batches that will land
@@ -141,6 +148,9 @@ pub async fn run_recipe(spec: &SourceSpec, sql: &str) -> Result<Landed> {
             schema,
             batches,
             source_rows: rows,
+            casts: CastAccounting::Unchecked(
+                "the recipe ran at the source — its dialect owns the casts".into(),
+            ),
         });
     }
     let root = canonical_root(spec)?;
@@ -173,12 +183,95 @@ pub async fn run_recipe(spec: &SourceSpec, sql: &str) -> Result<Landed> {
         source_rows += ctx.read_table(provider)?.count().await? as u64;
     }
 
+    // The landing succeeded; the accounting is best effort on top of it —
+    // a companion that errors becomes a disclosed note, never a failure.
+    let casts = match accounting::plan(sql) {
+        accounting::Plan::Unchecked(note) => CastAccounting::Unchecked(note),
+        accounting::Plan::Checked { targets, .. } if targets.is_empty() => {
+            CastAccounting::Checked(Vec::new())
+        }
+        accounting::Plan::Checked {
+            counts_sql,
+            targets,
+            select,
+        } => match account_casts(&ctx, &counts_sql, &targets, &select).await {
+            Ok(checks) => CastAccounting::Checked(checks),
+            Err(e) => CastAccounting::Unchecked(format!("companion query failed: {e}")),
+        },
+    };
+
     let (schema, batches) = normalize::compat(schema, batches)?;
     Ok(Landed {
         schema,
         batches,
         source_rows,
+        casts,
     })
+}
+
+/// Run the companion queries: one aggregate for every cast column's
+/// failure count, then one grouped read per failing column for its top
+/// tokens. Costs one extra scan, plus one per column that actually
+/// failed.
+async fn account_casts(
+    ctx: &SessionContext,
+    counts_sql: &str,
+    targets: &[accounting::Target],
+    select: &datafusion::sql::sqlparser::ast::Select,
+) -> Result<Vec<CastCheck>> {
+    use datafusion::arrow::array::{Array, Int64Array};
+    let one_row = ctx
+        .sql_with_options(counts_sql, read_only())
+        .await?
+        .collect()
+        .await?;
+    let counts: Vec<u64> = (0..targets.len())
+        .map(|i| {
+            one_row
+                .first()
+                .and_then(|b| b.column(i).as_any().downcast_ref::<Int64Array>())
+                .map_or(0, |a| {
+                    if a.is_empty() || a.is_null(0) { 0 } else { a.value(0) as u64 }
+                })
+        })
+        .collect();
+
+    let mut checks = Vec::with_capacity(targets.len());
+    for (target, failed) in targets.iter().zip(counts) {
+        let mut tokens = Vec::new();
+        if failed > 0 {
+            let rows = ctx
+                .sql_with_options(&accounting::tokens_sql(select, target), read_only())
+                .await?
+                .collect()
+                .await?;
+            for batch in &rows {
+                // The token column's concrete type follows the engine's
+                // string preferences (Utf8View today) — render generically
+                // rather than downcasting to one spelling of "string".
+                let t = batch.column(0);
+                let n = batch
+                    .column(1)
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .ok_or_else(|| Error::Batches("token count is not Int64".into()))?;
+                for i in 0..batch.num_rows() {
+                    if !t.is_null(i) {
+                        let token =
+                            datafusion::arrow::util::display::array_value_to_string(t, i)
+                                .map_err(|e| Error::Batches(e.to_string()))?;
+                        tokens.push((token, n.value(i) as u64));
+                    }
+                }
+            }
+        }
+        checks.push(CastCheck {
+            column: target.column.clone(),
+            failed,
+            tokens,
+        });
+    }
+    Ok(checks)
 }
 
 /// Run a probe: a recipe rehearsal (`PROBE source AS $$sql$$`) — the same

@@ -95,8 +95,19 @@ DECLARE RECIPE orders ON fin FROM erp_export AS $$
   FROM read_parquet('orders/*.parquet')$$;
 ```
 
-The outcome carries the counts at the decision moment; history stays in
-`SELECT * FROM imports`. The landed table is the typed table. A changed
+The outcome carries the counts at the decision moment — rows landed,
+rows dropped, **and the cast account**: for every `try_*` in the SELECT
+list, how many cells held a value the cast nulled, with the top such
+values by frequency (`cast-nulled cells — amount: 12 ['\N' ×10, …]`).
+The full account persists in `imports.cast_failures`. Those tokens came
+from the data, not from any list — judge them: a repeated token like
+`\N` or `n/a` is usually a null marker (amend the recipe — `NULLIF`
+before the cast, or a format the cast should carry — and re-declare; it
+supersedes and re-lands), while a scattered long tail may be genuinely
+bad data worth a FACT gloss. A recipe whose WHERE already drops failing
+rows reads `casts clean` — those are dropped rows, not nulled cells.
+History stays in `SELECT * FROM imports`. The landed table is the typed
+table. A changed
 recipe under the same name **supersedes and re-lands**: the old landing
 and its cached evidence go, glosses stay (their snapshot ids show their
 age) — re-run the measurements and review glosses for columns the new

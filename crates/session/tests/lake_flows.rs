@@ -120,8 +120,9 @@ async fn fixture_11_add_source_flow() {
         .unwrap();
     assert_eq!(
         done(&outcomes[0]),
-        "DECLARE RECIPE orders ON fin (2 rows landed, 1 dropped)",
-        "the count arrives at the decision moment"
+        "DECLARE RECIPE orders ON fin (2 rows landed, 1 dropped; casts clean)",
+        "the counts arrive at the decision moment — the WHERE dropped the \
+         bad row, so the cells that landed are clean"
     );
 
     // The landed table is the typed table — no view, no raw twin.
@@ -293,4 +294,46 @@ async fn drop_table_removes_an_empty_misdeclaration_whole() {
         .await
         .unwrap();
     assert_eq!(done(&outcomes[0]), "DECLARE RECIPE mistake ON fin (3 rows landed, 0 dropped)");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_landing_discloses_its_cast_nulled_cells() {
+    // The author keeps every row; two amount cells were `\N` and the cast
+    // nulled them. The row counts say nothing about that — the account
+    // does, at the decision moment and in the imports relation. The token
+    // came from the data; nothing anywhere lists `\N` as a sentinel.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("balances.csv"),
+        "account,balance\na,120.50\nb,\\N\nc,80.00\nd,\\N\n",
+    )
+    .unwrap();
+    let session = workspace(dir.path()).await;
+    let outcomes = session
+        .execute(&format!(
+            "DECLARE DATASET fin SET (purpose: 'test');\n\
+             USE fin;\n\
+             DECLARE SOURCE gl SET (type: csv, location: '{}');\n\
+             DECLARE RECIPE balances ON fin FROM gl AS $$\
+               SELECT account, try_cast(balance AS DOUBLE) AS balance \
+               FROM read_csv('balances.csv')$$;",
+            dir.path().display()
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        done(outcomes.last().unwrap()),
+        "DECLARE RECIPE balances ON fin (4 rows landed, 0 dropped; \
+         cast-nulled cells — balance: 2 ['\\N' ×2])"
+    );
+
+    // The full account persists where any read can find it.
+    let stored = session
+        .execute("SELECT cast_failures FROM imports WHERE table_name = 'balances';")
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_str(&single_value(&stored)).unwrap();
+    assert_eq!(json["checked"][0]["column"], "balance");
+    assert_eq!(json["checked"][0]["failed"], 2);
+    assert_eq!(json["checked"][0]["tokens"][0][0], "\\N");
 }

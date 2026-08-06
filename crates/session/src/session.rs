@@ -362,14 +362,15 @@ impl Session {
                                 .invalidate_table_evidence(dataset, table)
                                 .await?;
                         }
-                        let (rows, dropped) = self.materialize(dataset, table, landed).await?;
+                        let (rows, dropped, casts) =
+                            self.materialize(dataset, table, landed).await?;
                         store.put_recipe(d).await?;
-                        // The count arrives at the decision moment: whether
-                        // the dropped rows are acceptable is the author's
-                        // call, made now, on the files.
+                        // The counts arrive at the decision moment: whether
+                        // the dropped rows — and the cells the casts nulled
+                        // — are acceptable is the author's call, made now.
                         let verb = if replaced { "superseded and re-landed: " } else { "" };
                         format!(
-                            "DECLARE RECIPE {table} ON {dataset} ({verb}{rows} rows landed, {dropped} dropped)"
+                            "DECLARE RECIPE {table} ON {dataset} ({verb}{rows} rows landed, {dropped} dropped{casts})"
                         )
                     }
                 }
@@ -432,7 +433,7 @@ impl Session {
         dataset: &str,
         table: &str,
         landed: glossql_import::Landed,
-    ) -> Result<(usize, u64), SessionError> {
+    ) -> Result<(usize, u64, String), SessionError> {
         // The doors cannot guarantee statement order (M3 report), so the
         // staged name is unique per materialization, never per session.
         static STAGED_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -464,13 +465,19 @@ impl Session {
         }
         self.shared
             .store
-            .import_put(dataset, table, landed.source_rows as i64, rows as i64)
+            .import_put(
+                dataset,
+                table,
+                landed.source_rows as i64,
+                rows as i64,
+                &landed.casts.to_json().to_string(),
+            )
             .await?;
         *self.shared.read_cache.write().expect("read cache") = None;
         if self.shared.dataset.read().expect("state lock").as_deref() == Some(dataset) {
             self.alias(table, &mounted).await?;
         }
-        Ok((rows, dropped))
+        Ok((rows, dropped, cast_summary(&landed.casts)))
     }
 
     /// A probe (SPEC.md §3): the recipe rehearsal, executed at its source,
@@ -960,6 +967,40 @@ fn verb_of(statement: &SQLStatement) -> String {
         .take(2)
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// The cast account, rendered for the landing's outcome line: failing
+/// columns with their top tokens (the full list persists in `imports`),
+/// a clean bill, or the disclosed reason there is no account. Judging
+/// the tokens is the reader's job — this line only makes them visible
+/// at the decision moment.
+fn cast_summary(casts: &glossql_import::CastAccounting) -> String {
+    use glossql_import::CastAccounting;
+    match casts {
+        CastAccounting::Checked(checks) if checks.is_empty() => String::new(),
+        CastAccounting::Checked(checks) => {
+            let failing: Vec<String> = checks
+                .iter()
+                .filter(|c| c.failed > 0)
+                .map(|c| {
+                    let tokens = c
+                        .tokens
+                        .iter()
+                        .take(3)
+                        .map(|(t, n)| format!("'{t}' ×{n}"))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    format!("{}: {} [{}]", c.column, c.failed, tokens)
+                })
+                .collect();
+            if failing.is_empty() {
+                "; casts clean".into()
+            } else {
+                format!("; cast-nulled cells — {}", failing.join("; "))
+            }
+        }
+        CastAccounting::Unchecked(note) => format!("; casts unaccounted — {note}"),
+    }
 }
 
 /// `SELECT … INTO t` anywhere in a query's body.
