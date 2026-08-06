@@ -357,15 +357,19 @@ async fn fixture_11_with_real_scripts() {
         .unwrap();
     assert_ne!(one(&unassessed), "0", "absence is a visible row, not an omission");
 
-    // A typing correction is a recipe correction — and in the PoC the
-    // loaded table refuses both replacement and removal.
-    let err = human
+    // A typing correction is a recipe correction — supersede-and-reland
+    // (ruled 2026-08-06): the changed recipe drops the old landing and
+    // lands fresh. DROP TABLE stays refused while the table holds data.
+    let outcomes = human
         .execute(
             "DECLARE RECIPE orders ON fin FROM erp_export AS $$SELECT order_id FROM read_parquet('orders/*.parquet')$$;",
         )
         .await
-        .unwrap_err();
-    assert!(err.to_string().contains("different table"), "{err}");
+        .unwrap();
+    assert!(
+        format!("{outcomes:?}").contains("superseded and re-landed"),
+        "{outcomes:?}"
+    );
     let err = human.execute("DROP TABLE orders;").await.unwrap_err();
     assert!(err.to_string().contains("holds data"), "{err}");
 }

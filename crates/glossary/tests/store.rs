@@ -586,17 +586,18 @@ async fn recipe_redeclare_is_content_idempotent_and_change_is_refused() {
         RecipeAdmission::Unchanged
     );
 
-    // A changed SQL is refused outright — replacement is postponed
-    // (project lead, 2026-08-04); a different SQL is a different table.
+    // A changed SQL supersedes (ruled 2026-08-06) — the row updates and
+    // the session re-lands on `Replaced`.
     let v2 = recipe("DECLARE RECIPE orders ON fin FROM erp AS $$SELECT * FROM read_parquet('orders_v2/*.parquet')$$;");
-    let e = s.declare_recipe(&v2).await.unwrap_err();
-    assert!(
-        matches!(e, Error::RecipeChanged { ref table } if table == "orders"),
-        "{e}"
-    );
-    // The unchanged spelling still no-ops.
     assert_eq!(
-        s.declare_recipe(&v1).await.unwrap(),
+        s.declare_recipe(&v2).await.unwrap(),
+        RecipeAdmission::Replaced
+    );
+    let row = s.recipe("fin", "orders").await.unwrap().unwrap();
+    assert!(row.sql.contains("orders_v2"), "{}", row.sql);
+    // The new spelling is now the unchanged one.
+    assert_eq!(
+        s.declare_recipe(&v2).await.unwrap(),
         RecipeAdmission::Unchanged
     );
 }

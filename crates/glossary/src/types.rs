@@ -19,10 +19,6 @@ pub enum Error {
     )]
     AspectInUse { name: String, glosses: i64 },
     #[error(
-        "the recipe for `{table}` changed — a different SQL is a different table; declare it under another name (replacement is postponed)"
-    )]
-    RecipeChanged { table: String },
-    #[error(
         "witness on MEASUREMENT aspect `{0}` cannot name BY — measurements are never glossed; only a DETECTOR applies"
     )]
     MeasurementWitnessSpeakers(String),
@@ -161,11 +157,15 @@ pub struct FunctionRow {
 }
 
 /// What a `DECLARE RECIPE` amounted to (SPEC.md §3): the session
-/// materializes on `Created` and leaves `Unchanged` alone.
+/// materializes on `Created`, leaves `Unchanged` alone, and on
+/// `Replaced` drops the old landing before re-materializing
+/// (supersede-and-reland, ruled 2026-08-06 — runs 5 and 6 both hit
+/// the refusal wall on a post-landing defect with no way through).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RecipeAdmission {
     Created,
     Unchanged,
+    Replaced,
 }
 
 /// A stored recipe, as materialization needs it.

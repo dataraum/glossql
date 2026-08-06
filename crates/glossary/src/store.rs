@@ -349,10 +349,11 @@ impl Store {
     }
 
     /// Statement identity is content (SPEC.md §3): an unchanged recipe is a
-    /// no-op; a changed one is refused outright (project lead, 2026-08-04 —
-    /// replacement is postponed until the deletion cascade exists). A
-    /// different SQL is a different table: declare it under another name,
-    /// or `DROP TABLE` first while the table is still empty and unglossed.
+    /// no-op; a changed one **supersedes and re-lands** (project lead,
+    /// 2026-08-06 — the earlier refusal sent two consecutive runs into the
+    /// same dead end on a post-landing defect). The recipe row supersedes
+    /// like any declaration; glosses stay — they are knowledge, and
+    /// snapshot ids disclose their age against the fresh landing.
     pub async fn declare_recipe(&self, decl: &RecipeDecl) -> Result<RecipeAdmission> {
         let dataset = decl.dataset.value.as_str();
         let table = decl.table.value.as_str();
@@ -365,11 +366,7 @@ impl Store {
             Some(prior) if prior.source == decl.source.value && prior.sql == decl.sql => {
                 return Ok(RecipeAdmission::Unchanged);
             }
-            Some(_) => {
-                return Err(Error::RecipeChanged {
-                    table: table.into(),
-                });
-            }
+            Some(_) => RecipeAdmission::Replaced,
         };
         sqlx::query(
             "INSERT OR REPLACE INTO recipes (dataset, table_name, source, sql) VALUES (?, ?, ?, ?)",
@@ -762,6 +759,21 @@ impl Store {
     /// The store side of `DROP TABLE` (PoC: caller has already refused on
     /// data and glosses): the recipe row, the cached evidence under the
     /// table, and the import records go together.
+    /// A re-land's evidence sweep (supersede-and-reland, 2026-08-06): the
+    /// table's data changed wholesale, so every cached measurement under it
+    /// is stale — cleared here, recomputed at next read. Glosses and the
+    /// import history stay: knowledge and record, not evidence.
+    pub async fn invalidate_table_evidence(&self, dataset: &str, table: &str) -> Result<()> {
+        let (pred, binds) = Scope::Subject(table.to_string()).predicate("subject");
+        let sql = format!("DELETE FROM cache WHERE dataset = ? AND {pred}");
+        let mut q = sqlx::query(&sql).bind(dataset);
+        for b in &binds {
+            q = q.bind(b);
+        }
+        q.execute(&self.pool).await?;
+        Ok(())
+    }
+
     pub async fn drop_table_records(&self, dataset: &str, table: &str) -> Result<()> {
         sqlx::query("DELETE FROM recipes WHERE dataset = ? AND table_name = ?")
             .bind(dataset)

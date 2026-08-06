@@ -71,10 +71,11 @@ over — so it kept the table and documented the sentinel in the
 gloss. This is the **second consecutive run** to hit exactly this
 wall (run 5: the same column). Two independent runs, same dead end,
 correct agent reasoning both times: the replacement flow is pulled
-by evidence, no longer a postponement without cost. The fork is the
-lead's: re-declaring the same-name recipe as supersede-and-reland ·
-allowing DROP after the glossary rows migrate or invalidate · a
-dedicated replace form. Not decided here.
+by evidence, no longer a postponement without cost. **Ruled same day:
+supersede-and-reland** — a changed recipe under the same name drops
+the old landing and its cached evidence, lands fresh, keeps glosses
+(snapshot ids disclose their age) and the import history. Landed with
+the SPEC §3 rewrite, skill and fixture-11 updates, and tests.
 
 ## Status against the target
 

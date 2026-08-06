@@ -175,8 +175,9 @@ async fn fixture_11_add_source_flow() {
         .unwrap();
     assert_eq!(single_value(&unstamped), "1");
 
-    // §3: unchanged recipe is a no-op; a changed one is refused outright —
-    // replacement is postponed.
+    // §3: unchanged recipe is a no-op; a changed one supersedes and
+    // re-lands (ruled 2026-08-06 — runs 5 and 6 both dead-ended on the
+    // old refusal). Glosses stay; the cached evidence is swept.
     let redeclare = "DECLARE RECIPE orders ON fin FROM erp_export AS $$\
                SELECT order_id, try_cast(amount AS DOUBLE) AS amount \
                FROM read_parquet('orders/*.parquet') \
@@ -184,14 +185,30 @@ async fn fixture_11_add_source_flow() {
     let outcomes = session.execute(redeclare).await.unwrap();
     assert_eq!(done(&outcomes[0]), "DECLARE RECIPE orders ON fin (unchanged)");
     let changed = "DECLARE RECIPE orders ON fin FROM erp_export AS $$SELECT order_id FROM read_parquet('orders/*.parquet')$$;";
-    let err = session.execute(changed).await.unwrap_err();
+    let outcomes = session.execute(changed).await.unwrap();
     assert!(
-        matches!(
-            &err,
-            SessionError::Store(glossql_glossary::Error::RecipeChanged { table }) if table == "orders"
-        ),
-        "{err}"
+        done(&outcomes[0]).contains("superseded and re-landed"),
+        "{}",
+        done(&outcomes[0])
     );
+    // The fresh landing is the new shape: amount is gone from the table…
+    let err = session
+        .execute("SELECT amount FROM orders;")
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("amount"), "{err}");
+    // …while the glosses survive as knowledge, and the import history
+    // keeps both landings.
+    let kept = session
+        .execute("SELECT count(*) FROM glossary WHERE subject = 'fin';")
+        .await
+        .unwrap();
+    assert_eq!(single_value(&kept), "1");
+    let landings = session
+        .execute("SELECT count(*) FROM imports WHERE table_name = 'orders';")
+        .await
+        .unwrap();
+    assert_eq!(single_value(&landings), "2");
 
     // The substrate allowlist: schema-altering SQL is refused at the door.
     let err = session

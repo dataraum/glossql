@@ -304,15 +304,31 @@ impl Session {
                     {
                         format!("DECLARE RECIPE {table} ON {dataset} (unchanged)")
                     }
-                    Some(_) => {
+                    Some(lake) => {
+                        // Supersede-and-reland (ruled 2026-08-06): a changed
+                        // recipe drops the old landing and its cached
+                        // evidence, then lands fresh. Glosses stay — the
+                        // snapshot id discloses their age.
+                        let replaced = admission == RecipeAdmission::Replaced
+                            && lake.table_exists(dataset, table).await?;
+                        if replaced {
+                            let mounted = self.mount_schema(dataset).await?;
+                            mounted.deregister_table(table)?;
+                            let _ = self.ctx.deregister_table(table);
+                            self.shared
+                                .store
+                                .invalidate_table_evidence(dataset, table)
+                                .await?;
+                        }
                         let (rows, dropped) = self
                             .materialize(dataset, table, &d.source.value, &d.sql)
                             .await?;
                         // The count arrives at the decision moment: whether
                         // the dropped rows are acceptable is the author's
                         // call, made now, on the files.
+                        let verb = if replaced { "superseded and re-landed: " } else { "" };
                         format!(
-                            "DECLARE RECIPE {table} ON {dataset} ({rows} rows landed, {dropped} dropped)"
+                            "DECLARE RECIPE {table} ON {dataset} ({verb}{rows} rows landed, {dropped} dropped)"
                         )
                     }
                 }

@@ -63,9 +63,11 @@ DECLARE RECIPE orders ON fin FROM erp_export AS $$
 ```
 
 The outcome carries the counts at the decision moment; history stays in
-`SELECT * FROM imports`. The landed table is the typed table. Rules
-that will refuse you: a changed recipe is a different table (new name),
-and `DROP TABLE` is refused while the table holds data.
+`SELECT * FROM imports`. The landed table is the typed table. A changed
+recipe under the same name **supersedes and re-lands**: the old landing
+and its cached evidence go, glosses stay (their snapshot ids show their
+age) — re-run the measurements and review glosses for columns the new
+recipe changed. `DROP TABLE` is refused while the table holds data.
 
 ## 4. The measurement plane
 

@@ -90,11 +90,13 @@ decision moment and in the `imports` relation for history; which rows
 were dropped is the author's question, answered at the source.
 
 Statement identity is content: the recipe SQL and the schema it produces.
-An unchanged re-declaration is a no-op; a changed one is refused outright —
-a different SQL is a different table, declare it under another name.
-`DROP TABLE` removes a table whole (the lake table, the recipe, the cached
-evidence, the import records) and refuses while the table holds data or
-glosses — replacement is postponed until a deletion cascade exists.
+An unchanged re-declaration is a no-op; a changed one supersedes and
+re-lands (ruled 2026-08-06): the old landing and its cached evidence are
+dropped, the table lands fresh, and the import history keeps both
+landings. Glosses stay — no machinery deletes knowledge; their snapshot
+ids disclose their age against the fresh landing. `DROP TABLE` removes a
+table whole (the lake table, the recipe, the cached evidence, the import
+records) and refuses while the table holds data or glosses.
 Substrate SQL runs behind an allowlist: queries pass, `DROP TABLE` routes
 to the rules above, and everything else that would alter schema or data
 directly is refused. Tables come from recipes.
@@ -379,8 +381,8 @@ there is. A declared relationship or a recorded import invalidates
 dataset-wide through the same edge, for functions that `ACCEPTS` the
 relation. Data freshness is snapshot staleness, marked at read (§5.3) — a
 table's definition never changes underneath its evidence, because a
-changed recipe is refused and `DROP TABLE` takes the evidence with it
-(§3). Nothing recomputes at write time, and no machinery ever deletes a
+changed recipe sweeps the table's cached evidence as it re-lands and
+`DROP TABLE` takes the evidence with it (§3). Nothing recomputes at write time, and no machinery ever deletes a
 gloss: stale judgment is served and marked, superseded only by whoever
 owns the slot.
 

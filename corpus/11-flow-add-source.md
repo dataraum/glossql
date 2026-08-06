@@ -72,9 +72,11 @@ schema or it errors. Correcting a wrong recipe is removal first:
 DROP TABLE orders;
 ```
 
-— refused while the table holds data (PoC rule); a wrong recipe gets a
-new name instead, because a different SQL is a different table. The
-deletion cascade is future work. Rows the recipe filtered away are the
+— refused while the table holds data; a wrong recipe is re-declared
+under the same name and **supersedes**: the changed recipe drops the
+old landing and lands fresh, sweeping the table's cached evidence
+while glosses stay (ruled 2026-08-06 — runs 5 and 6 both dead-ended
+on the earlier new-name rule). Rows the recipe filtered away are the
 author's to judge, on the files, outside the box; the engine keeps one
 number:
 
@@ -196,8 +198,10 @@ that the grammar knows about.
   2026-08-04, after holding the design against dbt and dlt): identity is
   the recipe-and-schema hash; a data update must reproduce the schema or
   error (the frozen-contract rule); `DROP TABLE` refuses while data
-  exists (PoC), so replacement means a new name; the deletion cascade is
-  future work — tricky through relations and actor-generated SQL. No
+  exists (PoC). Replacement-by-new-name was part of this ruling and was
+  superseded 2026-08-06 — a changed recipe now supersedes and re-lands;
+  the full deletion cascade stays future work — tricky through
+  relations and actor-generated SQL. No
   reactive invalidation of definitions anywhere: declared `ACCEPTS` edges
   and snapshot staleness are the only freshness mechanisms.
 - **Filtered rows are the author's judgment** (ruled 2026-08-04): the
