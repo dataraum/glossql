@@ -100,13 +100,10 @@ state; clicking a runnable node opens live values. In glossql every
 edge is readable: QUERY aspects from the `aspects` relation, the
 definitional DAG from formula FACT glosses, groundings from the
 glossary, landed tables from `imports` — the app draws, nothing
-serves a drawing. The *click* is the consumer to watch: today the
-app runs the served SQL through the query door, which works; the
-language-native alternative is the §9-parked value-at-read
-enhancement (the read returning the metric's value — flagged
-interesting by the lead, 2026-08-05). This UI is the first consumer
-that could pull it; a fork for the operating-model transcription,
-not a passing decision:
+serves a drawing. The *click* was the consumer that pulled
+value-at-read out of §9's parking: ruled 2026-08-06 (fixture 16 §6) —
+`metric.` table functions, bound when the UI transformation starts;
+until then the app runs the served SQL through the query door:
 
 ```glossql
 SELECT name, kind, grains FROM aspects;
@@ -166,10 +163,9 @@ nothing users see depends on anything we cut.
 - **SEMANTICS UNDEFINED, named not built**: the general
   per-(metric, axis) additivity verdict (§2). Watch it when a
   drill-shaped consumer arrives.
-- **FORKS, open with the lead**: the conformed-dimension group as a
-  structured field vs prose (§4); value-at-read for QUERY aspects,
-  now that the metrics-graph click is a named consumer (§4 — the
-  first real pull on the §9-parked enhancement).
+- **FORK, open with the lead**: the conformed-dimension group as a
+  structured field vs prose (§4). Value-at-read, the other fork this
+  fixture opened, was ruled 2026-08-06 — fixture 16 §6 records it.
 - Closed same day by the run fixes: the judged-negative dimension
   verdict (`none`) and the exact relevance score (a display cap must
   not become a statistics cap).

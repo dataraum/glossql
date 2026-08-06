@@ -468,9 +468,10 @@ experiment). Closes by running the agent experiment, not by argument.
 PoC notes: batch visibility comes from (long-running) transactions — the
 running system's run_id + snapshot-head pointer is the verbose version of
 the same guarantee · actor transport rides the connection, DuckDB-style ·
-parked as a future enhancement (2026-08-03): `GLOSSARY` may someday also
-materialize a QUERY aspect's value by running its grounding SQL at read —
-today the read serves the SQL, and running it is the reader's act.
+value-at-read, ruled 2026-08-06 (was parked 2026-08-03): a QUERY aspect's
+value materializes as a namespaced table function — `FROM metric.dso()`,
+a spelling the grammar already accepts — landing when the UI work starts;
+until then the read serves the SQL, and running it is the reader's act.
 
 Deferred, not under discussion: access rights · portability · persistence
 backend and engine mapping.
