@@ -1053,6 +1053,57 @@ fn reconcile_kernel(y: &Table, m: &Table, terms: Vec<String>) -> ScriptResult<rh
             if let Some(v) = median(rs) {
                 s.insert("r_stock".into(), Dynamic::from(v));
             }
+            // The sign partition (ported 2026-08-06): every entity
+            // re-classified against the negated anchor. A voter firing
+            // the winning pattern only under negation stores the mirror
+            // convention — ledger-signed data reads this way. Diagnostic
+            // only: selection stays on original-sign support.
+            let mut primary = 0i64;
+            let mut mirror = 0i64;
+            let mut both = 0i64;
+            let mut rss = 0.0f64;
+            let mut voters = 0usize;
+            let mut neg_buf: Vec<f64> = Vec::new();
+            for &(start, len) in &bounds {
+                ys_buf.clear();
+                ms_buf.clear();
+                for cell in start..start + len {
+                    if valid[cell] & mask == mask {
+                        ys_buf.push(yvec[cell]);
+                        ms_buf.push(mw[(cell, c)]);
+                    }
+                }
+                let (label, rf, rs) = classify_series(&ys_buf, &ms_buf);
+                let fires = label == Some(stock_wins);
+                neg_buf.clear();
+                neg_buf.extend(ms_buf.iter().map(|v| -v));
+                let (mlabel, _, _) = classify_series(&ys_buf, &neg_buf);
+                let mirrored = mlabel == Some(stock_wins);
+                match (fires, mirrored) {
+                    (true, true) => both += 1,
+                    (true, false) => primary += 1,
+                    (false, true) => mirror += 1,
+                    (false, false) => {}
+                }
+                if fires {
+                    let r = rf.min(rs);
+                    rss += r * r;
+                    voters += 1;
+                }
+            }
+            s.insert("sign_primary".into(), Dynamic::from(primary));
+            s.insert("sign_mirror".into(), Dynamic::from(mirror));
+            s.insert("sign_both".into(), Dynamic::from(both));
+            // BIC over the winning voters' best residuals (v0.3's
+            // formula): n·ln(RSS/n) + arity·ln(n), RSS floored so an
+            // exact fit stays finite. The ΔBIC>10 arity tiebreak in the
+            // script reads this.
+            if voters > 0 {
+                let n = voters as f64;
+                let arity = if t2.is_some() { 2.0 } else { 1.0 };
+                let bic = n * (rss.max(1e-12) / n).ln() + arity * n.ln();
+                s.insert("bic".into(), Dynamic::from(bic));
+            }
         }
         summaries.push(Dynamic::from_map(s));
     }

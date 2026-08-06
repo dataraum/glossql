@@ -20,6 +20,14 @@ the relationship, the sign convention stated before any P&L split,
 units checked before cross-currency arithmetic. A grounding whose
 assumptions cannot name their bases is not ready to write.
 
+The sign convention has measured evidence: a behavior_evidence anchor
+carries `sign` — voters re-judged against the negated convention. A
+mirror-heavy count says the store carries the negation of the anchor's
+named convention (ledger-signed); primary-heavy says the convention
+reads as named (natural balance); a split says the entities disagree
+and the P&L grounding must scope them. Cite it as the sign
+assumption's basis instead of asserting from column names.
+
 ## 2. The vocabulary
 
 One QUERY aspect per concept, on the dataset. Base concepts and

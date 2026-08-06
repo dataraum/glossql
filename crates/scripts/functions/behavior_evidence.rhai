@@ -403,15 +403,29 @@ if parts.len() == 2 {
                             }
 
                             // Winner: support-first; on a support tie the
-                            // fewer-term convention wins (a single beats
-                            // an equally supported pair difference).
+                            // fewer-term convention wins — unless the
+                            // higher-arity fit is decisive, ΔBIC > 10
+                            // (Kass–Raftery), v0.3's tiebreak, ported
+                            // 2026-08-06. A pair difference that fits
+                            // exactly beats an equally supported single
+                            // that fits loosely; anything short of
+                            // decisive keeps the simpler reading.
                             let winner = ();
                             for s in summaries {
                                 if s.verdict == "abstain" { continue; }
                                 if winner == () { winner = s; continue; }
                                 if s.support > winner.support + 1.0e-9 { winner = s; continue; }
                                 if abs(s.support - winner.support) <= 1.0e-9
-                                    && s.terms < winner.terms { winner = s; }
+                                    && s.terms != winner.terms {
+                                    let simple = if s.terms < winner.terms { s } else { winner };
+                                    let complex = if s.terms < winner.terms { winner } else { s };
+                                    winner = if ("bic" in simple) && ("bic" in complex)
+                                        && simple.bic - complex.bic > 10.0 {
+                                        complex
+                                    } else {
+                                        simple
+                                    };
+                                }
                             }
 
                             // The runner-up field the judge sees beside
@@ -453,6 +467,15 @@ if parts.len() == 2 {
                                 anchor.support = winner.support;
                                 if "r_flow" in winner { anchor.r_flow = winner.r_flow; }
                                 if "r_stock" in winner { anchor.r_stock = winner.r_stock; }
+                                // The sign partition: a mirror-heavy count
+                                // says the store carries the negated
+                                // convention (ledger-signed); the judge
+                                // reads it before any P&L split.
+                                if "sign_primary" in winner {
+                                    anchor.sign = #{ primary: winner.sign_primary,
+                                                     mirror: winner.sign_mirror,
+                                                     both: winner.sign_both };
+                                }
                             } else {
                                 anchor.verdict = "abstain";
                                 let any_votes = false;
