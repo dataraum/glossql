@@ -1,6 +1,6 @@
 ---
 name: glossql-dimensions
-description: The dimensional read of a glossql dataset — score slice axes with dimension_relevance, judge hierarchy candidates from detect_hierarchies, and build grain-checked enriched views. Use after tables are glossed and relationships declared, before cross-table analysis or metric work.
+description: The dimensional read of a glossql dataset — score slice axes with dimension_relevance, judge hierarchy candidates from detect_hierarchies, and record grain-checked judged joins. Use after tables are glossed and relationships declared, before cross-table analysis or metric work.
 ---
 
 # The dimensions deliverable
@@ -19,7 +19,7 @@ The verdict aspect is yours to declare, like `entity`:
 DECLARE ASPECT dimension WITH $${
   "type": "object", "required": ["value"],
   "properties": {
-    "value": {"type": "string", "enum": ["primary", "supporting"]},
+    "value": {"type": "string", "enum": ["primary", "supporting", "none"]},
     "grounds": {"type": "string"}
   }
 }$$ AS FACT ON COLUMN;
@@ -29,7 +29,11 @@ DECLARE WITNESS dimension_w ON dimension BY (AGENT, HUMAN);
 `primary` and `supporting` are absolute labels — v0.3 retired an
 ordinal priority because rank 3 means nothing without knowing what it
 is 3 *of*, and unranked rows tied at the floor filled curated lists
-alphabetically.
+alphabetically. `none` is the **judged negative** — you examined the
+axis and it is not one (a label, a sequence number, a join key);
+grounds say why. It is a different fact from an `unassessed` row,
+which only means nobody has judged yet — a reader planning slice work
+needs to tell the two apart.
 
 ## 2. Inventory and relevance
 
@@ -48,12 +52,13 @@ one scale for every axis. How to read it:
 - **The number answers "is this axis usable, how much does it
   resolve" — interest is yours.** Which of an even 4-way `region` and
   an even 800-way `account_id` a reader wants first is business
-  judgment; the score never overrules it. Gloss `dimension` with your
-  verdict and grounds.
-- **`truncated: true` means lower bound.** The profile caps at 20
-  buckets; the unseen tail is scored as one bucket, the least even it
-  could be. Under-claiming is deliberate — never promote an axis by
-  assuming its tail is even.
+  judgment; the score never overrules it. Even distribution is not
+  analytic interest either — a near-uniform sequence column (a round
+  number, a line number) scores high and is still `none`. Gloss
+  `dimension` with your verdict and grounds.
+- **The score is exact.** Evenness reads the profile's exact entropy
+  scalar over the full distribution; the 20 `top_values` are display
+  for your judgment, never the score's input.
 - **Abstentions are gates, not defects**: near-keys (fraction ≥ 0.9 of
   filled rows — a key is not an axis), null-dominated columns
   (> 0.5), constants. A null-coded binary (`{X, NULL}`) is admitted —

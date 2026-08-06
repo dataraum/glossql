@@ -214,7 +214,9 @@ async fn relevance_scores_the_distribution_and_hierarchies_arrive_with_their_evi
     let relevance = scored["relevance"].as_f64().unwrap();
     assert!((relevance - 0.8520).abs() < 0.001, "{scored}");
     assert_eq!(scored["groups"], 3, "{scored}");
-    assert_eq!(scored["truncated"], false, "{scored}");
+    // The score is exact (profile entropy scalar) — the truncated
+    // lower-bound flag is retired.
+    assert!(scored.get("truncated").is_none(), "{scored}");
 
     // A per-row key is not an axis.
     session

@@ -161,6 +161,30 @@ impl RhaiRuntime {
                 }
                 Ok(seen.len() as i64)
             })
+            .register_fn("entropy", |c: &mut Col| -> ScriptResult<f64> {
+                // Shannon entropy (nats) of the non-null value
+                // distribution, exact — one pass over typed cell keys,
+                // never display buckets. The profile's top_k stays a
+                // display cap; this scalar is what a score may read
+                // (the 2026-08-06 f1 lesson: a display cap must not
+                // become a statistics cap).
+                let mut counts: HashMap<u64, i64> = HashMap::new();
+                for key in cell_keys(&c.0)?.into_iter().flatten() {
+                    *counts.entry(key).or_insert(0) += 1;
+                }
+                let n: i64 = counts.values().sum();
+                if n == 0 {
+                    return Ok(0.0);
+                }
+                let n = n as f64;
+                Ok(counts
+                    .values()
+                    .map(|&count| {
+                        let p = count as f64 / n;
+                        -p * p.ln()
+                    })
+                    .sum())
+            })
             .register_fn("min", |c: &mut Col| -> ScriptResult<Dynamic> { extremum(c, true) })
             .register_fn("max", |c: &mut Col| -> ScriptResult<Dynamic> { extremum(c, false) })
             .register_fn("sum", |c: &mut Col| -> ScriptResult<Dynamic> {

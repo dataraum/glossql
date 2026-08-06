@@ -18,12 +18,12 @@
 // which axis a reader wants first is business judgment, and the number
 // never overrules it.
 //
-// Chained on the profile like outliers: buckets are top_values, and a
-// truncated distribution's unseen tail is ONE bucket — the least even
-// it could be — so a truncated score is a LOWER BOUND. Under-claiming
-// is the safe direction: promoting an axis on an assumed-even tail
-// that is really one dominant value is exactly the silently-bad
-// recommendation the score exists to prevent.
+// Chained on the profile like outliers, reading the EXACT entropy
+// scalar the profile computes over the full distribution — never the
+// top_values display buckets. The earlier bucket-derived score was a
+// lower bound on every axis past the 20-value display cap (all 21 f1
+// axes, 2026-08-06): a display cap had silently become a statistics
+// cap. Retired; the score is exact and `truncated` is gone.
 //
 // Admission gates are v0.3's recorded inventory: at least two buckets
 // with NULL counted as one (a null-coded binary is a lane, not a
@@ -33,6 +33,12 @@
 let p = context.column_profile;
 if p == () {
     #{ applicable: false, missing_aspects: ["column_profile"] }
+} else if p.entropy == () {
+    // A cached profile from before the exact-entropy statistic: the
+    // dependency is present but stale in shape. Recompute profile()
+    // and the abstention heals.
+    #{ applicable: false, missing_aspects: ["column_profile"],
+       reason: "profile predates the exact entropy statistic — rerun profile()" }
 } else {
     let total = p.total;
     let distinct = p.distinct;
@@ -49,54 +55,23 @@ if p == () {
     } else {
         let nulls = (total.to_float() * null_ratio).round().to_int();
         let non_null = total - nulls;
-        let observed = [];
-        for b in p.top_values {
-            if b.count > 0 { observed.push(b.count); }
-        }
-        if observed.len() == 0 {
-            #{ applicable: false, reason: "no measured buckets in the profile" }
+        let coverage = non_null.to_float() / total.to_float();
+        if distinct < 2 {
+            // A single group partitions nothing: evenness 0 by
+            // definition (ln(1) would divide by zero).
+            #{ applicable: true, relevance: 0.0, coverage: coverage,
+               evenness: 0.0, groups: distinct }
         } else {
-            let seen = 0;
-            for c in observed { seen += c; }
-            // Stale-profile clamp (recorded): counts written in another
-            // run than the row count can disagree, and a negative tail
-            // must not reach a logarithm.
-            let tail = non_null - seen;
-            if tail < 0 { tail = 0; }
-            // When the observed buckets already account for every
-            // non-null row, groups the distinct count claims beyond
-            // them hold zero rows — trust the counts over a distinct
-            // they contradict.
-            let claimed = if distinct > observed.len() { distinct } else { observed.len() };
-            let groups = if tail > 0 { claimed } else { observed.len() };
-            let coverage = non_null.to_float() / total.to_float();
-            if groups < 2 {
-                // A single group partitions nothing: evenness 0 by
-                // definition (ln(1) would divide by zero).
-                #{ applicable: true, relevance: 0.0, coverage: coverage,
-                   evenness: 0.0, groups: groups, truncated: false }
-            } else {
-                let h = 0.0;
-                for c in observed {
-                    let pr = c.to_float() / non_null.to_float();
-                    if pr > 0.0 { h -= pr * ln(pr); }
-                }
-                if tail > 0 {
-                    let pr = tail.to_float() / non_null.to_float();
-                    h -= pr * ln(pr);
-                }
-                let evenness = h / ln(groups.to_float());
-                // Clamp at the boundary rather than trusting the
-                // arithmetic — two REAL recorded inputs land outside
-                // [0, 1]: exactly-uniform k in {5, 13, 19, ...} floats
-                // to 1.0000000000000002, and a stale profile whose
-                // counts exceed the row count goes negative.
-                let r = coverage * evenness;
-                if r < 0.0 { r = 0.0; }
-                if r > 1.0 { r = 1.0; }
-                #{ applicable: true, relevance: r, coverage: coverage,
-                   evenness: evenness, groups: groups, truncated: tail > 0 }
-            }
+            let evenness = p.entropy / ln(distinct.to_float());
+            // Clamp at the boundary rather than trusting the
+            // arithmetic — a REAL recorded input lands outside [0, 1]:
+            // exactly-uniform k in {5, 13, 19, ...} floats to
+            // 1.0000000000000002.
+            let r = coverage * evenness;
+            if r < 0.0 { r = 0.0; }
+            if r > 1.0 { r = 1.0; }
+            #{ applicable: true, relevance: r, coverage: coverage,
+               evenness: evenness, groups: distinct }
         }
     }
 }

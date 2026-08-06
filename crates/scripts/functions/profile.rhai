@@ -22,6 +22,11 @@ let profile = #{
     cardinality_ratio: if non_null == 0 { 0.0 } else { distinct.to_float() / non_null.to_float() },
     min: c.min(),
     max: c.max(),
+    // Exact Shannon entropy (nats) over the full non-null distribution.
+    // top_values is a display cap (readable buckets for the judge);
+    // entropy is the statistic scores read — never the buckets
+    // (2026-08-06: the truncated relevance lower bound is retired).
+    entropy: c.entropy(),
     top_values: c.top_k(20),
 };
 

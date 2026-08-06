@@ -65,13 +65,18 @@ rows (the one-row aggregate read; parse with rhai's `.parse_int()` /
 `.parse_float()`).
 
 Col: `dtype()` (Arrow type name — a `LIMIT 0` query types a column
-without scanning it), `count()`, `null_count()`, `distinct()`, `min()`,
-`max()`, `sum()`, `mean()`, `stddev()`, `percentile(p)`, `mad()`,
-`top_k(k)`, `len_stats()`, `match_rate(regex)`, `parse_rate(sql_type)`,
-`value_at(i)`, `floats()` — the whole column as floats via one Arrow
-cast, `()` for NULL. Read numbers you will loop over with `floats()`,
-never `value_at().parse_float()` per cell: `value_at` renders display
-strings, and a hot loop through it is interpreter-bound.
+without scanning it), `count()`, `null_count()`, `distinct()`,
+`entropy()` — exact Shannon entropy (nats) of the non-null value
+distribution over typed keys, `min()`, `max()`, `sum()`, `mean()`,
+`stddev()`, `percentile(p)`, `mad()`, `top_k(k)`, `len_stats()`,
+`match_rate(regex)`, `parse_rate(sql_type)`, `value_at(i)`,
+`floats()` — the whole column as floats via one Arrow cast, `()` for
+NULL. Read numbers you will loop over with `floats()`, never
+`value_at().parse_float()` per cell: `value_at` renders display
+strings, and a hot loop through it is interpreter-bound. A score reads
+exact scalars (`entropy()`, `distinct()`), never `top_k` buckets —
+top_k is a display cap, and a display cap must not become a statistics
+cap (the f1 relevance lesson, 2026-08-06).
 
 Statistical kernels — the compute-heavy halves of measurements live
 here, in Rust; a script that finds itself nesting loops over rows or
