@@ -6,10 +6,11 @@
 //! `try_to_date`/`try_to_timestamp` are registered — the recipe carries the
 //! casts (project lead, 2026-08-04). A probe is the same SQL surface
 //! without a landing: paths' first segment names the source. A recipe at a
-//! relational source runs its SQL at the source — that executor (ADBC) is
-//! planned, not built; declaring such a source stores it, running its
-//! recipe errors.
+//! relational source runs its SQL **at the source** over ADBC (`adbc`
+//! module): the driver returns Arrow batches, so what the source computed
+//! is what lands.
 
+mod adbc;
 pub mod casts;
 mod normalize;
 
@@ -38,10 +39,8 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub enum Error {
     #[error("source `{name}`: {detail}")]
     BadSource { name: String, detail: String },
-    #[error(
-        "source `{0}` is relational — its recipes run at the source, and that executor (ADBC) is not built yet"
-    )]
-    RelationalSource(String),
+    #[error("source `{name}` (relational): {detail}")]
+    Relational { name: String, detail: String },
     #[error("recipe failed: {0}")]
     Recipe(#[from] DataFusionError),
     #[error("recipe result: {0}")]
@@ -61,8 +60,12 @@ pub enum SourceKind {
 pub struct SourceSpec {
     pub name: String,
     pub kind: SourceKind,
-    /// File sources: the root directory recipe paths resolve under.
+    /// Where the source lives: file sources, the root directory recipe
+    /// paths resolve under; relational sources, the connection URI.
     pub location: PathBuf,
+    /// Relational sources: the ADBC driver, a searched name or a library
+    /// path. Meaningless (and ignored) for file sources.
+    pub driver: Option<String>,
 }
 
 impl SourceSpec {
@@ -88,10 +91,22 @@ impl SourceSpec {
                 });
             }
         };
+        let driver = settings
+            .get("driver")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        if kind == SourceKind::RelationalDb && driver.is_none() {
+            return Err(Error::BadSource {
+                name: name.into(),
+                detail: "missing `driver` in settings — the ADBC driver name or library path"
+                    .into(),
+            });
+        }
         Ok(SourceSpec {
             name: name.into(),
             kind,
             location: PathBuf::from(get("location")?),
+            driver,
         })
     }
 }
@@ -116,7 +131,17 @@ pub struct Landed {
 /// refolds it.
 pub async fn run_recipe(spec: &SourceSpec, sql: &str) -> Result<Landed> {
     if spec.kind == SourceKind::RelationalDb {
-        return Err(Error::RelationalSource(spec.name.clone()));
+        // The source computed the SQL itself, so its result set is both
+        // what was read and what lands — dropped is structurally zero
+        // here; which rows a WHERE excluded is the source's own answer.
+        let read = tokio::task::block_in_place(|| adbc::run_at_source(spec, sql, usize::MAX))?;
+        let rows: u64 = read.batches.iter().map(|b| b.num_rows() as u64).sum();
+        let (schema, batches) = normalize::compat(read.schema, read.batches)?;
+        return Ok(Landed {
+            schema,
+            batches,
+            source_rows: rows,
+        });
     }
     let root = canonical_root(spec)?;
 
@@ -162,7 +187,12 @@ pub async fn run_recipe(spec: &SourceSpec, sql: &str) -> Result<Landed> {
 /// identity a `DECLARE RECIPE` would stamp.
 pub async fn run_probe(spec: &SourceSpec, sql: &str, row_cap: usize) -> Result<Vec<RecordBatch>> {
     if spec.kind == SourceKind::RelationalDb {
-        return Err(Error::RelationalSource(spec.name.clone()));
+        let read = tokio::task::block_in_place(|| adbc::run_at_source(spec, sql, row_cap))?;
+        let mut batches = read.batches;
+        if batches.is_empty() {
+            batches.push(RecordBatch::new_empty(read.schema));
+        }
+        return Ok(batches);
     }
     let root = canonical_root(spec)?;
     let ctx = SessionContext::new();

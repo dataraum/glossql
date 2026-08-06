@@ -8,7 +8,7 @@ use datafusion::arrow::array::{Int64Array, RecordBatch, StringArray, TimestampNa
 use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use datafusion::dataframe::DataFrameWriteOptions;
 use datafusion::prelude::SessionContext;
-use glossql_import::{SourceKind, SourceSpec, run_recipe};
+use glossql_import::{SourceSpec, run_recipe};
 use serde_json::json;
 
 fn spec(kind: &str, root: &std::path::Path) -> SourceSpec {
@@ -152,16 +152,138 @@ async fn recipe_paths_cannot_escape_the_source_root() {
     assert!(err.to_string().contains("outside the source's location"), "{err}");
 }
 
+// -- relational sources (the ADBC executor) --------------------------------
+
+fn relational_spec(driver: &str, uri: &str) -> SourceSpec {
+    SourceSpec::from_settings(
+        "erp",
+        &json!({"type": "relational_db", "driver": driver, "location": uri}),
+    )
+    .unwrap()
+}
+
 #[tokio::test(flavor = "multi_thread")]
-async fn relational_sources_error_until_the_adbc_executor_exists() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut s = spec("csv", dir.path());
-    s = SourceSpec {
-        kind: SourceKind::RelationalDb,
-        ..s
+async fn a_relational_source_requires_a_driver() {
+    let e = SourceSpec::from_settings(
+        "erp",
+        &json!({"type": "relational_db", "location": "file.db"}),
+    )
+    .unwrap_err();
+    assert!(e.to_string().contains("driver"), "{e}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_relational_recipe_is_one_query_and_never_a_write() {
+    // The fence fires before any driver loads — a bogus driver name
+    // proves the refusal is ours, not the manager's.
+    let s = relational_spec("no_such_driver", ":memory:");
+    for sql in [
+        "DELETE FROM orders",
+        "DROP TABLE orders",
+        "SELECT 1; SELECT 2",
+        "UPDATE t SET a = 1",
+    ] {
+        let e = run_recipe(&s, sql).await.unwrap_err();
+        assert!(e.to_string().contains("one SELECT"), "`{sql}`: {e}");
+    }
+    // A plain query passes the fence and fails only at driver load.
+    let e = run_recipe(&s, "SELECT 1").await.unwrap_err();
+    assert!(!e.to_string().contains("one SELECT"), "{e}");
+}
+
+/// The ADBC sqlite driver, if one is installed: the env var wins, then
+/// the well-known pip wheel location. Absent → the live test skips.
+fn sqlite_driver() -> Option<String> {
+    if let Ok(path) = std::env::var("GLOSSQL_ADBC_SQLITE_DRIVER") {
+        return Some(path);
+    }
+    let out = std::process::Command::new("python3")
+        .args(["-c", "import adbc_driver_sqlite; print(adbc_driver_sqlite._driver_path())"])
+        .output()
+        .ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_relational_recipe_lands_from_sqlite() {
+    let Some(driver) = sqlite_driver() else {
+        eprintln!("skipped: no ADBC sqlite driver (set GLOSSQL_ADBC_SQLITE_DRIVER)");
+        return;
     };
-    let err = run_recipe(&s, "SELECT 1").await.unwrap_err();
-    assert!(err.to_string().contains("ADBC"));
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("erp.db");
+    // Seed through the driver itself — the test needs no sqlite CLI.
+    {
+        use adbc_core::options::{AdbcVersion, OptionDatabase, OptionStatement};
+        use adbc_core::{
+            Connection as _, Database as _, Driver as _, Optionable as _, Statement as _,
+        };
+        let mut d = adbc_driver_manager::ManagedDriver::load_from_name(
+            &driver,
+            None,
+            AdbcVersion::V100,
+            adbc_core::LOAD_FLAG_DEFAULT,
+            None,
+        )
+        .unwrap();
+        let database = d
+            .new_database_with_opts([(OptionDatabase::Uri, db.display().to_string().into())])
+            .unwrap();
+        let mut conn = database.new_connection().unwrap();
+        let mut st = conn.new_statement().unwrap();
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("order_id", DataType::Int64, true),
+            Field::new("amount", DataType::Utf8, true),
+        ]));
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![
+            Arc::new(Int64Array::from(vec![1, 2, 3])),
+            Arc::new(StringArray::from(vec!["12.50", "8.00", "1.25"])),
+        ])
+        .unwrap();
+        st.set_option(OptionStatement::TargetTable, "orders".into())
+            .unwrap();
+        st.bind(batch).unwrap();
+        st.execute_update().unwrap();
+    }
+
+    let s = relational_spec(&driver, &db.display().to_string());
+    let landed = run_recipe(&s, "SELECT order_id, amount FROM orders WHERE order_id > 1")
+        .await
+        .unwrap();
+    assert_eq!(
+        landed.batches.iter().map(|b| b.num_rows()).sum::<usize>(),
+        2
+    );
+    assert_eq!(
+        landed.source_rows, 2,
+        "the source computed the SQL — read and landed are the same count"
+    );
+    assert_eq!(landed.schema.field(0).name(), "order_id");
+
+    // A probe stops at the cap: one row past it marks truncation.
+    let probed = glossql_import::run_probe(&s, "SELECT * FROM orders", 1)
+        .await
+        .unwrap();
+    let probed_rows: usize = probed.iter().map(|b| b.num_rows()).sum();
+    assert!(
+        (2..=3).contains(&probed_rows),
+        "capped at one past 1, got {probed_rows}"
+    );
+
+    // The source's own catalog answers a key-harvest probe — the skill
+    // teaches this spelling; declared keys are judge evidence, never
+    // declared relationships (recipes reshape what lands).
+    let keys = glossql_import::run_probe(
+        &s,
+        "SELECT * FROM pragma_table_info('orders')",
+        200,
+    )
+    .await
+    .unwrap();
+    assert!(keys.iter().map(|b| b.num_rows()).sum::<usize>() >= 2, "pragma rows");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

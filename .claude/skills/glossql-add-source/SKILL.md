@@ -21,6 +21,39 @@ DECLARE SOURCE erp_export SET (type: parquet, location: 'lake/erp');
 The location is a root directory. Globs and file paths belong in
 recipe SQL, resolving under that root.
 
+A relational source names a connection URI as its location and an ADBC
+driver (a searched name or a library path):
+
+```glossql
+DECLARE SOURCE erp SET (type: relational_db,
+                        driver: 'adbc_driver_postgresql',
+                        location: 'postgresql://host/erp');
+```
+
+Its probe and recipe SQL run **at the source**, in the source's own
+dialect — `read_*` functions and `try_to_date`/`try_to_timestamp` do
+not exist there; type with the backend's own casts. One SELECT per
+statement; writes are refused at the door.
+
+The source's catalog is probe-able like any table. Ask it for declared
+keys before detecting relationships:
+
+```glossql
+PROBE erp AS $$SELECT tc.table_name, kcu.column_name, tc.constraint_type
+FROM information_schema.table_constraints tc
+JOIN information_schema.key_column_usage kcu
+  ON kcu.constraint_name = tc.constraint_name
+WHERE tc.constraint_type IN ('PRIMARY KEY', 'FOREIGN KEY')$$;
+```
+
+(SQLite spells it `pragma_table_info('t')` and
+`pragma_foreign_key_list('t')`.) **A declared key describes the
+source's tables, not the tables you land** — recipes reshape: a join
+in the recipe SQL, a renamed column, a filtered subset all break the
+correspondence. Harvested keys are evidence for the relationship
+judge, never declared relationships; declare only what survives the
+judged read against the landed data (the glossql-relationships flow).
+
 ## 2. Probe — look before you write
 
 `PROBE` runs recipe-shaped SQL at the source and lands nothing. Use it
