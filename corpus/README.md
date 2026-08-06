@@ -23,7 +23,7 @@ simplified language (see `reports/2026-08-03-simplification.md`).
 |---|---|---|
 | 01 | concept `revenue` | TRANSCRIBES (concept = QUERY aspect) · pack envelope DROPPED |
 | 02 | convention `sign_natural_balance` | TRANSCRIBES (in-blob, incl. `targets`) |
-| 03 | metric `dso` | TRANSCRIBES (metric = function script) |
+| 03 | metric `dso` | TRANSCRIBES (metric = QUERY aspect, run as its SQL; function form superseded 2026-08-03 · value-at-read parked in SPEC §9, re-flagged interesting 2026-08-05) |
 | 04 | validation `trial_balance` | TRANSCRIBES (aspect + witness, no dedicated construct) |
 | 05 | cycle `accounts_receivable` | TRANSCRIBES (in-blob) |
 | 06 | witnesses + reliabilities | slots TRANSCRIBE · calibration DROPPED |
@@ -35,3 +35,4 @@ simplified language (see `reports/2026-08-03-simplification.md`).
 | 12 | flow: begin session | TRANSCRIBES (measure → read → declare → attest) |
 | 13 | typing patterns | TRANSCRIBES (patterns as FACT glosses) |
 | 14 | composite relationships (finance_2 run, 2026-08-05) | TRANSCRIBES (composite = tuple endpoint; view cure retired) |
+| 15 | consumption surface (cockpit sweep, 2026-08-06) | TRANSCRIBES (reads compose it) · axis additivity SEMANTICS UNDEFINED · conformed-group FORK open |
