@@ -306,7 +306,11 @@ the `formulas` gloss, not regrouping `metric.dso()`.
   decisions owed. The flow now ends with every definitional
   assumption served to the user as a multiple-choice question; the
   pin is a human re-gloss (the human slot outranks the agent's — a
-  tested collapse invariant). A witness convention banding agent-only
+  tested collapse invariant). Beside the questions and the data
+  findings, a third list: **world-coverage wishes** — assumptions
+  only more world can settle (an opening balance sheet anchoring
+  every cumulative level), named as specific asks with the numbers
+  they would shift. A witness convention banding agent-only
   definitional glosses yellow was ruled *later* by the lead.
 - INFORMATION LOST (accepted): v0.3's interpretation ranges
   (EXCELLENT/GOOD bands per metric) stay in the aspect's `WITH`

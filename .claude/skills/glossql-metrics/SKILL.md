@@ -150,10 +150,25 @@ otherwise:
 
 What counts as definitional: any grounding assumption with
 `dimension: "definition"` whose basis is your judgment rather than a
-measurement or an engineer pin. Carry a `confidence` on each —
-anything below 1.0 is you saying *unpinned*. Keep data findings
-(a bank gap, a turnover-not-balance table) in a separate list: those
-are facts to explain, not choices to make.
+measurement or an engineer pin — the **basis is the pin marker**,
+never the number. Calibrate `confidence` soberly: 1.0 is reserved
+for a measured fact; 0.9 is already very high — a well-argued
+convention choice tops out there. Keep data findings (a bank gap, a
+turnover-not-balance table) in a separate list: those are facts to
+explain, not choices to make.
+
+And a third list beside those two — **world-coverage wishes**. Some
+assumptions resolve neither by the user's choice nor by SQL, only by
+*more world*: an opening balance sheet that would anchor every
+cumulative level, a prior-year extract, the subledger a role gloss
+implies but no table carries, the fx policy document. A single
+confidence number flattens these — "no opening entries exist" is a
+fact at 1.0, "therefore the levels are the true levels" is a world
+claim the data cannot settle (a negative opening month is evidence
+against it on a real book). Name each wish as a specific ask: which
+document or source, and which numbers shift when it arrives ("every
+stock level moves by its opening values"). The ask is a document,
+not a decision — keep it out of the pinning questions.
 
 The user's answer lands as a **re-gloss** — the human slot
 supersedes and outranks yours in every collapsed read, and the
