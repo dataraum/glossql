@@ -37,6 +37,15 @@ impl FunctionRuntime for Fake {
                 "witness": "tb_w", "band": "red", "score": 0.9,
                 "computed_at": "2026-08-04T00:00:00Z"
             }),
+            // A voice validates against the aspect it speaks (fixture 06's
+            // respelling): the check's verdict is an `outcome` too, with
+            // its measurement beside it.
+            "journal_check" => json!({"outcome": "measured: debits equal credits", "imbalance": 0.0}),
+            "framework_bands" => json!({
+                "subject": "trial_balance", "aspect": "journal_balanced",
+                "witness": "journal_w", "band": "green", "score": 0.0,
+                "computed_at": "2026-08-06T00:00:00Z"
+            }),
             "outliers" => json!({"rows": [1]}),
             _ => json!({"ok": true}),
         })
@@ -499,4 +508,78 @@ async fn the_declarations_read_as_plain_relations() {
     )
     .await;
     assert!(global.contains("outliers") && !global.contains("checker"), "{global}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_validation_adjudicates_the_expectation_beside_the_check_voice() {
+    // Fixture 16 §5 (fixture 04's ruled shape, exercised): the authored
+    // expectation is a FACT gloss, the check is a function VOICE on the
+    // same aspect, and the detector bands across both slots.
+    let (session, fake) = agent_session().await;
+    run(&session, SETUP).await;
+    run(
+        &session,
+        r##"
+        DECLARE ASPECT journal_balanced WITH $${
+          "type": "object", "required": ["outcome"],
+          "properties": {"outcome": {"type": "string"}, "tolerance": {"type": "number"}}
+        }$$ AS FACT ON TABLE;
+        GLOSS journal_balanced ON fin.trial_balance AS $${"outcome": "debits equal credits, exactly", "tolerance": 0.0}$$;
+        DECLARE FUNCTION journal_check FOR fin FROM 'functions/journal_check.rhai'
+          ACCEPTS (imports) RETURNS journal_balanced;
+        DECLARE FUNCTION framework_bands FOR fin FROM 'functions/framework_bands.rhai';
+        DECLARE WITNESS journal_w ON journal_balanced BY (AGENT, HUMAN)
+          DETECTOR framework_bands THRESHOLD 0.5;
+        SELECT journal_check() FROM fin.trial_balance;
+        "##,
+    )
+    .await;
+
+    let attest = table(
+        &session,
+        "SELECT band, score FROM ATTEST(fin.trial_balance::journal_balanced);",
+    )
+    .await;
+    assert!(attest.contains("green"), "{attest}");
+
+    // The detector saw both slots: the agent's authored expectation and
+    // the check voice's measured result.
+    let ctx = fake.last_context.lock().unwrap().clone().unwrap();
+    let slots = ctx["slots"].as_array().unwrap_or_else(|| panic!("no slots in {ctx}"));
+    assert_eq!(slots.len(), 2, "{ctx}");
+    let all = ctx.to_string();
+    assert!(all.contains("outcome") && all.contains("imbalance"), "{ctx}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_grounding_admits_and_serves_its_sql_back() {
+    // Fixture 16 §2: a concept grounds as a grain-free extract; the read
+    // serves the SQL, running it is the reader's act.
+    let (session, _) = agent_session().await;
+    run(&session, SETUP).await;
+    run(
+        &session,
+        r##"
+        DECLARE ASPECT revenue WITH $${"title": "Revenue"}$$ AS QUERY ON DATASET;
+        GLOSS revenue ON fin AS $${
+          "sql": "SELECT e.date, l.credit - l.debit AS value FROM journal_lines l JOIN journal_entries e ON l.entry_id = e.entry_id",
+          "assumptions": [{"assumption": "grain-preserving join", "basis": "relationship glosses"}]
+        }$$;
+        "##,
+    )
+    .await;
+    let served = table(
+        &session,
+        "SELECT value FROM GLOSSARY(fin::revenue) WHERE state = 'current';",
+    )
+    .await;
+    assert!(served.contains("l.credit - l.debit"), "{served}");
+
+    // The standard grounding schema is the gate: a body without `sql`
+    // is refused however plausible it looks.
+    let e = session
+        .execute(r#"GLOSS revenue ON fin AS $${"query": "SELECT 1"}$$;"#)
+        .await
+        .unwrap_err();
+    assert!(e.to_string().contains("grounding"), "{e}");
 }

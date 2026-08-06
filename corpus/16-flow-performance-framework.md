@@ -226,6 +226,12 @@ SELECT reconciliation_check() FROM bank_transactions;
 SELECT * FROM ATTEST(journal_lines::journal_balanced);
 ```
 
+A check voice **speaks the aspect's schema** (fixture 06's
+respelling, enforced by the engine): its output must carry `outcome`
+like any slot — the verdict in words, the measurement beside it
+(`{"outcome": "measured: debits equal credits", "imbalance": 0.0}`).
+One schema, every speaker.
+
 A confirmed behavior_evidence convention is a validation candidate:
 `trial_balance.debit_balance = SUM(journal_lines.debit)` reconciled
 at ~0 residual, so the agent may promote it to a third check — the
