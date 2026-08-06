@@ -27,7 +27,7 @@ DECLARE ASPECT revenue WITH $${
   "x-indicators": ["revenue", "sales", "income", "turnover", "receipts"],
   "x-exclude": ["cost", "expense"],
   "x-unit-from": "currency"
-}$$ AS QUERY;
+}$$ AS QUERY ON DATASET, TABLE;
 ```
 
 The `compositions:` block in the same file (`whole: current_assets`,
@@ -39,7 +39,7 @@ DECLARE ASPECT current_assets WITH $${
   "title": "current_assets",
   "x-kind": "measure",
   "x-parts": ["cash", "accounts_receivable", "inventory"]
-}$$ AS QUERY;
+}$$ AS QUERY ON DATASET, TABLE;
 ```
 
 ## Findings

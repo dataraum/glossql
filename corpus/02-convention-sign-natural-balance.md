@@ -37,7 +37,7 @@ DECLARE ASPECT conventions WITH $${
       }
     }
   }
-}$$ AS FACT;
+}$$ AS FACT ON DATASET;
 
 GLOSS conventions ON fin AS $${
   "items": [{

@@ -39,7 +39,7 @@ DECLARE ASPECT trial_balance WITH $${
     "cycles": {"type": "array", "items": {"type": "string"}},
     "conventions": {"type": "array", "items": {"type": "string"}}
   }
-}$$ AS FACT;
+}$$ AS FACT ON DATASET;
 
 GLOSS trial_balance ON fin AS $${
   "tolerance": 0.01,

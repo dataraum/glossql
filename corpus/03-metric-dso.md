@@ -71,7 +71,7 @@ DECLARE ASPECT dso WITH $${
     {"min": 61, "max": 90,  "label": "POOR"},
     {"min": 91, "max": 999, "label": "CRITICAL"}
   ]
-}$$ AS QUERY;
+}$$ AS QUERY ON DATASET;
 
 GLOSS dso ON fin AS $${
   "sql": "SELECT (sum(accounts_receivable) / sum(revenue)) * 30 FROM monthly_balances",
@@ -96,7 +96,9 @@ GLOSS dso ON fin AS $${
   was wrong and is superseded by this one (2026-08-03).
 - Parameter mechanics (`days_in_period`, `derivation: period_grain`) ride
   with the composing agent in v0.3 — the chosen value is baked into the
-  composed SQL. Whether parameter variants are separate glosses is open with
-  the project lead.
+  composed SQL. Whether parameter variants are separate glosses **closed
+  2026-08-06** (fixture 16 §3): the parameter was the window, and the window
+  belongs to the reader — definitions are grain-free, windows are read
+  policy, and a verified composition may be recorded as the metric's gloss.
 - The yaml's step validation (`0 <= value <= 365`) is adjudication —
   witness territory (fixture 04), open with the witness questions.

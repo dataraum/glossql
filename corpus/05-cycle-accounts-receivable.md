@@ -48,7 +48,7 @@ DECLARE ASPECT ar_stage WITH $${
   },
   "x-order": ["created", "sent", "due", "paid"],
   "x-terminal": ["paid"]
-}$$ AS FACT;
+}$$ AS FACT ON COLUMN;
 
 GLOSS ar_stage ON invoices.status AS $${
   "mappings": [
@@ -66,7 +66,7 @@ DECLARE ASPECT cycles WITH $${
   "properties": {
     "families": {"type": "object"}
   }
-}$$ AS FACT;
+}$$ AS FACT ON DATASET;
 
 GLOSS cycles ON fin AS $${
   "families": {

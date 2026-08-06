@@ -43,7 +43,7 @@ score; ATTEST serves it.
 DECLARE ASPECT behavior WITH $${
   "type": "object",
   "properties": {"value": {"enum": ["stock", "flow"]}}
-}$$ AS FACT;
+}$$ AS FACT ON COLUMN;
 
 DECLARE FUNCTION temporal_behavior FOR GLOBAL FROM 'functions/temporal_behavior.rhai'
   RETURNS behavior;
@@ -70,7 +70,12 @@ SELECT * FROM ATTEST(orders.amount::behavior);
   function instead of a `BY (FUNCTION …)` entry. Its output validates
   against the aspect it speaks; the `BY` gate is for actors only. The
   detector lost its RETURNS transcription: no RETURNS *is* the detector
-  shape, and the attest contract is the engine's.
+  shape, and the attest contract is the engine's. *The example function
+  is superseded (2026-08-05): a trajectory read of behavior was falsified
+  (a trending flow and a mean-reverting stock look alike), and the shipped
+  wiring serves `behavior_evidence` as a MEASUREMENT the agent reads
+  before glossing. The voice mechanism itself lives on — fixture 16 §5's
+  validation checks speak their aspects exactly this way.*
 - **DROPPED BY DESIGN — the calibration theater.** Per-witness calibrated
   reliabilities, calibration provenance (corpus id, estimator, Brier),
   placeholder priors, pooling math: all of it is the DETECTOR function's

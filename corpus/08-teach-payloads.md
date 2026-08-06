@@ -24,12 +24,14 @@ GLOSS unit ON orders.amount AS $${"value": "EUR"}$$;
 DECLARE RELATIONSHIP orders.customer_id -> customers.id;
 ```
 
-`hierarchy` teach, `add` action:
+`hierarchy` teach, `add` action (reconciled 2026-08-06: a hierarchy is
+recorded as same-table relationships, finer → coarser, with the grounds
+on the pair — the dimensions ruling — never a levels blob):
 
 ```glossql
-GLOSS hierarchy ON customers AS $${
-  "levels": ["country", "region", "city"], "kind": "drilldown"
-}$$;
+DECLARE RELATIONSHIP customers.city -> customers.region;
+DECLARE RELATIONSHIP customers.region -> customers.country;
+GLOSS meaning ON customers.city -> customers.region AS $${"value": "taught drill-down level"}$$;
 ```
 
 `type_pattern` and `null_value` — the workspace-scoped vocabulary teaches the
