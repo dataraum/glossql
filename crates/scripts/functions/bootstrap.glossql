@@ -78,6 +78,19 @@ DECLARE ASPECT hierarchy_candidates WITH $${
   }
 }$$ AS MEASUREMENT ON TABLE;
 
+DECLARE ASPECT grounding_collisions WITH $${
+  "type": "object", "required": ["applicable"],
+  "properties": {
+    "applicable": {"type": "boolean"},
+    "groundings": {"type": "integer"},
+    "collisions": {"type": "array", "items": {"type": "object",
+      "properties": {
+        "sql": {"type": "string"},
+        "aspects": {"type": "array", "items": {"type": "string"}},
+        "subjects": {"type": "array", "items": {"type": "string"}}}}}
+  }
+}$$ AS MEASUREMENT ON DATASET;
+
 DECLARE FUNCTION profile FOR GLOBAL FROM 'functions/profile.rhai'
   RETURNS column_profile;
 
@@ -102,5 +115,9 @@ DECLARE FUNCTION dimension_relevance FOR GLOBAL FROM 'functions/dimension_releva
 
 DECLARE FUNCTION detect_hierarchies FOR GLOBAL FROM 'functions/hierarchies.rhai'
   RETURNS hierarchy_candidates;
+
+DECLARE FUNCTION detect_grounding_collisions FOR GLOBAL FROM 'functions/grounding_collisions.rhai'
+  ACCEPTS (glossary)
+  RETURNS grounding_collisions;
 
 DECLARE FUNCTION slot_entropy FOR GLOBAL FROM 'functions/slot_entropy.rhai';

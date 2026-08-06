@@ -54,6 +54,15 @@ result, a map that must serialize as JSON:
   a sequential loop. Any SQL; determinism is your contract, the
   workspace your boundary.
 
+Two free functions handle stored text:
+
+- `parse_json(s)` — a stored body (a gloss, a cached value) back into a
+  map; errors on text that is not JSON.
+- `canonical_sql(s)` — SQL text as an identity: parse and re-render, so
+  whitespace and keyword case collapse while identifiers survive. A
+  body the parser cannot read falls back to whitespace normalization —
+  weaker, and that is the honest limit.
+
 ## Kernels
 
 Zero-copy readers on query results (authoritative list: the

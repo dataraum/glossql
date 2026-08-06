@@ -120,7 +120,10 @@ fn like_escape(s: &str) -> String {
         .replace('_', "\\_")
 }
 
-const MIGRATION: &str = r#"
+/// The schema, created at open. CREATE-only — there are no existing
+/// databases to migrate (ruled 2026-08-06): a store predating a schema
+/// change is wiped and re-bootstrapped, never patched in place.
+const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS sources (
   name TEXT PRIMARY KEY,
   settings TEXT NOT NULL
@@ -193,12 +196,6 @@ CREATE TABLE IF NOT EXISTS imports (
   cast_failures TEXT,
   imported_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
-"#;
-
-/// Runs after the column migrations, never with them: an index over a
-/// column an older store has not been widened with yet fails the whole
-/// migration (which is how this ordering was found).
-const INDEXES: &str = r#"
 CREATE INDEX IF NOT EXISTS glossary_key
   ON glossary (dataset, subject, aspect, actor_kind, id);
 CREATE INDEX IF NOT EXISTS cache_key
@@ -315,7 +312,7 @@ pub fn relation_columns(name: &str) -> Option<&'static [&'static str]> {
 /// an unwired name would be a silent no-op edge, so the rest join as
 /// consumers appear.
 pub fn accepts_relation(name: &str) -> bool {
-    matches!(name, "relationships" | "imports")
+    matches!(name, "relationships" | "imports" | "glossary")
 }
 
 /// The grain of a canonical subject spelling: the dataset itself, a pair
@@ -371,6 +368,7 @@ impl Store {
             .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
             .busy_timeout(std::time::Duration::from_secs(5));
         let pool = SqlitePoolOptions::new().connect_with(options).await?;
+        sqlx::raw_sql(SCHEMA).execute(&pool).await?;
         Ok(Store { pool })
     }
 
@@ -381,6 +379,7 @@ impl Store {
             .max_connections(1)
             .connect("sqlite::memory:")
             .await?;
+        sqlx::raw_sql(SCHEMA).execute(&pool).await?;
         Ok(Store { pool })
     }
 
@@ -781,6 +780,11 @@ impl Store {
         .execute(&self.pool)
         .await?;
         self.invalidate(dataset, aspect, subject).await?;
+        // The `glossary` relation edge (2026-08-06): a function that
+        // ACCEPTS the glossary sweeps it whole, so any gloss write stales
+        // its cache dataset-wide — the same contract the `relationships`
+        // and `imports` edges already carry.
+        self.invalidate(dataset, "glossary", dataset).await?;
         Ok(())
     }
 
@@ -1424,6 +1428,15 @@ impl Store {
             )
             .execute(&self.pool)
             .await?;
+            // Functions sweeping the glossary whole (`ACCEPTS (glossary)`)
+            // read what the delete just changed — same edge as the write
+            // side, applied on removal (2026-08-06).
+            for f in self.functions_accepting("glossary").await? {
+                sqlx::query("DELETE FROM cache WHERE function = ?")
+                    .bind(f.as_str())
+                    .execute(&self.pool)
+                    .await?;
+            }
         }
         Ok(done.rows_affected())
     }

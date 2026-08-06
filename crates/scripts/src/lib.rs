@@ -434,6 +434,28 @@ impl RhaiRuntime {
                 },
             );
 
+        engine
+            // SQL text as an identity: parse and re-render, so spelling
+            // differences (whitespace, keyword case, redundant parens the
+            // parser folds) collapse and identifiers survive verbatim. A
+            // body the parser cannot read normalizes by whitespace alone —
+            // weaker, honestly so, and stated here rather than hidden.
+            .register_fn("canonical_sql", |sql: &str| -> String {
+                use datafusion::sql::sqlparser::dialect::GenericDialect;
+                use datafusion::sql::sqlparser::parser::Parser;
+                match Parser::parse_sql(&GenericDialect {}, sql) {
+                    Ok(statements) if statements.len() == 1 => statements[0].to_string(),
+                    _ => sql.split_whitespace().collect::<Vec<_>>().join(" "),
+                }
+            })
+            // A stored body (a gloss, a cached value) back into a map the
+            // script can read — the inverse of returning one.
+            .register_fn("parse_json", |s: &str| -> ScriptResult<Dynamic> {
+                let value: serde_json::Value =
+                    serde_json::from_str(s).map_err(|e| format!("parse_json: {e}"))?;
+                rhai::serde::to_dynamic(&value).map_err(|e| e.to_string().into())
+            });
+
         RhaiRuntime {
             root: root.into(),
             engine,

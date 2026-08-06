@@ -60,6 +60,20 @@ A stock's extract is bounded by its **source grain** (a trial balance
 speaks per period; no read can answer finer) — serve the grain column
 as-is and say so in the assumptions.
 
+**After grounding, run the collision read.** Two concepts grounding to
+the same extract make every ratio between them compute 1.0, silently:
+
+```glossql
+SELECT detect_grounding_collisions() FROM fin;
+SELECT value FROM GLOSSARY(fin::grounding_collisions);
+```
+
+It buckets current groundings by canonical SQL and reports shared
+buckets — recall, not judgment. A reported pair is either a deliberate
+synonym (say so: one concept, or a FACT gloss naming the alias) or a
+definition error (re-ground one of them). Its cache stales on any
+gloss write, so a re-read after new groundings recomputes.
+
 ## 4. Evaluate at read — windows are read policy
 
 Grain is the reader's: the app defaults to month, another reader asks
