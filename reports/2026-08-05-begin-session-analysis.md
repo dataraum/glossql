@@ -304,8 +304,10 @@ the judge kept every verdict.
 - **bus_matrix** conform floor — agent-side: reachability over the
   `relationships` relation is two queries, no sweep. Skill prose
   when a multi-fact dataset arrives.
-- **drivers** — stands as row 5: the one remaining future function,
-  pulled by the operating-model phase.
+- **drivers** — stands as row 5: the one remaining future function.
+  Corrected by the lead (2026-08-06): pulled by UI drill-down
+  features ("why did the metric move"), not by the operating-model
+  phase — the framework needs no drivers to stand.
 
 The stage map above is otherwise landed or absorbed. The
 enriched_views row's "`CREATE VIEW` is native" is superseded by the
