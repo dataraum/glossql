@@ -274,3 +274,40 @@ schema), and carries the recorded falsification that shaped it as
 comment or skill prose. That is the corpus-first process applied to
 numerics, and it is what turns the hesitation into a gate instead
 of a wall.
+
+## Closing the ledger (added 2026-08-06)
+
+The lead's question — are the soft lanes (derived_formulas,
+business_cycles) functions at all, or the analysing agent's
+judgment? — closed the remaining rows. The dividing principle the
+ported planes settled: a **function owns a combinatorial recall
+sweep** no agent should hand-run (1,100 column pairs; 121
+conventions × 850 entities), and its outputs are refutable by data;
+the **agent owns meaning-formed hypotheses** — few, cheap, one probe
+query each. Relationships and behavior were sweeps, not a deviation;
+the judge kept every verdict.
+
+- **derived_formulas** — deferred until the operating-model target
+  pulls it. Once meaning and role glosses exist the formula space is
+  hypothesis-shaped (runs 3 and 4 probed `net = debit − credit`
+  unprompted, before glossing), and behavior_evidence's conventions
+  already discover the cross-table SUM family as reconciliations.
+  Its residual value is surprise recall only. When pulled, its scope
+  is a fact plus its judged grain-preserving joins — not per table:
+  v0.3 ran it cross-table over enriched views, and the views ruling
+  makes the judged join the equivalent scan scope.
+- **business_cycles** — never a statistic in v0.3 either: the phase
+  header says "the engine induces nothing" (declared vocabulary, LLM
+  grounding, completion from status columns). Agent territory: a
+  `cycle` FACT aspect framed by an operating-model skill, the
+  `entity` pattern again. No function.
+- **bus_matrix** conform floor — agent-side: reachability over the
+  `relationships` relation is two queries, no sweep. Skill prose
+  when a multi-fact dataset arrives.
+- **drivers** — stands as row 5: the one remaining future function,
+  pulled by the operating-model phase.
+
+The stage map above is otherwise landed or absorbed. The
+enriched_views row's "`CREATE VIEW` is native" is superseded by the
+views ruling (grain-checked joins are the construct — the 2026-08-06
+f1 report records it).
