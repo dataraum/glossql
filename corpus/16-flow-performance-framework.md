@@ -299,6 +299,15 @@ the `formulas` gloss, not regrouping `metric.dso()`.
   still holds the conformed-group fork.
 - The `expected_rate: 0.895` gloss is the anti-overcleaning stance in
   one statement: the expectation is authored, never assumed zero.
+- **The pinning agenda** (added 2026-08-06, the run-7 lesson): the
+  scorecard run reproduced every uniquely-defined number exactly, and
+  its only misses were unflagged *definition choices* — the agent
+  stated each with grounds but presented them as judgments made, not
+  decisions owed. The flow now ends with every definitional
+  assumption served to the user as a multiple-choice question; the
+  pin is a human re-gloss (the human slot outranks the agent's — a
+  tested collapse invariant). A witness convention banding agent-only
+  definitional glosses yellow was ruled *later* by the lead.
 - INFORMATION LOST (accepted): v0.3's interpretation ranges
   (EXCELLENT/GOOD bands per metric) stay in the aspect's `WITH`
   annotations when wanted — rendering guidance, not glossary content.

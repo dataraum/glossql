@@ -127,3 +127,37 @@ SELECT count(*) FROM GLOSSARY(fin) WHERE state = 'unassessed';
 
 Red bands are where a human closes what you could not; unassessed
 rows are the vocabulary nobody has spoken to yet.
+
+## 7. The pinning agenda — end every framework with it
+
+A definition is a choice between formula families the data cannot
+arbitrate: both DSO variants compute, both gross-profit subtrahends
+compute, interest income sums in or out. Where evidence *can* decide
+(a stock never sums across periods), the measurements already did;
+what remains is convention, and convention is the user's to pin.
+Definitional risk is invisible from inside your own judgment — it
+shows only against an alternative — so the alternative must be
+named, every time.
+
+Close the flow by presenting **every definitional choice you made**
+as a question to the user — one per definition, multiple choice,
+through the cockpit's question tool when it has one, numbered prose
+otherwise:
+
+> **gross_profit** — I used revenue − COGS (textbook). The other
+> family is revenue − all expenses (closer to operating profit).
+> Which does this business mean? My grounds: … · confidence 0.7.
+
+What counts as definitional: any grounding assumption with
+`dimension: "definition"` whose basis is your judgment rather than a
+measurement or an engineer pin. Carry a `confidence` on each —
+anything below 1.0 is you saying *unpinned*. Keep data findings
+(a bank gap, a turnover-not-balance table) in a separate list: those
+are facts to explain, not choices to make.
+
+The user's answer lands as a **re-gloss** — the human slot
+supersedes and outranks yours in every collapsed read, and the
+grounding's basis becomes `engineer-pinned` from then on. Until
+then, the pin list is a read: every metric gloss whose only current
+voice is yours is a definition standing on agent judgment alone, and
+your report must say so.
