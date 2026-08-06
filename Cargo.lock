@@ -2587,6 +2587,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "datafusion",
+ "futures",
  "serde_json",
  "tempfile",
  "thiserror 2.0.19",
@@ -2646,6 +2647,7 @@ version = "0.1.0"
 dependencies = [
  "datafusion",
  "datafusion-functions-json",
+ "futures",
  "glossql-catalog",
  "glossql-glossary",
  "glossql-import",

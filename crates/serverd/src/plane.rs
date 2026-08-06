@@ -17,6 +17,7 @@ pub struct Plane {
     lake: Option<Lake>,
     runtime: Arc<dyn FunctionRuntime>,
     sessions: RwLock<HashMap<String, Arc<Session>>>,
+    row_cap: usize,
 }
 
 impl Plane {
@@ -26,7 +27,15 @@ impl Plane {
             lake,
             runtime,
             sessions: RwLock::new(HashMap::new()),
+            row_cap: usize::MAX,
         }
+    }
+
+    /// The cap the doors render at, pushed down so the engine is not asked
+    /// for rows nobody will read.
+    pub fn with_row_cap(mut self, cap: usize) -> Self {
+        self.row_cap = cap;
+        self
     }
 
     /// The actor's session, created on first sight and kept for the
@@ -41,8 +50,9 @@ impl Plane {
         if let Some(session) = sessions.get(&key) {
             return Ok(Arc::clone(session));
         }
-        let mut session =
-            Session::new(self.store.clone(), actor)?.with_runtime(Arc::clone(&self.runtime));
+        let mut session = Session::new(self.store.clone(), actor)?
+            .with_row_cap(self.row_cap)
+            .with_runtime(Arc::clone(&self.runtime));
         if let Some(lake) = &self.lake {
             session = session.with_lake(lake.clone());
         }

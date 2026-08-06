@@ -47,6 +47,19 @@ impl FunctionRuntime for Fake {
                 "computed_at": "2026-08-06T00:00:00Z"
             }),
             "outliers" => json!({"rows": [1]}),
+            // A detector that actually reads its context: one slot agrees
+            // with itself, two disagree. What it answers therefore depends
+            // on the witness it was called for — which is the point of the
+            // shared-detector test below.
+            "slot_bands" => {
+                let slots = context["slots"].as_array().map_or(0, Vec::len);
+                let (band, score) = if slots > 1 { ("red", 1.0) } else { ("green", 0.0) };
+                json!({
+                    "subject": context["subject"], "aspect": context["aspect"],
+                    "witness": context["witness"], "band": band, "score": score,
+                    "computed_at": "2026-08-06T00:00:00Z"
+                })
+            }
             _ => json!({"ok": true}),
         })
     }
@@ -582,4 +595,139 @@ async fn a_grounding_admits_and_serves_its_sql_back() {
         .await
         .unwrap_err();
     assert!(e.to_string().contains("grounding"), "{e}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn witnesses_sharing_a_detector_hold_their_own_verdicts() {
+    // The defect found 2026-08-06: a verdict was cached under (subject,
+    // function), so the first witness to compute answered for every other
+    // witness on the same detector — and sharing one is the shipped idiom
+    // (role, behavior and unit all band through `slot_entropy`). Here
+    // `alpha` is contested and `beta` is not; each must say so itself.
+    let store = Store::open_memory().await.unwrap();
+    let fake = Arc::new(Fake::default());
+    let agent = session_with(ActorKind::Agent, "agent-1", &store)
+        .await
+        .with_runtime(fake.clone());
+    run(&agent, SETUP).await;
+    run(
+        &agent,
+        r#"
+        DECLARE ASPECT alpha WITH $${"type": "object"}$$ AS FACT ON COLUMN;
+        DECLARE ASPECT beta WITH $${"type": "object"}$$ AS FACT ON COLUMN;
+        DECLARE FUNCTION slot_bands FOR fin FROM 'functions/bands.rhai';
+        DECLARE WITNESS alpha_w ON alpha BY (AGENT, HUMAN) DETECTOR slot_bands THRESHOLD 0.5;
+        DECLARE WITNESS beta_w ON beta BY (AGENT, HUMAN) DETECTOR slot_bands THRESHOLD 0.5;
+        GLOSS alpha ON orders.amount AS $${"reading": "agent's"}$$;
+        GLOSS beta ON orders.amount AS $${"reading": "uncontested"}$$;
+        "#,
+    )
+    .await;
+
+    // The human disputes `alpha` only.
+    let human = session_with(ActorKind::Human, "philipp", &store)
+        .await
+        .with_runtime(fake.clone());
+    run(&human, "USE fin;").await;
+    run(
+        &human,
+        r#"GLOSS alpha ON orders.amount AS $${"reading": "human's, and different"}$$;"#,
+    )
+    .await;
+
+    let attested = table(
+        &agent,
+        "SELECT aspect, witness, band, score FROM ATTEST(orders.amount) ORDER BY aspect;",
+    )
+    .await;
+    insta::assert_snapshot!(attested, @r"
+    +--------+---------+-------+-------+
+    | aspect | witness | band  | score |
+    +--------+---------+-------+-------+
+    | alpha  | alpha_w | red   | 1.0   |
+    | beta   | beta_w  | green | 0.0   |
+    +--------+---------+-------+-------+
+    ");
+
+    // And the collapse follows the verdict that belongs to each aspect:
+    // the disputed value is withheld, the undisputed one is served.
+    let collapsed = table(
+        &agent,
+        "SELECT aspect, state, value FROM GLOSSARY(orders.amount) ORDER BY aspect;",
+    )
+    .await;
+    insta::assert_snapshot!(collapsed, @r#"
+    +--------+-----------+----------------------------+
+    | aspect | state     | value                      |
+    +--------+-----------+----------------------------+
+    | alpha  | contested |                            |
+    | beta   | current   | {"reading": "uncontested"} |
+    +--------+-----------+----------------------------+
+    "#);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn select_into_is_not_a_way_to_make_a_table() {
+    // `SELECT … INTO t` parses as a Query and plans as CREATE MEMORY
+    // TABLE, so it walked through an allowlist keyed on the statement
+    // variant (found 2026-08-06). Tables come from recipes.
+    let (session, _) = agent_session().await;
+    run(&session, SETUP).await;
+    let e = session
+        .execute("SELECT 1 AS a INTO scratch;")
+        .await
+        .unwrap_err();
+    assert!(e.to_string().contains("SELECT INTO"), "{e}");
+    assert!(
+        session.execute("SELECT * FROM scratch;").await.is_err(),
+        "nothing was created"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_forwarded_delete_carries_one_statement_only() {
+    // SQLite reads `$tag$` as a bind parameter, not a quote, so a
+    // dollar-quoted body carrying a `;` used to arrive as a statement
+    // sequence and execute — that payload promoted an agent's gloss to
+    // human rank (found 2026-08-06). The delete now renders from the AST
+    // with its literals normalized, so the payload is what it always
+    // claimed to be: a string nobody's body matches.
+    let (session, _) = agent_session().await;
+    run(&session, SETUP).await;
+    run(
+        &session,
+        r#"GLOSS unit ON orders.amount AS $${"value": "EUR"}$$;"#,
+    )
+    .await;
+    let outcomes = session
+        .execute(
+            "DELETE FROM glossary WHERE body = $q$ ; UPDATE glossary SET actor_kind='human'; --$q$;",
+        )
+        .await
+        .unwrap();
+    assert!(
+        matches!(outcomes.first(), Some(Outcome::Affected(0))),
+        "the payload matched nothing and ran as nothing: {outcomes:?}"
+    );
+
+    // The gloss is untouched, and it is still an agent's — the rank the
+    // collapse turns on.
+    let rows = table(
+        &session,
+        "SELECT actor_kind, body FROM glossary WHERE subject = 'orders.amount';",
+    )
+    .await;
+    assert!(rows.contains("agent"), "{rows}");
+    assert!(!rows.contains("human"), "{rows}");
+
+    // A dollar-quoted body without the trick still deletes: normalizing it
+    // to a single-quoted string keeps the value identical.
+    let outcomes = session
+        .execute(r#"DELETE FROM glossary WHERE body = $q${"value": "EUR"}$q$;"#)
+        .await
+        .unwrap();
+    assert!(
+        matches!(outcomes.first(), Some(Outcome::Affected(1))),
+        "{outcomes:?}"
+    );
 }

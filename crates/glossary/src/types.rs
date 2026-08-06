@@ -47,6 +47,20 @@ pub enum Error {
     },
     #[error("statement targets `{0}` — only the glossary and cache relations accept forwarded SQL")]
     ForwardRejected(String),
+    #[error(
+        "forwarded delete carries a `{char}` outside a quoted literal — one statement is forwarded, never a sequence"
+    )]
+    ForwardUnsafe { char: char },
+    #[error(
+        "aspect `{name}` has {values} cached function value(s) under it — delete them before re-declaring it differently"
+    )]
+    AspectValued { name: String, values: i64 },
+    #[error(
+        "function `{function}` both ACCEPTS and RETURNS `{aspect}` — a function cannot be its own input"
+    )]
+    SelfAccepting { function: String, aspect: String },
+    #[error("`{0}` is a store relation — a table cannot take its name, it would shadow the relation")]
+    ReservedTableName(String),
     #[error("stored JSON is corrupt: {0}")]
     Corrupt(String),
     #[error(transparent)]

@@ -363,9 +363,12 @@ SELECT outliers() FROM orders.amount;
 
 The first run computes and caches; later selects read the cache. The cache
 is an ordinary relation, like the glossary, named `cache`: one row per
-(subject, function) — `(subject, function, body, computed_at, snapshot_id)`,
-the snapshot being the subject's table state the run computed against
-(§5.2). Re-running is removal, not a modifier — DELETE at whatever
+(subject, function, witness) —
+`(subject, function, witness, body, computed_at, snapshot_id)`, the
+snapshot being the subject's table state the run computed against (§5.2).
+`witness` is empty for a function's own value, which is keyed by its
+subject like any value; it names the seat for a detector's verdict, which
+depends on the aspect, threshold and slots that witness holds (§7.2). Re-running is removal, not a modifier — DELETE at whatever
 grain the WHERE clause picks, and select again:
 
 ```sql
@@ -437,6 +440,9 @@ The **standard attest schema** is fixed:
 Detectors run **at read**: a verdict missing or older than the newest slot
 write recomputes when `ATTEST()` or a collapsed `GLOSSARY()` read needs it,
 and caches like any function result — `DELETE FROM cache` still forces it.
+A verdict belongs to its **witness**, not to its detector: one detector
+serving three witnesses holds three verdicts, computed from each witness's
+own slots against its own threshold.
 Detail lives in the value function's own cached output, reachable by
 SELECT. Sweeps ("all contested
 behavior columns") are WHERE clauses over the attest relation, never a

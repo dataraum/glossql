@@ -210,6 +210,29 @@ async fn fixture_11_add_source_flow() {
         .unwrap();
     assert_eq!(single_value(&landings), "2");
 
+    // A re-land that cannot run leaves the landing it was replacing
+    // (found 2026-08-06: the old table was dropped before the new recipe
+    // had produced a single batch, so a typo destroyed it with no rollback).
+    let broken = "DECLARE RECIPE orders ON fin FROM erp_export AS $$SELECT ordr_id FROM read_parquet('orders/*.parquet')$$;";
+    let err = session.execute(broken).await.unwrap_err();
+    assert!(err.to_string().contains("ordr_id"), "{err}");
+    let survivors = session
+        .execute("SELECT count(*) FROM orders;")
+        .await
+        .unwrap();
+    assert_eq!(
+        single_value(&survivors),
+        "3",
+        "the live landing is untouched by a recipe that never ran"
+    );
+    // And the recipe row still describes what actually landed, so the
+    // retry does not answer `unchanged` over a table that was never made.
+    let recipes = session
+        .execute("SELECT count(*) FROM imports WHERE table_name = 'orders';")
+        .await
+        .unwrap();
+    assert_eq!(single_value(&recipes), "2");
+
     // The substrate allowlist: schema-altering SQL is refused at the door.
     let err = session
         .execute("CREATE VIEW shadow AS SELECT * FROM orders;")

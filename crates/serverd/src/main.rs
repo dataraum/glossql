@@ -60,7 +60,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // scripts the way the corpus spells them: 'functions/profile.rhai'.
     let runtime = Arc::new(RhaiRuntime::new(args.workspace.clone()));
 
-    let plane = Arc::new(Plane::new(store.clone(), Some(lake), runtime));
+    let plane = Arc::new(Plane::new(store.clone(), Some(lake), runtime).with_row_cap(args.doors.row_cap));
     // A fresh workspace receives the shipped system before any door opens.
     bootstrap(&store, &plane, &args.workspace, Actor {
         kind: ActorKind::Human,

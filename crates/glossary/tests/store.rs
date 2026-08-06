@@ -394,14 +394,14 @@ async fn function_scope_gates_visibility() {
 #[tokio::test]
 async fn cache_serves_the_latest_row_per_subject_and_function() {
     let s = store().await;
-    s.cache_put("fin", "orders", "profile", r#"{"n": 1}"#, None)
+    s.cache_put("fin", "orders", "profile", None, r#"{"n": 1}"#, None)
         .await
         .unwrap();
-    s.cache_put("fin", "orders", "profile", r#"{"n": 2}"#, None)
+    s.cache_put("fin", "orders", "profile", None, r#"{"n": 2}"#, None)
         .await
         .unwrap();
     let row = s
-        .cache_get("fin", "orders", "profile")
+        .cache_get("fin", "orders", "profile", None)
         .await
         .unwrap()
         .unwrap();
@@ -457,10 +457,10 @@ async fn a_glossary_delete_invalidates_detector_verdicts() {
     )
     .await
     .unwrap();
-    s.cache_put("fin", "orders.amount", "entropy", r#"{"band": "red"}"#, None)
+    s.cache_put("fin", "orders.amount", "entropy", Some("unit_w"), r#"{"band": "red"}"#, None)
         .await
         .unwrap();
-    s.cache_put("fin", "orders.amount", "vibes", r#"{"n": 1}"#, None)
+    s.cache_put("fin", "orders.amount", "vibes", None, r#"{"n": 1}"#, None)
         .await
         .unwrap();
 
@@ -474,14 +474,14 @@ async fn a_glossary_delete_invalidates_detector_verdicts() {
     .await
     .unwrap();
     assert!(
-        s.cache_get("fin", "orders.amount", "entropy")
+        s.cache_get("fin", "orders.amount", "entropy", Some("unit_w"))
             .await
             .unwrap()
             .is_none(),
         "the detector verdict is gone — it recomputes at the next read"
     );
     assert!(
-        s.cache_get("fin", "orders.amount", "vibes")
+        s.cache_get("fin", "orders.amount", "vibes", None)
             .await
             .unwrap()
             .is_some(),
@@ -508,10 +508,10 @@ async fn declaration_relations_are_invalidation_edges() {
     };
     s.declare_function(&other).await.unwrap();
 
-    s.cache_put("fin", "orders.amount", "evidence", r#"{"applicable": false}"#, None)
+    s.cache_put("fin", "orders.amount", "evidence", None, r#"{"applicable": false}"#, None)
         .await
         .unwrap();
-    s.cache_put("fin", "orders.amount", "vibes", r#"{"n": 1}"#, None)
+    s.cache_put("fin", "orders.amount", "vibes", None, r#"{"n": 1}"#, None)
         .await
         .unwrap();
 
@@ -519,19 +519,19 @@ async fn declaration_relations_are_invalidation_edges() {
         .await
         .unwrap();
     assert!(
-        s.cache_get("fin", "orders.amount", "evidence")
+        s.cache_get("fin", "orders.amount", "evidence", None)
             .await
             .unwrap()
             .is_none(),
         "a declared edge kills the accepting function's cache"
     );
 
-    s.cache_put("fin", "orders.amount", "evidence", r#"{"applicable": false}"#, None)
+    s.cache_put("fin", "orders.amount", "evidence", None, r#"{"applicable": false}"#, None)
         .await
         .unwrap();
     s.import_put("fin", "payments", 10, 10).await.unwrap();
     assert!(
-        s.cache_get("fin", "orders.amount", "evidence")
+        s.cache_get("fin", "orders.amount", "evidence", None)
             .await
             .unwrap()
             .is_none(),
@@ -539,7 +539,7 @@ async fn declaration_relations_are_invalidation_edges() {
     );
 
     assert!(
-        s.cache_get("fin", "orders.amount", "vibes")
+        s.cache_get("fin", "orders.amount", "vibes", None)
             .await
             .unwrap()
             .is_some(),
@@ -578,11 +578,19 @@ async fn recipe_redeclare_is_content_idempotent_and_change_is_refused() {
         Declaration::Recipe(r) => r,
         other => panic!("not a recipe: {other:?}"),
     };
+    // The session's two steps: decide what the declaration does, land it,
+    // then record it. Nothing lands here (no lake), so the record follows
+    // the decision directly.
+    async fn declare(s: &Store, d: &glossql_parser::RecipeDecl) -> RecipeAdmission {
+        let admission = s.recipe_admission(d).await.unwrap();
+        s.put_recipe(d).await.unwrap();
+        admission
+    }
 
     let v1 = recipe("DECLARE RECIPE orders ON fin FROM erp AS $$SELECT * FROM read_parquet('orders/*.parquet')$$;");
-    assert_eq!(s.declare_recipe(&v1).await.unwrap(), RecipeAdmission::Created);
+    assert_eq!(declare(&s, &v1).await, RecipeAdmission::Created);
     assert_eq!(
-        s.declare_recipe(&v1).await.unwrap(),
+        declare(&s, &v1).await,
         RecipeAdmission::Unchanged
     );
 
@@ -590,14 +598,14 @@ async fn recipe_redeclare_is_content_idempotent_and_change_is_refused() {
     // the session re-lands on `Replaced`.
     let v2 = recipe("DECLARE RECIPE orders ON fin FROM erp AS $$SELECT * FROM read_parquet('orders_v2/*.parquet')$$;");
     assert_eq!(
-        s.declare_recipe(&v2).await.unwrap(),
+        declare(&s, &v2).await,
         RecipeAdmission::Replaced
     );
     let row = s.recipe("fin", "orders").await.unwrap().unwrap();
     assert!(row.sql.contains("orders_v2"), "{}", row.sql);
     // The new spelling is now the unchanged one.
     assert_eq!(
-        s.declare_recipe(&v2).await.unwrap(),
+        declare(&s, &v2).await,
         RecipeAdmission::Unchanged
     );
 }
@@ -613,10 +621,10 @@ async fn a_gloss_invalidates_the_caches_of_functions_accepting_its_aspect() {
         unreachable!()
     };
     s.declare_function(&f).await.unwrap();
-    s.cache_put("fin", "orders.amount", "conv", "{}", None)
+    s.cache_put("fin", "orders.amount", "conv", None, "{}", None)
         .await
         .unwrap();
-    s.cache_put("fin", "invoices.total", "conv", "{}", None)
+    s.cache_put("fin", "invoices.total", "conv", None, "{}", None)
         .await
         .unwrap();
 
@@ -629,14 +637,14 @@ async fn a_gloss_invalidates_the_caches_of_functions_accepting_its_aspect() {
     .await
     .unwrap();
     assert!(
-        s.cache_get("fin", "orders.amount", "conv")
+        s.cache_get("fin", "orders.amount", "conv", None)
             .await
             .unwrap()
             .is_none(),
         "the dependent evidence died with the write"
     );
     assert!(
-        s.cache_get("fin", "invoices.total", "conv")
+        s.cache_get("fin", "invoices.total", "conv", None)
             .await
             .unwrap()
             .is_some()
@@ -648,7 +656,7 @@ async fn a_gloss_invalidates_the_caches_of_functions_accepting_its_aspect() {
         .await
         .unwrap();
     assert!(
-        s.cache_get("fin", "invoices.total", "conv")
+        s.cache_get("fin", "invoices.total", "conv", None)
             .await
             .unwrap()
             .is_none()
@@ -720,4 +728,124 @@ async fn grain_gates_glosses_and_bounds_disclosure() {
         !states.iter().any(|(subject, _)| subject == "orders"),
         "{states:?}"
     );
+}
+
+// -- what the adversarial review found (2026-08-06) ------------------------
+
+#[tokio::test]
+async fn a_forwarded_delete_refuses_a_statement_sequence() {
+    // The store executes forwarded text verbatim, and SQLite runs every
+    // `;`-separated statement in it. The caller normalizes literals; this
+    // is the check where the execution happens, so it holds whatever the
+    // caller did.
+    let s = store().await;
+    let e = s
+        .forward_delete(
+            "cache",
+            "DELETE FROM cache WHERE subject = 'x'; DROP TABLE glossary",
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(e, Error::ForwardUnsafe { .. }), "{e}");
+    let e = s
+        .forward_delete("cache", "DELETE FROM cache WHERE subject = $q$x$q$")
+        .await
+        .unwrap_err();
+    assert!(matches!(e, Error::ForwardUnsafe { .. }), "{e}");
+    // A `;` inside a quoted literal is data, not a separator.
+    s.forward_delete("cache", "DELETE FROM cache WHERE subject = 'a;b'")
+        .await
+        .expect("quoted semicolons are values");
+}
+
+#[tokio::test]
+async fn a_subject_is_data_in_the_scope_predicate_not_a_pattern() {
+    // `_` is LIKE's single-character wildcard, so `order_items` used to
+    // sweep `orderxitems` — and its cached evidence with it.
+    let s = store().await;
+    s.cache_put("fin", "order_items.qty", "profile", None, "{}", None)
+        .await
+        .unwrap();
+    s.cache_put("fin", "orderxitems.qty", "profile", None, "{}", None)
+        .await
+        .unwrap();
+    s.invalidate_table_evidence("fin", "order_items").await.unwrap();
+    assert!(
+        s.cache_get("fin", "order_items.qty", "profile", None)
+            .await
+            .unwrap()
+            .is_none(),
+        "the named table's evidence is cleared"
+    );
+    assert!(
+        s.cache_get("fin", "orderxitems.qty", "profile", None)
+            .await
+            .unwrap()
+            .is_some(),
+        "a neighbour whose name differs by one character keeps its evidence"
+    );
+}
+
+#[tokio::test]
+async fn a_table_cannot_take_a_store_relation_name() {
+    let s = store().await;
+    let Declaration::Dataset(ds) = decl("DECLARE DATASET fin SET (purpose: 'test');") else {
+        unreachable!()
+    };
+    s.declare_dataset(&ds).await.unwrap();
+    let Declaration::Source(src) = decl("DECLARE SOURCE erp SET (type: csv, location: 'lake');")
+    else {
+        unreachable!()
+    };
+    s.declare_source(&src).await.unwrap();
+    let Declaration::Recipe(r) = decl(
+        "DECLARE RECIPE imports ON fin FROM erp AS $$SELECT * FROM read_csv('i.csv')$$;",
+    ) else {
+        unreachable!()
+    };
+    let e = s.recipe_admission(&r).await.unwrap_err();
+    assert!(matches!(e, Error::ReservedTableName(_)), "{e}");
+}
+
+#[tokio::test]
+async fn a_function_cannot_accept_the_aspect_it_returns() {
+    let s = store().await;
+    let Declaration::Function(f) = decl(
+        "DECLARE FUNCTION refine FOR fin FROM 'r.rhai' ACCEPTS (unit) RETURNS unit;",
+    ) else {
+        unreachable!()
+    };
+    let e = s.declare_function(&f).await.unwrap_err();
+    assert!(matches!(e, Error::SelfAccepting { .. }), "{e}");
+}
+
+#[tokio::test]
+async fn an_aspect_with_cached_values_under_it_does_not_re_declare() {
+    // Glosses were counted, function values were not — and a MEASUREMENT
+    // aspect can only hold the latter, so its schema could change under
+    // values validated against the old one.
+    let s = store().await;
+    let Declaration::Aspect(a) = decl(
+        r#"DECLARE ASPECT profile_stats WITH $${"type": "object"}$$ AS MEASUREMENT;"#,
+    ) else {
+        unreachable!()
+    };
+    s.declare_aspect(&a).await.unwrap();
+    let Declaration::Function(f) =
+        decl("DECLARE FUNCTION profile FOR fin FROM 'p.rhai' RETURNS profile_stats;")
+    else {
+        unreachable!()
+    };
+    s.declare_function(&f).await.unwrap();
+    s.cache_put("fin", "orders.amount", "profile", None, r#"{"n": 1}"#, None)
+        .await
+        .unwrap();
+
+    let Declaration::Aspect(stricter) = decl(
+        r#"DECLARE ASPECT profile_stats WITH $${"type": "object", "required": ["n"]}$$ AS MEASUREMENT;"#,
+    ) else {
+        unreachable!()
+    };
+    let e = s.declare_aspect(&stricter).await.unwrap_err();
+    assert!(matches!(e, Error::AspectValued { .. }), "{e}");
 }

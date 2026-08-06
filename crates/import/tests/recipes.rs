@@ -137,6 +137,19 @@ async fn recipe_paths_cannot_escape_the_source_root() {
     .await
     .unwrap_err();
     assert!(err.to_string().contains("must stay under the source's location"));
+
+    // A symlink under the root is the same escape by another spelling
+    // (2026-08-06): the fence resolves the path before reading it.
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::write(outside.path().join("secret.csv"), "x\n9\n").unwrap();
+    std::os::unix::fs::symlink(outside.path(), dir.path().join("link")).unwrap();
+    let err = run_recipe(
+        &spec("csv", dir.path()),
+        "SELECT * FROM read_csv('link/secret.csv')",
+    )
+    .await
+    .unwrap_err();
+    assert!(err.to_string().contains("outside the source's location"), "{err}");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -149,4 +162,47 @@ async fn relational_sources_error_until_the_adbc_executor_exists() {
     };
     let err = run_recipe(&s, "SELECT 1").await.unwrap_err();
     assert!(err.to_string().contains("ADBC"));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_recipe_body_cannot_write_outside_its_read() {
+    // Recipe and probe SQL runs in a scratch context that the statement
+    // allowlist never sees, and DataFusion's default options permit DDL,
+    // DML and COPY — a probe could write a parquet file anywhere the
+    // process can (found 2026-08-06).
+    let dir = tempfile::tempdir().unwrap();
+    write_parquet_fixture(dir.path()).await;
+    let spec = spec("parquet", dir.path());
+    let escape = dir.path().join("escaped.parquet");
+
+    let e = run_recipe(
+        &spec,
+        &format!(
+            "COPY (SELECT 1 AS a) TO '{}' STORED AS PARQUET",
+            escape.display()
+        ),
+    )
+    .await
+    .unwrap_err();
+    assert!(e.to_string().to_lowercase().contains("copy"), "{e}");
+    assert!(!escape.exists(), "nothing was written");
+
+    let e = glossql_import::run_probe(
+        &spec,
+        &format!(
+            "COPY (SELECT 1 AS a) TO '{}' STORED AS PARQUET",
+            escape.display()
+        ),
+        200,
+    )
+    .await
+    .unwrap_err();
+    assert!(e.to_string().to_lowercase().contains("copy"), "{e}");
+    assert!(!escape.exists(), "nothing was written");
+
+    // Reading is untouched.
+    let landed = run_recipe(&spec, "SELECT * FROM read_parquet('orders/*.parquet')")
+        .await
+        .unwrap();
+    assert_eq!(landed.batches.iter().map(|b| b.num_rows()).sum::<usize>(), 2);
 }

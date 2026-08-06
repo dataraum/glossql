@@ -27,6 +27,7 @@ use datafusion::datasource::listing::{
     ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
 };
 use datafusion::error::DataFusionError;
+use futures::StreamExt as _;
 use datafusion::logical_expr::Expr;
 use datafusion::prelude::SessionContext;
 use datafusion::scalar::ScalarValue;
@@ -137,7 +138,7 @@ pub async fn run_recipe(spec: &SourceSpec, sql: &str) -> Result<Landed> {
         );
     }
 
-    let df = ctx.sql(sql).await?;
+    let df = ctx.sql_with_options(sql, read_only()).await?;
     let schema: SchemaRef = Arc::new(df.schema().as_arrow().clone());
     let batches = df.collect().await?;
 
@@ -159,7 +160,7 @@ pub async fn run_recipe(spec: &SourceSpec, sql: &str) -> Result<Landed> {
 /// SQL surface, the same path resolution, landing nothing. The result
 /// carries the schema the recipe would land, so `LIMIT 0` rehearses the
 /// identity a `DECLARE RECIPE` would stamp.
-pub async fn run_probe(spec: &SourceSpec, sql: &str) -> Result<Vec<RecordBatch>> {
+pub async fn run_probe(spec: &SourceSpec, sql: &str, row_cap: usize) -> Result<Vec<RecordBatch>> {
     if spec.kind == SourceKind::RelationalDb {
         return Err(Error::RelationalSource(spec.name.clone()));
     }
@@ -180,15 +181,39 @@ pub async fn run_probe(spec: &SourceSpec, sql: &str) -> Result<Vec<RecordBatch>>
             }),
         );
     }
-    let df = ctx.sql(sql).await?;
+    let df = ctx.sql_with_options(sql, read_only()).await?;
     let schema: SchemaRef = Arc::new(df.schema().as_arrow().clone());
-    let mut batches = df.collect().await?;
+    // A rehearsal is read at the door like any other answer, so it stops at
+    // the door's cap — a probe without a LIMIT used to pull the whole
+    // source into memory to show 200 rows of it.
+    let mut stream = df.execute_stream().await?;
+    let mut batches = Vec::new();
+    let mut rows = 0usize;
+    while let Some(batch) = stream.next().await {
+        let batch = batch?;
+        rows += batch.num_rows();
+        batches.push(batch);
+        if rows > row_cap {
+            break;
+        }
+    }
     if batches.is_empty() {
         // An empty result still carries the shape — the whole point of a
         // `LIMIT 0` rehearsal.
         batches.push(RecordBatch::new_empty(schema));
     }
     Ok(batches)
+}
+
+/// Recipe and probe SQL is a read at its source: it selects from the
+/// `read_*` table functions and nothing else. Without this, DataFusion's
+/// default options let a body `COPY` to any path the process can write
+/// (found 2026-08-06) — the statement allowlist never sees this SQL.
+fn read_only() -> datafusion::prelude::SQLOptions {
+    datafusion::prelude::SQLOptions::new()
+        .with_allow_ddl(false)
+        .with_allow_dml(false)
+        .with_allow_statements(false)
 }
 
 fn canonical_root(spec: &SourceSpec) -> Result<PathBuf> {
@@ -236,6 +261,23 @@ impl TableFunctionImpl for ReadFiles {
             )));
         }
         let target = self.root.join(rel_path);
+        // `..` is not the only way out: a symlink under the root resolves
+        // wherever it points. Check the deepest real directory the path
+        // names — everything before the first glob segment.
+        let mut real = self.root.clone();
+        for component in rel_path.components() {
+            if component.as_os_str().to_string_lossy().contains(['*', '?', '[']) {
+                break;
+            }
+            real.push(component);
+        }
+        if let Ok(resolved) = real.canonicalize()
+            && !resolved.starts_with(&self.root)
+        {
+            return Err(plan_err(format!(
+                "`{rel}` resolves outside the source's location"
+            )));
+        }
 
         let format: Arc<dyn FileFormat> = match self.kind {
             SourceKind::Parquet => Arc::new(ParquetFormat::default()),

@@ -118,9 +118,13 @@ async fn ensure_verdicts(
             }
         }
         for (subject, newest) in newest {
+            // Keyed by the witness, not by the detector alone: the same
+            // detector serving `role` and `behavior` computes a verdict for
+            // each, from different slots against a different threshold
+            // (defect found 2026-08-06 — one row was answering for both).
             let fresh = shared
                 .store
-                .cache_get(dataset, subject, &detector)
+                .cache_get(dataset, subject, &detector, Some(&w.name))
                 .await?
                 .is_some_and(|c| c.computed_at.as_str() >= newest);
             if fresh {
@@ -169,7 +173,14 @@ async fn ensure_verdicts(
             };
             shared
                 .store
-                .cache_put(dataset, subject, &detector, &output.to_string(), snapshot)
+                .cache_put(
+                    dataset,
+                    subject,
+                    &detector,
+                    Some(&w.name),
+                    &output.to_string(),
+                    snapshot,
+                )
                 .await?;
         }
     }

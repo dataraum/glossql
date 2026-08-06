@@ -7,11 +7,13 @@ use datafusion::catalog::{CatalogProvider, SchemaProvider, TableProvider};
 use datafusion::common::DataFusionError;
 use datafusion::datasource::MemTable;
 use datafusion::execution::SendableRecordBatchStream;
+use futures::StreamExt as _;
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion::sql::parser::Statement as DFStatement;
 use datafusion::sql::sqlparser::ast::{
-    FromTable, ObjectType, Statement as SQLStatement, TableFactor, visit_relations,
+    Expr, FromTable, ObjectType, Query, SetExpr, Statement as SQLStatement, TableFactor, Value as SqlValue,
+    visit_expressions_mut, visit_relations,
 };
 use datafusion::sql::sqlparser::parser::ParserError;
 use serde_json::Value;
@@ -131,11 +133,25 @@ struct CtxDoor {
     handle: tokio::runtime::Handle,
 }
 
+/// A script reads; it never writes. `SessionContext::sql` permits DDL, DML
+/// and statements by default (datafusion context/mod.rs:614), which would
+/// hand any declared function a door around the statement allowlist.
+pub(crate) fn read_only() -> datafusion::prelude::SQLOptions {
+    datafusion::prelude::SQLOptions::new()
+        .with_allow_ddl(false)
+        .with_allow_dml(false)
+        .with_allow_statements(false)
+}
+
 impl SqlDoor for CtxDoor {
     fn sql(&self, query: &str) -> Result<Vec<RecordBatch>, String> {
         tokio::task::block_in_place(|| {
             self.handle.block_on(async {
-                let df = self.ctx.sql(query).await.map_err(|e| e.to_string())?;
+                let df = self
+                    .ctx
+                    .sql_with_options(query, read_only())
+                    .await
+                    .map_err(|e| e.to_string())?;
                 let schema = Arc::new(df.schema().as_arrow().clone());
                 let mut batches = df.collect().await.map_err(|e| e.to_string())?;
                 if batches.is_empty() {
@@ -158,7 +174,10 @@ impl SqlDoor for CtxDoor {
                         let ctx = self.ctx.clone();
                         let q = q.clone();
                         handles.push(tokio::spawn(async move {
-                            let df = ctx.sql(&q).await.map_err(|e| e.to_string())?;
+                            let df = ctx
+                                .sql_with_options(&q, read_only())
+                                .await
+                                .map_err(|e| e.to_string())?;
                             let schema = Arc::new(df.schema().as_arrow().clone());
                             let mut batches =
                                 df.collect().await.map_err(|e| e.to_string())?;
@@ -185,6 +204,10 @@ pub struct Session {
     /// Bare-name mounts of the `USE`'d dataset's tables in the default
     /// schema, so `orders` and `fin.orders` resolve alike.
     aliased: RwLock<Vec<String>>,
+    /// How many rows the reader will actually be shown. It bounds what the
+    /// non-streaming paths ask the engine for; `usize::MAX` (the default)
+    /// means the caller drains everything itself.
+    row_cap: usize,
 }
 
 impl Session {
@@ -225,7 +248,15 @@ impl Session {
             shared,
             actor,
             aliased: RwLock::new(Vec::new()),
+            row_cap: usize::MAX,
         })
+    }
+
+    /// The door's row cap, so the engine is not asked for rows nobody will
+    /// see (probes and statement sequences answer through `execute`).
+    pub fn with_row_cap(mut self, cap: usize) -> Self {
+        self.row_cap = cap;
+        self
     }
 
     pub fn with_runtime(self, runtime: Arc<dyn FunctionRuntime>) -> Self {
@@ -294,10 +325,13 @@ impl Session {
                 format!("DECLARE DATASET {}", d.name.value)
             }
             Declaration::Recipe(d) => {
-                let admission = store.declare_recipe(d).await?;
+                let admission = store.recipe_admission(d).await?;
                 let (dataset, table) = (d.dataset.value.as_str(), d.table.value.as_str());
                 match self.lake() {
-                    None => format!("DECLARE RECIPE {table} ON {dataset}"),
+                    None => {
+                        store.put_recipe(d).await?;
+                        format!("DECLARE RECIPE {table} ON {dataset}")
+                    }
                     Some(lake)
                         if admission == RecipeAdmission::Unchanged
                             && lake.table_exists(dataset, table).await? =>
@@ -309,8 +343,16 @@ impl Session {
                         // recipe drops the old landing and its cached
                         // evidence, then lands fresh. Glosses stay — the
                         // snapshot id discloses their age.
+                        //
+                        // The new recipe runs *first*: until its SQL has
+                        // produced batches there is nothing to replace the
+                        // old landing with, and a recipe that errors must
+                        // not have destroyed the table it was replacing.
                         let replaced = admission == RecipeAdmission::Replaced
                             && lake.table_exists(dataset, table).await?;
+                        let landed =
+                            glossql_import::run_recipe(&self.source_spec(&d.source.value).await?, &d.sql)
+                                .await?;
                         if replaced {
                             let mounted = self.mount_schema(dataset).await?;
                             mounted.deregister_table(table)?;
@@ -320,9 +362,8 @@ impl Session {
                                 .invalidate_table_evidence(dataset, table)
                                 .await?;
                         }
-                        let (rows, dropped) = self
-                            .materialize(dataset, table, &d.source.value, &d.sql)
-                            .await?;
+                        let (rows, dropped) = self.materialize(dataset, table, landed).await?;
+                        store.put_recipe(d).await?;
                         // The count arrives at the decision moment: whether
                         // the dropped rows are acceptable is the author's
                         // call, made now, on the files.
@@ -382,15 +423,15 @@ impl Session {
         Ok(Outcome::Done(format!("USE {name}")))
     }
 
-    /// Land a recipe as its table: run it at the source, create the table
-    /// through the mounted schema (live — no rebuild), append the batches
-    /// through DataFusion's INSERT path, one snapshot per materialization.
+    /// Land what a recipe produced as its table: create the table through
+    /// the mounted schema (live — no rebuild), append the batches through
+    /// DataFusion's INSERT path, one snapshot per materialization. The
+    /// recipe already ran at its source; the caller holds the result.
     async fn materialize(
         &self,
         dataset: &str,
         table: &str,
-        source: &str,
-        sql: &str,
+        landed: glossql_import::Landed,
     ) -> Result<(usize, u64), SessionError> {
         // The doors cannot guarantee statement order (M3 report), so the
         // staged name is unique per materialization, never per session.
@@ -400,8 +441,6 @@ impl Session {
             STAGED_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         );
         let lake = self.lake().expect("caller holds a lake");
-        let spec = self.source_spec(source).await?;
-        let landed = glossql_import::run_recipe(&spec, sql).await?;
         let rows: usize = landed.batches.iter().map(|b| b.num_rows()).sum();
         let dropped = landed.source_rows.saturating_sub(rows as u64);
 
@@ -439,7 +478,7 @@ impl Session {
     async fn probe(&self, probe: Probe) -> Result<Outcome, SessionError> {
         let spec = self.source_spec(&probe.source.value).await?;
         Ok(Outcome::Rows(
-            glossql_import::run_probe(&spec, &probe.sql).await?,
+            glossql_import::run_probe(&spec, &probe.sql, self.row_cap).await?,
         ))
     }
 
@@ -543,7 +582,7 @@ impl Session {
                 return Err(SessionError::DetectorNotExtractable(name.clone()));
             };
             let cached = store
-                .cache_get(&resolved.dataset, &resolved.subject, &name)
+                .cache_get(&resolved.dataset, &resolved.subject, &name, None)
                 .await?;
             let row = match cached {
                 Some(row) => row,
@@ -601,14 +640,20 @@ impl Session {
                             &resolved.dataset,
                             &resolved.subject,
                             &name,
+                            None,
                             &output.to_string(),
                             snapshot,
                         )
                         .await?;
                     store
-                        .cache_get(&resolved.dataset, &resolved.subject, &name)
+                        .cache_get(&resolved.dataset, &resolved.subject, &name, None)
                         .await?
-                        .expect("row just written")
+                        .ok_or_else(|| {
+                            SessionError::Runtime(format!(
+                                "`{name}` wrote a value that was invalidated before it could be \
+                                 read — check what it ACCEPTS"
+                            ))
+                        })?
                 }
             };
             results.push(row);
@@ -664,8 +709,13 @@ impl Session {
             return Err(SessionError::SubstrateClosed(statement_verb(&statement)));
         };
         match inner.as_ref() {
+            // `SELECT … INTO t` is a Query to the parser and a
+            // `CREATE MEMORY TABLE` to the planner — the one spelling that
+            // made tables without a recipe (found 2026-08-06).
+            SQLStatement::Query(q) if selects_into(q) => {
+                return Err(SessionError::SubstrateClosed("SELECT INTO".into()));
+            }
             SQLStatement::Query(_) => {}
-            SQLStatement::Explain { .. } => {}
             SQLStatement::Drop { object_type, names, .. }
                 if *object_type == ObjectType::Table && names.len() == 1 =>
             {
@@ -676,7 +726,23 @@ impl Session {
         }
         let plan = self.ctx.state().statement_to_plan(statement).await?;
         let frame = self.ctx.execute_logical_plan(plan).await?;
-        Ok(Outcome::Rows(frame.collect().await?))
+        // Bounded like the streaming door, for the same reason: the reader
+        // sees at most its cap, so the engine should not be asked for more
+        // than that. One row past the cap is kept, which is how the door
+        // knows the answer was truncated (found 2026-08-06: this path used
+        // to collect the whole result and trim it at render).
+        let mut stream = frame.execute_stream().await?;
+        let mut batches = Vec::new();
+        let mut rows = 0usize;
+        while let Some(batch) = stream.next().await {
+            let batch = batch?;
+            rows += batch.num_rows();
+            batches.push(batch);
+            if rows > self.row_cap {
+                break;
+            }
+        }
+        Ok(Outcome::Rows(batches))
     }
 
     /// `DROP TABLE` (PoC rules, project lead 2026-08-04): refused while the
@@ -896,12 +962,45 @@ fn verb_of(statement: &SQLStatement) -> String {
         .join(" ")
 }
 
-/// `DELETE FROM glossary … | DELETE FROM cache …` → (target, verbatim SQL).
+/// `SELECT … INTO t` anywhere in a query's body.
+fn selects_into(query: &Query) -> bool {
+    fn body_selects_into(body: &SetExpr) -> bool {
+        match body {
+            SetExpr::Select(select) => select.into.is_some(),
+            SetExpr::Query(q) => selects_into(q),
+            SetExpr::SetOperation { left, right, .. } => {
+                body_selects_into(left) || body_selects_into(right)
+            }
+            _ => false,
+        }
+    }
+    body_selects_into(&query.body)
+}
+
+/// `DELETE FROM glossary … | DELETE FROM cache …` → (target, SQL for the
+/// store). The text is rendered from the AST with dollar-quoted literals
+/// normalized to single quotes: the store speaks SQLite, which reads
+/// `$tag$` as a bind parameter rather than a quote, so a dollar-quoted body
+/// carrying a `;` used to arrive as a statement sequence (found
+/// 2026-08-06). Single quotes render escaped by sqlparser and tokenize the
+/// same in both dialects, which is what makes the round trip safe.
 fn store_delete(statement: &DFStatement) -> Option<(String, String)> {
     let DFStatement::Statement(inner) = statement else {
         return None;
     };
-    let SQLStatement::Delete(delete) = inner.as_ref() else {
+    let SQLStatement::Delete(_) = inner.as_ref() else {
+        return None;
+    };
+    let mut normalized = inner.as_ref().clone();
+    let _ = visit_expressions_mut(&mut normalized, |expr| {
+        if let Expr::Value(v) = expr
+            && let SqlValue::DollarQuotedString(s) = &v.value
+        {
+            v.value = SqlValue::SingleQuotedString(s.value.clone());
+        }
+        std::ops::ControlFlow::<()>::Continue(())
+    });
+    let SQLStatement::Delete(delete) = &normalized else {
         return None;
     };
     let tables = match &delete.from {
@@ -917,5 +1016,5 @@ fn store_delete(statement: &DFStatement) -> Option<(String, String)> {
         return None;
     }
     let target = name.0[0].as_ident()?.value.to_lowercase();
-    (target == "glossary" || target == "cache").then(|| (target, inner.to_string()))
+    (target == "glossary" || target == "cache").then(|| (target, normalized.to_string()))
 }

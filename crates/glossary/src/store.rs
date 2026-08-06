@@ -5,7 +5,7 @@
 
 use serde_json::Value;
 use sqlx::Row as _;
-use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 
 use glossql_parser::{
     AspectDecl, AspectKind, DatasetDecl, FunctionDecl, FunctionScope, Grain, JsonBody, RecipeDecl,
@@ -63,21 +63,61 @@ impl Scope {
     fn predicate(&self, column: &str) -> (String, Vec<String>) {
         match self {
             Scope::Dataset => ("1 = 1".into(), vec![]),
-            Scope::Subject(s) => (
-                format!(
-                    "({column} = ? OR {column} LIKE ? OR {column} LIKE ? \
-                      OR {column} LIKE ? OR {column} LIKE ?)"
-                ),
-                vec![
-                    s.clone(),
-                    format!("{s}.%"),
-                    format!("{s} %"),
-                    format!("%> {s}"),
-                    format!("%> {s}.%"),
-                ],
-            ),
+            Scope::Subject(s) => {
+                // The subject is data, not pattern: `order_items` must not
+                // match `orderxitems` through LIKE's `_`, and a subject
+                // carrying `%` must not sweep the dataset.
+                let e = like_escape(s);
+                (
+                    format!(
+                        "({column} = ? OR {column} LIKE ? ESCAPE '\\' \
+                          OR {column} LIKE ? ESCAPE '\\' \
+                          OR {column} LIKE ? ESCAPE '\\' \
+                          OR {column} LIKE ? ESCAPE '\\')"
+                    ),
+                    vec![
+                        s.clone(),
+                        format!("{e}.%"),
+                        format!("{e} %"),
+                        format!("%> {e}"),
+                        format!("%> {e}.%"),
+                    ],
+                )
+            }
         }
     }
+}
+
+/// A `;` or `$` outside a single-quoted literal — the two characters that
+/// let forwarded SQL become more than the one statement it was parsed as.
+/// SQLite's own quoting rules decide what "outside" means here, because
+/// SQLite is what will execute the string.
+fn stray_statement_char(sql: &str) -> Option<char> {
+    let mut quoted = false;
+    let mut chars = sql.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\'' if quoted => {
+                // `''` is an escaped quote, not the end of the literal.
+                if chars.peek() == Some(&'\'') {
+                    chars.next();
+                } else {
+                    quoted = false;
+                }
+            }
+            '\'' => quoted = true,
+            ';' | '$' if !quoted => return Some(c),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// LIKE metacharacters in a literal subject, under `ESCAPE '\'`.
+fn like_escape(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
 }
 
 const MIGRATION: &str = r#"
@@ -139,6 +179,7 @@ CREATE TABLE IF NOT EXISTS cache (
   dataset TEXT NOT NULL,
   subject TEXT NOT NULL,
   function TEXT NOT NULL,
+  witness TEXT,
   body TEXT NOT NULL,
   computed_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
   snapshot_id INTEGER
@@ -151,6 +192,10 @@ CREATE TABLE IF NOT EXISTS imports (
   landed_rows INTEGER NOT NULL,
   imported_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
+CREATE INDEX IF NOT EXISTS glossary_key
+  ON glossary (dataset, subject, aspect, actor_kind, id);
+CREATE INDEX IF NOT EXISTS cache_key
+  ON cache (dataset, subject, function, witness, id);
 "#;
 
 /// A store relation readable as a plain table through the doors. The
@@ -185,8 +230,16 @@ pub const RELATIONS: &[Relation] = &[
     },
     Relation {
         name: "cache",
-        columns: &["dataset", "subject", "function", "body", "computed_at", "snapshot_id"],
-        sql: "SELECT dataset, subject, function, body, computed_at, \
+        columns: &[
+            "dataset",
+            "subject",
+            "function",
+            "witness",
+            "body",
+            "computed_at",
+            "snapshot_id",
+        ],
+        sql: "SELECT dataset, subject, function, witness, body, computed_at, \
                      CAST(snapshot_id AS TEXT) AS snapshot_id \
               FROM cache ORDER BY id",
     },
@@ -264,6 +317,23 @@ async fn migrate(pool: &SqlitePool) -> Result<()> {
     let _ = sqlx::query("ALTER TABLE aspects ADD COLUMN grains TEXT")
         .execute(pool)
         .await;
+    // Pre-witness stores keyed a verdict by (subject, function) alone, so
+    // witnesses sharing a detector read each other's answer (2026-08-06).
+    // The old verdicts cannot be attributed to a witness after the fact —
+    // they go, and the next read recomputes them, which is what
+    // detector-at-read already promises.
+    let widened = sqlx::query("ALTER TABLE cache ADD COLUMN witness TEXT")
+        .execute(pool)
+        .await
+        .is_ok();
+    if widened {
+        sqlx::query(
+            "DELETE FROM cache WHERE witness IS NULL AND function IN \
+             (SELECT name FROM functions WHERE returns IS NULL)",
+        )
+        .execute(pool)
+        .await?;
+    }
     Ok(())
 }
 
@@ -312,7 +382,14 @@ pub struct Store {
 
 impl Store {
     pub async fn open(url: &str) -> Result<Self> {
-        let pool = SqlitePoolOptions::new().connect(url).await?;
+        // WAL, so a read never waits behind the write of a gloss; a busy
+        // timeout, so a concurrent writer waits instead of erroring. sqlx
+        // sets neither by default (sqlx-sqlite-0.8.6 options/mod.rs:177).
+        let options: SqliteConnectOptions = url
+            .parse::<SqliteConnectOptions>()?
+            .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+            .busy_timeout(std::time::Duration::from_secs(5));
+        let pool = SqlitePoolOptions::new().connect_with(options).await?;
         migrate(&pool).await?;
         Ok(Store { pool })
     }
@@ -354,30 +431,43 @@ impl Store {
     /// same dead end on a post-landing defect). The recipe row supersedes
     /// like any declaration; glosses stay — they are knowledge, and
     /// snapshot ids disclose their age against the fresh landing.
-    pub async fn declare_recipe(&self, decl: &RecipeDecl) -> Result<RecipeAdmission> {
+    /// What the declaration would do, decided before anything is written:
+    /// the row lands in [`Store::put_recipe`] only once the landing it
+    /// describes has succeeded. A recipe that cannot materialize leaves no
+    /// row behind claiming it did — the retry would otherwise answer
+    /// `unchanged` over an empty table.
+    pub async fn recipe_admission(&self, decl: &RecipeDecl) -> Result<RecipeAdmission> {
         let dataset = decl.dataset.value.as_str();
         let table = decl.table.value.as_str();
         self.require("dataset", "datasets", dataset).await?;
         self.require("source", "sources", decl.source.value.as_str())
             .await?;
-        let existing = self.recipe(dataset, table).await?;
-        let admission = match &existing {
+        // A landed table is readable under its bare name; the store's own
+        // relations answer to those names first, so the table would be
+        // unreachable and the relation would look like data.
+        if relation_columns(table).is_some() || table.eq_ignore_ascii_case("attest") {
+            return Err(Error::ReservedTableName(table.into()));
+        }
+        Ok(match self.recipe(dataset, table).await? {
             None => RecipeAdmission::Created,
             Some(prior) if prior.source == decl.source.value && prior.sql == decl.sql => {
-                return Ok(RecipeAdmission::Unchanged);
+                RecipeAdmission::Unchanged
             }
             Some(_) => RecipeAdmission::Replaced,
-        };
+        })
+    }
+
+    pub async fn put_recipe(&self, decl: &RecipeDecl) -> Result<()> {
         sqlx::query(
             "INSERT OR REPLACE INTO recipes (dataset, table_name, source, sql) VALUES (?, ?, ?, ?)",
         )
-        .bind(dataset)
-        .bind(table)
+        .bind(decl.dataset.value.as_str())
+        .bind(decl.table.value.as_str())
         .bind(decl.source.value.as_str())
         .bind(decl.sql.as_str())
         .execute(&self.pool)
         .await?;
-        Ok(admission)
+        Ok(())
     }
 
     pub async fn recipe(&self, dataset: &str, table: &str) -> Result<Option<RecipeRow>> {
@@ -461,6 +551,24 @@ impl Store {
                     glosses,
                 });
             }
+            // Function values sit under the aspect too, through RETURNS —
+            // and a MEASUREMENT aspect can only ever hold those, since
+            // glossing one is refused. Without this the schema could change
+            // under values that were validated against the old one.
+            let values: i64 = sqlx::query(
+                "SELECT count(*) AS n FROM cache WHERE witness IS NULL AND function IN \
+                 (SELECT name FROM functions WHERE returns = ?)",
+            )
+            .bind(name)
+            .fetch_one(&self.pool)
+            .await?
+            .get("n");
+            if values > 0 {
+                return Err(Error::AspectValued {
+                    name: name.into(),
+                    values,
+                });
+            }
         }
         sqlx::query("INSERT OR REPLACE INTO aspects (name, schema, kind, grains) VALUES (?, ?, ?, ?)")
             .bind(decl.name.value.as_str())
@@ -491,6 +599,15 @@ impl Store {
         // function-filled. No RETURNS declares a detector.
         if let Some(aspect) = &decl.returns {
             let aspect = aspect.value.as_str();
+            // A self-edge: the function's own value would invalidate its own
+            // cache the moment it is written, and the write would never be
+            // readable. ACCEPTS and RETURNS name different aspects.
+            if decl.accepts.iter().any(|a| a.value == aspect) {
+                return Err(Error::SelfAccepting {
+                    function: decl.name.value.clone(),
+                    aspect: aspect.into(),
+                });
+            }
             let (_, kind, _) = self.aspect(aspect).await?.ok_or_else(|| Error::Unknown {
                 what: "aspect",
                 name: aspect.into(),
@@ -849,7 +966,7 @@ impl Store {
         for (f, _) in self.returning(Some(aspect)).await? {
             let t: Option<String> = sqlx::query(
                 "SELECT MAX(computed_at) AS t FROM cache \
-                 WHERE dataset = ? AND subject = ? AND function = ?",
+                 WHERE dataset = ? AND subject = ? AND function = ? AND witness IS NULL",
             )
             .bind(dataset)
             .bind(subject)
@@ -930,12 +1047,15 @@ impl Store {
 
         let (cpred, cbinds) = scope.predicate("c.subject");
         for (f, a) in self.returning(aspect).await? {
+            // A function's own value, never a verdict: witness rows belong
+            // to the detector that computed them, not to the slots.
             let sql = format!(
                 "SELECT c.subject, c.body, c.computed_at, c.snapshot_id FROM cache c \
-                 WHERE c.dataset = ? AND c.function = ? AND {cpred} AND NOT EXISTS (\
+                 WHERE c.dataset = ? AND c.function = ? AND c.witness IS NULL AND {cpred} \
+                   AND NOT EXISTS (\
                    SELECT 1 FROM cache n \
                    WHERE n.dataset = c.dataset AND n.subject = c.subject \
-                     AND n.function = c.function AND n.id > c.id)"
+                     AND n.function = c.function AND n.witness IS NULL AND n.id > c.id)"
             );
             let mut q = sqlx::query(&sql).bind(dataset).bind(f.as_str());
             for b in &cbinds {
@@ -1034,7 +1154,7 @@ impl Store {
                 continue;
             }
             let Some(detector) = &w.detector else { continue };
-            for c in self.latest_cache(dataset, scope, detector).await? {
+            for c in self.latest_cache(dataset, scope, detector, Some(&w.name)).await? {
                 let body: Value = serde_json::from_str(&c.body)
                     .map_err(|e| Error::Corrupt(format!("attest body for `{detector}`: {e}")))?;
                 if let (Some(band), Some(score)) = (
@@ -1172,7 +1292,7 @@ impl Store {
             let Some(detector) = &w.detector else {
                 continue;
             };
-            for c in self.latest_cache(dataset, scope, detector).await? {
+            for c in self.latest_cache(dataset, scope, detector, Some(&w.name)).await? {
                 let body: Value = serde_json::from_str(&c.body)
                     .map_err(|e| Error::Corrupt(format!("attest body for `{detector}`: {e}")))?;
                 let band = body
@@ -1199,20 +1319,28 @@ impl Store {
 
     // -- the cache -------------------------------------------------------
 
+    /// A cached function value. `witness` is the seat the row was computed
+    /// for: `None` for a function's own output (keyed by subject, as any
+    /// value is), the witness name for a detector's verdict — which depends
+    /// on the aspect, the threshold and the slots that witness saw, so one
+    /// detector serving three witnesses holds three verdicts, not one
+    /// (defect found 2026-08-06, ruled the same day).
     pub async fn cache_get(
         &self,
         dataset: &str,
         subject: &str,
         function: &str,
+        witness: Option<&str>,
     ) -> Result<Option<CacheRow>> {
         let row = sqlx::query(
             "SELECT subject, function, body, computed_at FROM cache \
-             WHERE dataset = ? AND subject = ? AND function = ? \
+             WHERE dataset = ? AND subject = ? AND function = ? AND witness IS ? \
              ORDER BY id DESC LIMIT 1",
         )
         .bind(dataset)
         .bind(subject)
         .bind(function)
+        .bind(witness)
         .fetch_optional(&self.pool)
         .await?;
         row.map(cache_row).transpose()
@@ -1223,16 +1351,18 @@ impl Store {
         dataset: &str,
         subject: &str,
         function: &str,
+        witness: Option<&str>,
         body: &str,
         snapshot_id: Option<i64>,
     ) -> Result<()> {
         sqlx::query(
-            "INSERT INTO cache (dataset, subject, function, body, snapshot_id) \
-             VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO cache (dataset, subject, function, witness, body, snapshot_id) \
+             VALUES (?, ?, ?, ?, ?, ?)",
         )
         .bind(dataset)
         .bind(subject)
         .bind(function)
+        .bind(witness)
         .bind(body)
         .bind(snapshot_id)
         .execute(&self.pool)
@@ -1256,17 +1386,20 @@ impl Store {
         dataset: &str,
         scope: &Scope,
         function: &str,
+        witness: Option<&str>,
     ) -> Result<Vec<CacheRow>> {
         let (pred, binds) = scope.predicate("c.subject");
         let sql = format!(
             "SELECT c.subject, c.function, c.body, c.computed_at FROM cache c \
-             WHERE c.dataset = ? AND c.function = ? AND {pred} AND NOT EXISTS (\
+             WHERE c.dataset = ? AND c.function = ? AND c.witness IS ? AND {pred} \
+               AND NOT EXISTS (\
                SELECT 1 FROM cache n \
                WHERE n.dataset = c.dataset AND n.subject = c.subject \
-                 AND n.function = c.function AND n.id > c.id) \
+                 AND n.function = c.function AND n.witness IS c.witness \
+                 AND n.id > c.id) \
              ORDER BY c.subject"
         );
-        let mut q = sqlx::query(&sql).bind(dataset).bind(function);
+        let mut q = sqlx::query(&sql).bind(dataset).bind(function).bind(witness);
         for b in &binds {
             q = q.bind(b);
         }
@@ -1292,6 +1425,15 @@ impl Store {
     pub async fn forward_delete(&self, target: &str, sql: &str) -> Result<u64> {
         if target != "glossary" && target != "cache" {
             return Err(Error::ForwardRejected(target.into()));
+        }
+        // SQLite executes every `;`-separated statement in a forwarded
+        // string, and it reads `$tag$` as a bind parameter rather than a
+        // quote — so a dollar-quoted body carrying a `;` became SQL of the
+        // sender's choosing (found 2026-08-06). The caller renders from the
+        // AST with those literals normalized; this is the check at the
+        // point of execution, which is where it has to hold.
+        if let Some(stray) = stray_statement_char(sql) {
+            return Err(Error::ForwardUnsafe { char: stray });
         }
         let done = sqlx::raw_sql(sql).execute(&self.pool).await?;
         if target == "glossary" && done.rows_affected() > 0 {

@@ -791,6 +791,11 @@ fn classify_series(y: &[f64], m: &[f64]) -> (Option<bool>, f64, f64) {
     if y.len() < MIN_PERIODS
         || !y.iter().any(|v| *v != 0.0)
         || !m.iter().any(|v| *v != 0.0)
+        // A NaN anywhere in the series abstains: every comparison against
+        // it is false, so it would slip past the residual gate and the
+        // separation gate alike, and land NaN in the voters (a real column
+        // reaches here as NaN through a float source).
+        || y.iter().chain(m).any(|v| v.is_nan())
     {
         return (None, INF, INF);
     }
@@ -836,7 +841,7 @@ fn median(mut v: Vec<f64>) -> Option<f64> {
     if v.is_empty() {
         return None;
     }
-    v.sort_by(|a, b| a.partial_cmp(b).expect("residuals are finite"));
+    v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let n = v.len();
     Some(if n % 2 == 1 {
         v[n / 2]
