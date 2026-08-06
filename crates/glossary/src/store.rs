@@ -192,6 +192,12 @@ CREATE TABLE IF NOT EXISTS imports (
   landed_rows INTEGER NOT NULL,
   imported_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
+"#;
+
+/// Runs after the column migrations, never with them: an index over a
+/// column an older store has not been widened with yet fails the whole
+/// migration (which is how this ordering was found).
+const INDEXES: &str = r#"
 CREATE INDEX IF NOT EXISTS glossary_key
   ON glossary (dataset, subject, aspect, actor_kind, id);
 CREATE INDEX IF NOT EXISTS cache_key
@@ -334,6 +340,7 @@ async fn migrate(pool: &SqlitePool) -> Result<()> {
         .execute(pool)
         .await?;
     }
+    sqlx::raw_sql(INDEXES).execute(pool).await?;
     Ok(())
 }
 

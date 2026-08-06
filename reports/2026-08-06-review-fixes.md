@@ -90,12 +90,25 @@ way out.
   gloss was a journal-mode commit that blocked readers.
 - **Two indexes** — `glossary (dataset, subject, aspect, actor_kind,
   id)` and `cache (dataset, subject, function, witness, id)` — under the
-  `NOT EXISTS` supersession predicate that reads every collapse.
+  `NOT EXISTS` supersession predicate that reads every collapse. They are
+  created *after* the column migrations, not with them: an index over a
+  column an older store has not been widened with yet fails the whole
+  migration, which is how the ordering was found — by opening a copy of
+  the finance workspace's store rather than only fresh ones.
 - **The execute path streams to the cap.** `Session::substrate` and
   `run_probe` stop one row past the door's cap instead of collecting
   everything and trimming at render. The cap is pushed down from the
   door through the plane, so a probe without a LIMIT no longer pulls a
   whole source into memory to show 200 rows of it.
+
+## The migration, on a real store
+
+Verified against a copy of `~/glossql-ws-fin/glossary.sqlite`: the
+`witness` column is added, the 58 un-attributable detector verdicts go
+(153 cache rows to 95, none of them a detector's), the 225 glosses are
+untouched, WAL is on and both indexes exist. The next read recomputes
+what was dropped. A running serverd on an older binary keeps its old
+schema until it restarts.
 
 ## Left alone, deliberately
 
