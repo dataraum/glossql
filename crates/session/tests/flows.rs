@@ -373,6 +373,27 @@ async fn substrate_sql_runs_against_registered_tables() {
         .await
         .unwrap_err();
     assert!(err.to_string().contains("not open for CREATE VIEW"), "{err}");
+
+    // DESCRIBE and EXPLAIN are reads, so they pass (2026-08-07) —
+    // before this, the only way to see a landed schema was burning a
+    // diagnostic re-landing and reading arrow_typeof off a row.
+    let described = table(&session, "DESCRIBE orders;").await;
+    assert!(
+        described.contains("amount") && described.contains("Float64"),
+        "{described}"
+    );
+    let explained = table(&session, "EXPLAIN SELECT id FROM orders;").await;
+    assert!(explained.contains("plan"), "{explained}");
+
+    // EXPLAIN carries a statement of its own — the allowlist repeats
+    // inside it rather than being walked around.
+    for (sneak, refused_as) in [
+        ("EXPLAIN INSERT INTO orders VALUES (3, 1.0);", "EXPLAIN INSERT"),
+        ("EXPLAIN SELECT 1 AS a INTO scratch;", "SELECT INTO"),
+    ] {
+        let e = session.execute(sneak).await.unwrap_err();
+        assert!(e.to_string().contains(refused_as), "`{sneak}`: {e}");
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -513,6 +534,11 @@ async fn the_declarations_read_as_plain_relations() {
 
     let sources = table(&session, "SELECT name FROM sources;").await;
     assert!(sources.contains("erp"), "{sources}");
+
+    // A session's first question — what datasets exist — has an answer
+    // (2026-08-07; before this, USE-and-find-out was the only way).
+    let datasets = table(&session, "SELECT name FROM datasets;").await;
+    assert!(datasets.contains("fin"), "{datasets}");
 
     // The relations compose like any table — a WHERE clause is a sweep.
     let global = table(

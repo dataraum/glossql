@@ -21,9 +21,9 @@ use crate::wire;
 
 const INSTRUCTIONS: &str = "glossql workspace server. One tool: `glossql` executes \
 statements — declarations, USE, GLOSS, extraction, probes, and plain SQL. Live state \
-(functions, aspects, witnesses, sources, glossary, cache, imports) reads as plain \
-tables through the tool. The glossql skills teach the grammar and the flows; start \
-with USE <dataset>.";
+(datasets, functions, aspects, witnesses, sources, glossary, cache, imports) reads as \
+plain tables through the tool. The glossql skills teach the grammar and the flows; \
+start with SELECT * FROM datasets, then USE <dataset>.";
 
 #[derive(Clone)]
 pub struct GlossqlMcp {

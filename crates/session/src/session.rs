@@ -701,9 +701,10 @@ impl Session {
     }
 
     /// Substrate SQL runs behind an allowlist (project lead, 2026-08-04):
-    /// queries pass, the store's forwarded deletes pass, `DROP TABLE`
-    /// routes to engine semantics — everything else that would alter the
-    /// schema or data directly is refused. Tables come from recipes.
+    /// queries pass, `DESCRIBE`/`EXPLAIN` pass as reads (2026-08-07), the
+    /// store's forwarded deletes pass, `DROP TABLE` routes to engine
+    /// semantics — everything else that would alter the schema or data
+    /// directly is refused. Tables come from recipes.
     async fn substrate(&self, statement: DFStatement) -> Result<Outcome, SessionError> {
         // Removal is SQL (SPEC.md §5.2, §6): deletes on the store's two
         // relations run at the store. DataFusion cannot execute DML against
@@ -712,24 +713,57 @@ impl Session {
             let affected = self.shared.store.forward_delete(&target, &text).await?;
             return Ok(Outcome::Affected(affected));
         }
-        let DFStatement::Statement(inner) = &statement else {
-            return Err(SessionError::SubstrateClosed(statement_verb(&statement)));
-        };
-        match inner.as_ref() {
-            // `SELECT … INTO t` is a Query to the parser and a
-            // `CREATE MEMORY TABLE` to the planner — the one spelling that
-            // made tables without a recipe (found 2026-08-06).
-            SQLStatement::Query(q) if selects_into(q) => {
-                return Err(SessionError::SubstrateClosed("SELECT INTO".into()));
+        // DESCRIBE and EXPLAIN are reads — about a table's schema and a
+        // plan — not manipulation, so they pass (project lead,
+        // 2026-08-07; the earlier refusal was the variant allowlist being
+        // categorical, not a ruling against them). EXPLAIN is the
+        // substrate parser's own variant wrapping the statement it
+        // explains (datafusion-sql-53.1.0 parser.rs:293); only a plain
+        // query may ride it, so the allowlist repeats inside it instead
+        // of being walked around. DESCRIBE arrives through sqlparser as
+        // ExplainTable, below.
+        if let DFStatement::Explain(explain) = &statement {
+            match explain.statement.as_ref() {
+                DFStatement::Statement(inner) => match inner.as_ref() {
+                    SQLStatement::Query(q) if selects_into(q) => {
+                        return Err(SessionError::SubstrateClosed("SELECT INTO".into()));
+                    }
+                    SQLStatement::Query(_) => {}
+                    other => {
+                        return Err(SessionError::SubstrateClosed(format!(
+                            "EXPLAIN {}",
+                            verb_of(other)
+                        )));
+                    }
+                },
+                other => {
+                    return Err(SessionError::SubstrateClosed(format!(
+                        "EXPLAIN {}",
+                        statement_verb(other)
+                    )));
+                }
             }
-            SQLStatement::Query(_) => {}
-            SQLStatement::Drop { object_type, names, .. }
-                if *object_type == ObjectType::Table && names.len() == 1 =>
-            {
-                let name = names[0].to_string();
-                return self.drop_table(&name).await;
+        } else {
+            let DFStatement::Statement(inner) = &statement else {
+                return Err(SessionError::SubstrateClosed(statement_verb(&statement)));
+            };
+            match inner.as_ref() {
+                // `SELECT … INTO t` is a Query to the parser and a
+                // `CREATE MEMORY TABLE` to the planner — the one spelling
+                // that made tables without a recipe (found 2026-08-06).
+                SQLStatement::Query(q) if selects_into(q) => {
+                    return Err(SessionError::SubstrateClosed("SELECT INTO".into()));
+                }
+                SQLStatement::Query(_) => {}
+                SQLStatement::ExplainTable { .. } => {}
+                SQLStatement::Drop { object_type, names, .. }
+                    if *object_type == ObjectType::Table && names.len() == 1 =>
+                {
+                    let name = names[0].to_string();
+                    return self.drop_table(&name).await;
+                }
+                other => return Err(SessionError::SubstrateClosed(verb_of(other))),
             }
-            other => return Err(SessionError::SubstrateClosed(verb_of(other))),
         }
         let plan = self.ctx.state().statement_to_plan(statement).await?;
         let frame = self.ctx.execute_logical_plan(plan).await?;

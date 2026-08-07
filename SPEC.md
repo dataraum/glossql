@@ -97,9 +97,10 @@ landings. Glosses stay — no machinery deletes knowledge; their snapshot
 ids disclose their age against the fresh landing. `DROP TABLE` removes a
 table whole (the lake table, the recipe, the cached evidence, the import
 records) and refuses while the table holds data or glosses.
-Substrate SQL runs behind an allowlist: queries pass, `DROP TABLE` routes
-to the rules above, and everything else that would alter schema or data
-directly is refused. Tables come from recipes.
+Substrate SQL runs behind an allowlist: queries pass, `DESCRIBE` and
+`EXPLAIN` pass as reads about schema and plans (`EXPLAIN` only over a
+query), `DROP TABLE` routes to the rules above, and everything else that
+would alter schema or data directly is refused. Tables come from recipes.
 
 ```sql
 DECLARE DATASET fin SET (purpose: 'working-capital analysis over ERP and CRM exports');

@@ -289,6 +289,11 @@ pub const RELATIONS: &[Relation] = &[
         sql: "SELECT name, settings FROM sources ORDER BY name",
     },
     Relation {
+        name: "datasets",
+        columns: &["name", "settings"],
+        sql: "SELECT name, settings FROM datasets ORDER BY name",
+    },
+    Relation {
         name: "relationships",
         columns: &["dataset", "left_path", "op", "right_path"],
         sql: "SELECT dataset, left_path, op, right_path FROM relationships \
