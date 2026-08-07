@@ -192,13 +192,8 @@ document or source, and which numbers shift when it arrives ("every
 stock level moves by its opening values"). The ask is a document,
 not a decision — keep it out of the pinning questions.
 
-The user's answer lands as **your re-gloss** — actor rides the
-connection, so the human slot is not yours to write. Supersede your
-own slot with the pinned choice, set the assumption's basis to
-`engineer-pinned <date>`, and keep the rejected family named beside
-it: the basis is the record. (A pin written over a human connection —
-the cockpit's own door — lands in the human slot and outranks yours;
-that is that connection's write, never yours to fake.) Until pinned,
-the pin list is a read: every metric gloss whose basis is your
-judgment alone is a definition standing on agent judgment, and your
-report must say so.
+The user's answer lands as your re-gloss: supersede your own slot
+with the pinned choice and set the assumption's basis to
+`engineer-pinned <date>`. (You cannot write the human slot — actor
+rides the connection.) Until then, your report says which
+definitions stand on your judgment alone.
