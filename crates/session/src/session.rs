@@ -163,12 +163,19 @@ impl SqlDoor for CtxDoor {
     }
 
     fn sql_all(&self, queries: &[String]) -> Vec<Result<Vec<RecordBatch>, String>> {
-        // Waves of 16: enough overlap to hide per-query latency, bounded
-        // enough that a thousand-pair sweep doesn't stampede the runtime.
+        // Waves of 4: enough overlap to hide per-query latency, small
+        // enough that concurrent scans stay inside the process fd
+        // budget. 16 crossed it (booksql run, 2026-08-07): every query
+        // in a wave scans in parallel and a parquet scan holds around
+        // target_partitions files open, so 16 dataset-grain queries
+        // peaked the process past the macOS launchd soft limit of 256
+        // (sampled 22→236→32 across one burst) and the sweep died on
+        // "Too many open files". 4 concurrent scans leave that headroom
+        // without serializing the batch.
         tokio::task::block_in_place(|| {
             self.handle.block_on(async {
                 let mut out = Vec::with_capacity(queries.len());
-                for wave in queries.chunks(16) {
+                for wave in queries.chunks(4) {
                     let mut handles = Vec::with_capacity(wave.len());
                     for q in wave {
                         let ctx = self.ctx.clone();
