@@ -176,19 +176,27 @@ fn a_single_instant_and_a_non_temporal_column_abstain_their_own_ways() {
     assert_eq!(out["gaps"]["count"], json!(0));
     assert!(out.get("completeness").is_none(), "{out}");
 
-    // A column that is not a point in time abstains entirely.
+    // A column that is not a point in time abstains — and the reason
+    // names the type, so a date landed as text reads as a typing gap
+    // rather than a dead end (the SQLite run, 2026-08-07).
     let door = CtxDoor::new();
     door.run("CREATE TABLE events AS SELECT * FROM (VALUES (1.5), (2.5)) AS t(d)");
     let out = temporal(door, "events.d");
-    assert_eq!(out, json!({"applicable": false}));
+    assert_eq!(out["applicable"], json!(false));
+    let reason = out["reason"].as_str().unwrap();
+    assert!(
+        reason.contains("Float64") && reason.contains("typing in the recipe"),
+        "{reason}"
+    );
 
-    // So does an all-NULL temporal column — nothing bounds a window.
+    // An all-NULL temporal column abstains too — nothing bounds a window.
     let door = CtxDoor::new();
     door.run(
         "CREATE TABLE events AS SELECT CAST(NULL AS DATE) AS d FROM (VALUES (1), (2)) AS t(x)",
     );
     let out = temporal(door, "events.d");
-    assert_eq!(out, json!({"applicable": false}));
+    assert_eq!(out["applicable"], json!(false));
+    assert_eq!(out["reason"], json!("no non-null values — nothing bounds a window"));
 }
 
 #[test]

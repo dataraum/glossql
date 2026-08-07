@@ -22,7 +22,11 @@ let column = parts[1];
 let t = db.query(`SELECT "${column}" AS v FROM "${table}" LIMIT 0`);
 let ty = t.col("v").dtype();
 if !(ty.starts_with("Date") || ty.starts_with("Timestamp")) {
-    #{ applicable: false }
+    // The reason names the lead: a date landed as text is a typing gap
+    // in the recipe, not a column with no time in it (found 2026-08-07,
+    // the SQLite run — the bare abstention read as "stop trying").
+    #{ applicable: false,
+       reason: `column type is ${ty}, not Date/Timestamp — a date landed as text needs typing in the recipe` }
 } else {
     let ts = `CAST("${column}" AS TIMESTAMP)`;
     // Aggregate once, compute on the bounds outside — mixing max("c") with
@@ -35,8 +39,8 @@ if !(ty.starts_with("Date") || ty.starts_with("Timestamp")) {
                      min("${column}") AS min_v, max("${column}") AS max_v
               FROM "${table}") AS bounds`);
     if w.cell("present").parse_int() == 0 {
-        // Nothing to bound a window with — abstain like outliers does.
-        #{ applicable: false }
+        #{ applicable: false,
+           reason: "no non-null values — nothing bounds a window" }
     } else {
         let g = db.query(`
             WITH ordered_ts AS (SELECT DISTINCT ${ts} AS t
