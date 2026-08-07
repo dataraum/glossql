@@ -228,6 +228,7 @@ impl Session {
             lake: RwLock::new(None),
             runtime: RwLock::new(Arc::new(NoRuntime)),
             read_cache: RwLock::new(None),
+            ctx: RwLock::new(None),
         });
         let config = SessionConfig::new()
             .set_str("datafusion.sql_parser.dialect", "postgres")
@@ -250,6 +251,9 @@ impl Session {
         let mut ctx = SessionContext::new_with_state(state);
         datafusion_functions_json::register_all(&mut ctx)?;
         glossql_import::casts::register_try_functions(&ctx);
+        // The planner was built before the context existed; close the loop
+        // so the metric bind can plan groundings as their own statements.
+        *shared.ctx.write().expect("ctx lock") = Some(ctx.clone());
         Ok(Session {
             ctx,
             shared,

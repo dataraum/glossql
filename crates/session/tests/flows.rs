@@ -624,6 +624,105 @@ async fn a_grounding_admits_and_serves_its_sql_back() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_metric_read_runs_the_current_grounding() {
+    // Fixture 16 §6, bound 2026-08-07: `metric.<aspect>()` expands the
+    // collapsed current QUERY grounding as an ordinary relation — the
+    // reader composes around it, the pinned definition is what runs.
+    let store = Store::open_memory().await.unwrap();
+    let agent = session_with(ActorKind::Agent, "agent-1", &store).await;
+    run(&agent, SETUP).await;
+
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int32, false),
+        Field::new("amount", DataType::Float64, false),
+    ]));
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(Int32Array::from(vec![1, 2])),
+            Arc::new(Float64Array::from(vec![10.0, 32.5])),
+        ],
+    )
+    .unwrap();
+    agent
+        .register_table(
+            "orders",
+            Arc::new(MemTable::try_new(schema, vec![vec![batch]]).unwrap()),
+        )
+        .unwrap();
+
+    run(
+        &agent,
+        r##"
+        DECLARE ASPECT revenue WITH $${"title": "Revenue"}$$ AS QUERY ON DATASET;
+        DECLARE ASPECT doubled WITH $${"title": "Doubled"}$$ AS QUERY ON DATASET;
+        GLOSS revenue ON fin AS $${"sql": "SELECT amount AS value FROM orders"}$$;
+        GLOSS doubled ON fin AS $${"sql": "SELECT value * 2 AS value FROM metric.revenue()"}$$;
+        "##,
+    )
+    .await;
+
+    let total = table(&agent, "SELECT sum(value) AS total FROM metric.revenue();").await;
+    assert!(total.contains("42.5"), "{total}");
+    // Filters ride WHERE, composed around the expansion.
+    let filtered = table(
+        &agent,
+        "SELECT sum(value) AS total FROM metric.revenue() WHERE value > 20;",
+    )
+    .await;
+    assert!(filtered.contains("32.5"), "{filtered}");
+    // A recorded evaluation composes from sibling metrics — nesting is
+    // the formula composition, done by the engine.
+    let doubled = table(&agent, "SELECT sum(value) AS total FROM metric.doubled();").await;
+    assert!(doubled.contains("85"), "{doubled}");
+
+    // The human pin supersedes, and propagates through composition.
+    let human = session_with(ActorKind::Human, "philipp", &store).await;
+    run(
+        &human,
+        r##"USE fin;
+        GLOSS revenue ON fin AS $${"sql": "SELECT amount * 2 AS value FROM orders"}$$;"##,
+    )
+    .await;
+    let pinned = table(&agent, "SELECT sum(value) AS total FROM metric.revenue();").await;
+    assert!(pinned.contains("85"), "{pinned}");
+    let repinned = table(&agent, "SELECT sum(value) AS total FROM metric.doubled();").await;
+    assert!(repinned.contains("170"), "{repinned}");
+
+    // A grounding that reaches itself errors naming the loop.
+    run(
+        &agent,
+        r##"
+        DECLARE ASPECT looping WITH $${"title": "Loop"}$$ AS QUERY ON DATASET;
+        GLOSS looping ON fin AS $${"sql": "SELECT value FROM metric.looping()"}$$;
+        "##,
+    )
+    .await;
+    let e = agent
+        .execute("SELECT * FROM metric.looping();")
+        .await
+        .unwrap_err();
+    assert!(e.to_string().contains("metric cycle: looping -> looping"), "{e}");
+
+    // The refusals name what the reader should do instead.
+    for (sql, said) in [
+        ("SELECT * FROM metric.nothing();", "no aspect"),
+        ("SELECT * FROM metric.unit();", "GLOSSARY"),
+        ("SELECT * FROM metric.revenue(1);", "takes no arguments"),
+    ] {
+        let e = agent.execute(sql).await.unwrap_err();
+        assert!(e.to_string().contains(said), "`{sql}`: {e}");
+    }
+    run(
+        &agent,
+        r#"DECLARE ASPECT dso WITH $${"title": "DSO"}$$ AS QUERY ON DATASET;"#,
+    )
+    .await;
+    let e = agent.execute("SELECT * FROM metric.dso();").await.unwrap_err();
+    assert!(e.to_string().contains("no current grounding"), "{e}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn witnesses_sharing_a_detector_hold_their_own_verdicts() {
     // The defect found 2026-08-06: a verdict was cached under (subject,
     // function), so the first witness to compute answered for every other

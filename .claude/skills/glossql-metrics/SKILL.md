@@ -85,21 +85,32 @@ gloss write, so a re-read after new groundings recomputes.
 ## 4. Evaluate at read — windows are read policy
 
 Grain is the reader's: the app defaults to month, another reader asks
-by day, the same definitions answer both. Compose the evaluation from
-the served SQL through the door (until the `metric.` table-function
-bind lands, inline it):
+by day, the same definitions answer both. Evaluate through
+`metric.<aspect>()` — the current grounding served as an ordinary
+relation (human slot outranking agent, so a pinned definition is what
+runs); windows and filters ride your SQL:
+
+```glossql
+SELECT date_trunc('month', date) AS month, sum(value)
+FROM metric.revenue() GROUP BY 1 ORDER BY 1;
+```
 
 - **Flows sum** over any partition — time window or judged dimension.
 - **Stocks take the last period per window**, never a sum across.
 - **Ratios don't roll up**: compose them per the formula at the
   window asked — `dso[w] = accounts_receivable[end of w] /
   revenue[w] * days[w]`. The formula gloss is the pinned definition;
-  it covers every window because it names none.
+  it covers every window because it names none. Never regroup a
+  ratio's output rows — re-compose at the new scope.
 
 **Record what a read proves.** A composed evaluation you verified
 (against the oracle, against the ledger) may land as the metric's own
 QUERY gloss — durable executable knowledge, superseding as
-definitions change. Recording a proven read is not pre-evaluation.
+definitions change, served by `metric.<aspect>()` from then on.
+Record it composing `FROM metric.revenue()` where you can: a
+re-pinned component then propagates through every metric built on it
+(a self-reference is refused as a cycle). Recording a proven read is
+not pre-evaluation.
 
 ## 5. Validations — expectation beside check, ATTEST answers
 

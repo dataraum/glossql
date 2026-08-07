@@ -17,10 +17,13 @@ use datafusion::logical_expr::LogicalPlanBuilder;
 use datafusion::logical_expr::planner::{
     PlannedRelation, RelationPlanner, RelationPlannerContext, RelationPlanning,
 };
+use datafusion::prelude::SessionContext;
 use datafusion::sql::sqlparser::ast::{
     BinaryOperator, DataType as SQLDataType, Expr as SQLExpr, FunctionArg, FunctionArgExpr,
-    TableFactor, Value as SQLValue,
+    Statement as SQLStatement, TableAlias, TableFactor, Value as SQLValue,
 };
+use datafusion::sql::sqlparser::dialect::PostgreSqlDialect;
+use datafusion::sql::sqlparser::parser::Parser;
 
 use glossql_catalog::Lake;
 use glossql_glossary::{AttestRow, CollapsedRow, RawRow, ReadContext, Scope, Store, schemas};
@@ -31,7 +34,6 @@ use crate::subject::{pair_subject, resolve_column_endpoint, resolve_path};
 
 /// State the planner shares with the router: the `USE`'d dataset, the data
 /// plane, and the script runtime (reads run detectors).
-#[derive(Debug)]
 pub(crate) struct Shared {
     pub store: Store,
     pub dataset: RwLock<Option<String>>,
@@ -41,6 +43,21 @@ pub(crate) struct Shared {
     /// The read context is rebuilt from Iceberg metadata only when the data
     /// plane changed — materialization and `USE` clear it; reads reuse it.
     pub read_cache: RwLock<Option<ReadContext>>,
+    /// The session's own context, set right after construction (the planner
+    /// is built before the context exists). The metric bind plans each
+    /// grounding through it as its own statement — `statement_to_plan`
+    /// collects table references per statement, so a grounding's tables
+    /// resolve even when the outer statement never names them.
+    pub ctx: RwLock<Option<SessionContext>>,
+}
+
+impl std::fmt::Debug for Shared {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // SessionContext is not Debug; the dataset is the identifying bit.
+        f.debug_struct("Shared")
+            .field("dataset", &self.dataset)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Shared {
@@ -212,6 +229,30 @@ impl RelationPlanner for GlossqlReads {
         else {
             return Ok(RelationPlanning::Original(Box::new(relation)));
         };
+        // `metric.<aspect>()` — value-at-read (ruled 2026-08-06, bound
+        // 2026-08-07): the aspect's collapsed current QUERY grounding
+        // expanded as a derived relation through the full planner
+        // pipeline, so WHERE/GROUP BY compose around it and a nested
+        // `metric.` inside a recorded evaluation re-enters this planner.
+        // v0.3's formula composer substituted each operand as a scalar
+        // subquery; here the engine is the composer — the substitution is
+        // this expansion. No script, no cache, no parameters.
+        if name.0.len() == 2
+            && name.0[0]
+                .as_ident()
+                .is_some_and(|i| i.value.eq_ignore_ascii_case("metric"))
+        {
+            let (Some(aspect), Some(a)) = (name.0[1].as_ident().map(|i| i.value.clone()), args)
+            else {
+                return Ok(RelationPlanning::Original(Box::new(relation)));
+            };
+            if !a.args.is_empty() {
+                return Err(DataFusionError::Plan(format!(
+                    "metric.{aspect}() takes no arguments — filters ride WHERE"
+                )));
+            }
+            return self.plan_metric(&aspect, alias.clone());
+        }
         if name.0.len() != 1 {
             return Ok(RelationPlanning::Original(Box::new(relation)));
         }
@@ -259,6 +300,146 @@ impl GlossqlReads {
         tokio::task::block_in_place(|| self.shared.handle.block_on(fut))
             .map_err(|e| DataFusionError::External(Box::new(e)))
     }
+
+    /// The metric bind: fetch the collapsed current grounding, parse its
+    /// SQL, plan it as a derived subquery. Expansion nests (a recorded
+    /// evaluation may compose `FROM metric.revenue()`), so a stack guards
+    /// against a grounding that reaches itself.
+    fn plan_metric(
+        &self,
+        aspect: &str,
+        alias: Option<TableAlias>,
+    ) -> DFResult<RelationPlanning> {
+        thread_local! {
+            static EXPANDING: std::cell::RefCell<Vec<String>> =
+                const { std::cell::RefCell::new(Vec::new()) };
+        }
+        EXPANDING.with(|s| {
+            let mut s = s.borrow_mut();
+            if s.iter().any(|a| a == aspect) {
+                return Err(DataFusionError::Plan(format!(
+                    "metric cycle: {} -> {aspect}",
+                    s.join(" -> ")
+                )));
+            }
+            s.push(aspect.to_string());
+            Ok(())
+        })?;
+        let planned = self.plan_metric_expansion(aspect, alias);
+        EXPANDING.with(|s| {
+            s.borrow_mut().pop();
+        });
+        planned
+    }
+
+    fn plan_metric_expansion(
+        &self,
+        aspect: &str,
+        alias: Option<TableAlias>,
+    ) -> DFResult<RelationPlanning> {
+        let sql = tokio::task::block_in_place(|| {
+            self.shared
+                .handle
+                .block_on(metric_grounding(&self.shared, aspect))
+        })
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        // Query-shaped or refused — the grounding schema admits any string.
+        let query = Parser::new(&PostgreSqlDialect {})
+            .try_with_sql(&sql)
+            .and_then(|mut p| p.parse_query())
+            .map_err(|e| {
+                DataFusionError::Plan(format!(
+                    "the grounding for `{aspect}` does not parse: {e}"
+                ))
+            })?;
+        // Planned as its own statement: `statement_to_plan` collects table
+        // references per statement, so the grounding's tables resolve even
+        // when the outer statement never names them — and a nested
+        // `metric.` re-enters this planner through the same pipeline.
+        let ctx = self
+            .shared
+            .ctx
+            .read()
+            .expect("ctx lock")
+            .clone()
+            .ok_or_else(|| DataFusionError::Plan("the session context is not wired".into()))?;
+        let statement = datafusion::sql::parser::Statement::Statement(Box::new(
+            SQLStatement::Query(query),
+        ));
+        let plan = tokio::task::block_in_place(|| {
+            self.shared
+                .handle
+                .block_on(async { ctx.state().statement_to_plan(statement).await })
+        })
+        .map_err(|e| {
+            e.context(format!(
+                "running the grounding for `{aspect}` (metric.{aspect}())"
+            ))
+        })?;
+        Ok(RelationPlanning::Planned(Box::new(PlannedRelation::new(
+            plan, alias,
+        ))))
+    }
+}
+
+/// What a `metric.<aspect>()` read may expand: a QUERY aspect with a
+/// current collapsed grounding on the `USE`'d dataset — human outranking
+/// agent, so a pinned definition is literally what runs.
+async fn metric_grounding(shared: &Shared, aspect: &str) -> Result<String, SessionError> {
+    let dataset = shared
+        .dataset
+        .read()
+        .expect("state lock")
+        .clone()
+        .ok_or(SessionError::NoDataset)?;
+    let Some((_, kind, _)) = shared.store.aspect(aspect).await? else {
+        return Err(SessionError::BadSubject(format!(
+            "metric.{aspect}(): no aspect `{aspect}` is declared"
+        )));
+    };
+    if kind != "query" {
+        return Err(SessionError::BadSubject(format!(
+            "metric.{aspect}(): `{aspect}` is a {kind} aspect — GLOSSARY() reads it; \
+             metric. runs QUERY groundings"
+        )));
+    }
+    let scope = Scope::Subject(dataset.clone());
+    ensure_verdicts(shared, &dataset, &scope, Some(aspect)).await?;
+    let rows = shared
+        .store
+        .collapsed_read(&dataset, &scope, Some(aspect), &shared.read_context().await?)
+        .await?;
+    let row = rows
+        .into_iter()
+        .find(|r| r.subject == dataset && r.aspect == aspect && r.state != "unassessed");
+    let Some(row) = row else {
+        return Err(SessionError::BadSubject(format!(
+            "metric.{aspect}(): no current grounding on `{dataset}` — a derived metric's \
+             definition stays in the formulas gloss until an evaluation is recorded"
+        )));
+    };
+    if row.state != "current" {
+        return Err(SessionError::BadSubject(format!(
+            "metric.{aspect}(): the grounding on `{dataset}` is {}",
+            row.state
+        )));
+    }
+    let value = row.value.ok_or_else(|| {
+        SessionError::BadSubject(format!(
+            "metric.{aspect}(): the current grounding carries no value"
+        ))
+    })?;
+    let body: Value = serde_json::from_str(&value).map_err(|e| {
+        SessionError::BadSubject(format!("metric.{aspect}(): the grounding is not JSON: {e}"))
+    })?;
+    body["sql"]
+        .as_str()
+        .map(str::to_string)
+        .ok_or_else(|| {
+            SessionError::BadSubject(format!(
+                "metric.{aspect}(): the grounding carries no `sql`"
+            ))
+        })
 }
 
 // -- argument decoding ---------------------------------------------------
