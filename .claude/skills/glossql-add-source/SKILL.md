@@ -52,7 +52,10 @@ cannot express a type cannot land it:
   land as `Utf8`. Force numerics in the recipe (`CAST(rate AS REAL)`
   fixes the storage class). Normalize dates with SQLite's own date
   functions (`date(x)` to ISO text, `unixepoch(x)` to integer
-  seconds) — both still land untyped because the wire has no temporal
+  seconds) — but never `CAST … AS DATE` there: DATE takes NUMERIC
+  affinity, so `CAST(date(x) AS DATE)` silently lands `2010` for
+  `'2010-12-27'` (an int64 on the wire — measured 2026-08-07). The
+  honest spellings land untyped because the wire has no temporal
   type; the typed read is `CAST(col AS DATE)` at read time, and that
   gap belongs in the column's `meaning` gloss so no reader has to
   rediscover it.
