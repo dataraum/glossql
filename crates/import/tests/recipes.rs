@@ -255,9 +255,15 @@ async fn a_relational_recipe_is_one_query_and_never_a_write() {
         let e = run_recipe(&s, sql).await.unwrap_err();
         assert!(e.to_string().contains("one SELECT"), "`{sql}`: {e}");
     }
-    // A plain query passes the fence and fails only at driver load.
+    // A plain query passes the fence and fails only at driver load —
+    // where the error teaches the installable slugs (the 2026-08-07 run
+    // guessed `adbc_driver_sqlite` and got a bare NotFound).
     let e = run_recipe(&s, "SELECT 1").await.unwrap_err();
     assert!(!e.to_string().contains("one SELECT"), "{e}");
+    assert!(
+        e.to_string().contains("index slug") && e.to_string().contains("postgresql"),
+        "{e}"
+    );
 }
 
 /// The ADBC sqlite driver, if one is installed: the env var wins, then

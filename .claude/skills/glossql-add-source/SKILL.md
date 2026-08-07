@@ -22,11 +22,17 @@ The location is a root directory. Globs and file paths belong in
 recipe SQL, resolving under that root.
 
 A relational source names a connection URI as its location and an ADBC
-driver (a searched name or a library path):
+driver. The `driver:` value is the ADBC driver index **slug** — the
+name the operator's install registered (`dbc install <slug>`) — or a
+filesystem path to the driver library. Installing drivers is the
+operator's job, not yours; the slugs: `bigquery`, `clickhouse`,
+`databricks`, `datafusion`, `duckdb`, `exasol`, `flightsql`, `mssql`,
+`mysql`, `postgresql`, `quack`, `redshift`, `singlestore`,
+`snowflake`, `spark`, `sqlite`, `trino`.
 
 ```glossql
 DECLARE SOURCE erp SET (type: relational_db,
-                        driver: 'adbc_driver_postgresql',
+                        driver: 'postgresql',
                         location: 'postgresql://host/erp');
 ```
 
@@ -34,6 +40,29 @@ Its probe and recipe SQL run **at the source**, in the source's own
 dialect — `read_*` functions and `try_to_date`/`try_to_timestamp` do
 not exist there; type with the backend's own casts. One SELECT per
 statement; writes are refused at the door.
+
+**The wire decides what you can land.** The driver maps the source's
+types to Arrow and the landing keeps the wire type, so a dialect that
+cannot express a type cannot land it:
+
+- PostgreSQL and other typed backends carry real DATE/TIMESTAMP
+  types: cast in the recipe and the column lands temporal.
+- SQLite has no date type and dynamic typing — a declared type does
+  not bind the rows: a DOUBLE column can hold text, and mixed rows
+  land as `Utf8`. Force numerics in the recipe (`CAST(rate AS REAL)`
+  fixes the storage class). Normalize dates with SQLite's own date
+  functions (`date(x)` to ISO text, `unixepoch(x)` to integer
+  seconds) — both still land untyped because the wire has no temporal
+  type; the typed read is `CAST(col AS DATE)` at read time, and that
+  gap belongs in the column's `meaning` gloss so no reader has to
+  rediscover it.
+
+Cast accounting reads `unaccounted` on this path — the source's
+dialect owns the casts, so the landing cannot attribute a NULL to
+one. Read the landed identity yourself the moment a table lands:
+`DESCRIBE <table>` serves the landed schema, which is where a numeric
+that landed as text shows up at the decision moment instead of three
+flows later.
 
 The source's catalog is probe-able like any table. Ask it for declared
 keys before detecting relationships:
@@ -107,7 +136,7 @@ supersedes and re-lands), while a scattered long tail may be genuinely
 bad data worth a FACT gloss. A recipe whose WHERE already drops failing
 rows reads `casts clean` — those are dropped rows, not nulled cells.
 History stays in `SELECT * FROM imports`. The landed table is the typed
-table. A changed
+table — `DESCRIBE <table>` reads its schema back. A changed
 recipe under the same name **supersedes and re-lands**: the old landing
 and its cached evidence go, glosses stay (their snapshot ids show their
 age) — re-run the measurements and review glosses for columns the new

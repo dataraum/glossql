@@ -17,6 +17,32 @@ use datafusion::sql::sqlparser::parser::Parser;
 
 use crate::{Error, Result, SourceSpec};
 
+/// The loadable drivers, hardcoded from the ADBC driver index
+/// (arrow.apache.org/adbc, read 2026-08-07). A source's `driver`
+/// setting is the index **slug** — the name the operator's install
+/// registered (`dbc install <slug>`) — or a filesystem path to the
+/// library. Hardcoding the list is the ruled workaround until a served
+/// build ships its drivers; the operator installs them.
+const KNOWN_DRIVERS: &[&str] = &[
+    "bigquery",
+    "clickhouse",
+    "databricks",
+    "datafusion",
+    "duckdb",
+    "exasol",
+    "flightsql",
+    "mssql",
+    "mysql",
+    "postgresql",
+    "quack",
+    "redshift",
+    "singlestore",
+    "snowflake",
+    "spark",
+    "sqlite",
+    "trino",
+];
+
 /// What one statement returned from the source, cut at `row_cap` (one
 /// row past it, so the caller can tell a truncated answer from a
 /// complete one — the doors' convention).
@@ -47,7 +73,14 @@ pub(crate) fn run_at_source(spec: &SourceSpec, sql: &str, row_cap: usize) -> Res
         LOAD_FLAG_DEFAULT,
         None,
     )
-    .map_err(adbc)?;
+    .map_err(|e| Error::Relational {
+        name: spec.name.clone(),
+        detail: format!(
+            "{e} — `driver` is the ADBC index slug the operator installed \
+             ({}) or a path to the driver library",
+            KNOWN_DRIVERS.join(", ")
+        ),
+    })?;
     // The source's location IS its URI — one setting names where a
     // source lives, whatever kind it is.
     let uri = spec.location.to_string_lossy();
