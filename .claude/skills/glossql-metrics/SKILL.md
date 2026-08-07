@@ -109,8 +109,10 @@ QUERY gloss — durable executable knowledge, superseding as
 definitions change, served by `metric.<aspect>()` from then on.
 Record it composing `FROM metric.revenue()` where you can: a
 re-pinned component then propagates through every metric built on it
-(a self-reference is refused as a cycle). Recording a proven read is
-not pre-evaluation.
+(a self-reference is refused as a cycle). The formula gloss and the
+recorded evaluation are one definition in two forms: change one,
+update the other in the same act — or carry the difference as a
+disclosed assumption. Recording a proven read is not pre-evaluation.
 
 ## 5. Validations — expectation beside check, ATTEST answers
 
